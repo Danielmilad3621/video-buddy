@@ -8,4 +8,5 @@
 set -euo pipefail
 url=${1:-$(pbpaste)}
 file=$("$HOME/cobalt/cobalt-dl.sh" "$url" auto "$HOME/Downloads/cobalt")
+"$HOME/cobalt/record-history.sh" video "$url" "$file" || true   # Video Summarizer history
 echo "Saved $(basename "$file")"
