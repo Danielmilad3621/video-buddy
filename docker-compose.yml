@@ -1,0 +1,27 @@
+# local cobalt: API on :9000, web UI on :9001 — both localhost-only
+# update: docker compose pull && docker compose up -d
+# update UI: git -C src pull && (cd src && WEB_DEFAULT_API=http://localhost:9000/ corepack pnpm -C web build)
+services:
+    cobalt:
+        image: ghcr.io/imputnet/cobalt:11
+        init: true
+        read_only: true
+        restart: unless-stopped
+        container_name: cobalt
+        ports:
+            - 127.0.0.1:9000:9000
+        environment:
+            API_URL: "http://localhost:9000/"
+            # only the local UI may call the API from a browser; curl/scripts are unaffected
+            CORS_WILDCARD: "0"
+            CORS_URL: "http://localhost:9001"
+
+    web:
+        image: nginx:alpine
+        restart: unless-stopped
+        container_name: cobalt-web
+        ports:
+            - 127.0.0.1:9001:80
+        volumes:
+            - ./src/web/build:/usr/share/nginx/html:ro
+            - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
