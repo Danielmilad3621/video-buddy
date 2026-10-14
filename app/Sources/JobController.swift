@@ -107,6 +107,8 @@ final class JobController {
                 output.append("Could not start \(command[0]): \(error)")
             }
             let info = await metadata.value
+            // keep real metadata even when the job fails or is cancelled, so the entry isn't left untitled
+            if let info { try? await db.applyInfo(ids.video, info, override: true) }
 
             if cancelRequested {
                 markRunningStep(.failed)
@@ -177,10 +179,9 @@ final class JobController {
         }
     }
 
-    /// Writes the result, then metadata: yt-dlp's values win, the filename and ffprobe only fill gaps.
+    /// Writes the result; yt-dlp metadata is already saved, so the filename and ffprobe only fill gaps.
     private func save(_ ids: (video: Int64, job: Int64), job: NewJob, metadata: VideoInfo?, media: URL) async throws {
         try await db.finishJob(ids.job, videoID: ids.video, job)
-        if let metadata { try await db.applyInfo(ids.video, metadata, override: true) }
         let parsed = FileNames.parse(stem: media.deletingPathExtension().lastPathComponent)
         var guess = VideoInfo(title: parsed.title, channel: parsed.channel, platform: parsed.platform)
         if metadata?.duration == nil { guess.duration = await MetadataFetcher.probeDuration(media.path) }

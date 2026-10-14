@@ -39,6 +39,7 @@ enum TestHooks {
         case "remove": if let v = store.selectedVideo { model.pendingRemoval = v; model.confirmRemoval() }
         case "clearAll": model.clearAll()
         case "reload": Task { await store.reload() }
+        case "settings": NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
         default: break
@@ -73,6 +74,7 @@ enum TestHooks {
             "banner": banner,
             "stats": ["videos": store.stats.videos, "watch": store.stats.watchSeconds, "summaries": store.stats.summaries, "downloads": store.stats.downloads],
             "existingMedia": selected.flatMap { model.existingMedia($0)?.name } ?? "",
+            "lastError": store.lastError ?? "",
         ]
         if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("state.json"))

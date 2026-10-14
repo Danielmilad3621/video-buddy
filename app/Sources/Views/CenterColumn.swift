@@ -261,8 +261,8 @@ struct FileRow: View {
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .foregroundStyle(exists ? p.green : p.red)
                         .background(Capsule().fill((exists ? p.green : p.red).opacity(0.15)))
-                    Button("Open") { FileOps.open(item.path) }.disabled(!exists)
-                    Button("Show in Finder") { FileOps.reveal(item.path) }.disabled(!exists)
+                    Button("Open") { FileOps.open(item.path) }.disabled(!exists).opacity(exists ? 1 : 0.35)
+                    Button("Show in Finder") { FileOps.reveal(item.path) }.disabled(!exists).opacity(exists ? 1 : 0.35)
                     if !exists, let onDownloadAgain { Button("Download Again", action: onDownloadAgain).disabled(model.jobs.isRunning) }
                 }
                 .buttonStyle(.link)

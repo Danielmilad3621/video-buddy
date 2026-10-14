@@ -84,10 +84,21 @@ final class AppModel {
         await store.reload()
         store.selectFirstIfNeeded()
         ingestor.start()
+        Task { await backfillMetadata() }
         if await db.meta("import_offered") == nil {
             let groups = await scanDownloads()
             if groups.isEmpty { try? await db.setMeta("import_offered", "1") } else { importOffer = groups }
         }
+    }
+
+    /// Entries whose job never got far enough to save metadata (cancelled, crashed) get it on the next launch.
+    private func backfillMetadata() async {
+        let missing = ((try? await store.db.videos()) ?? []).filter { $0.title == nil && $0.url != nil }.prefix(10)
+        for v in missing {
+            guard let url = v.url, let info = await MetadataFetcher.fetch(url) else { continue }
+            try? await store.db.applyInfo(v.id, info, override: true)
+        }
+        if !missing.isEmpty { await store.reload() }
     }
 
     // MARK: processing

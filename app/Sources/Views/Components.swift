@@ -19,39 +19,53 @@ extension View {
 }
 
 struct PrimaryButtonStyle: ButtonStyle {
-    @Environment(\.palette) private var p
-    @Environment(\.isEnabled) private var enabled
     var height: CGFloat = 46
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.title3.weight(.semibold))
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 26)
-            .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(LinearGradient(colors: [p.blue, p.blue.opacity(0.82)], startPoint: .top, endPoint: .bottom)))
-            .shadow(color: p.blue.opacity(enabled ? 0.35 : 0), radius: 8, y: 2)
-            .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
-            .contentShape(Rectangle())
+    func makeBody(configuration: Configuration) -> some View { Styled(configuration: configuration, height: height) }
+
+    // isEnabled must be read inside a view: a ButtonStyle's own environment is where the style was applied
+    private struct Styled: View {
+        @Environment(\.palette) private var p
+        @Environment(\.isEnabled) private var enabled
+        let configuration: Configuration
+        let height: CGFloat
+        var body: some View {
+            configuration.label
+                .font(.title3.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 26)
+                .frame(height: height)
+                .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(LinearGradient(colors: [p.blue, p.blue.opacity(0.82)], startPoint: .top, endPoint: .bottom)))
+                .shadow(color: p.blue.opacity(enabled ? 0.35 : 0), radius: 8, y: 2)
+                .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
+                .contentShape(Rectangle())
+        }
     }
 }
 
 struct SecondaryButtonStyle: ButtonStyle {
-    @Environment(\.palette) private var p
-    @Environment(\.isEnabled) private var enabled
     var height: CGFloat = 46
     var font: Font = .title3
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(font)
-            .labelStyle(.titleAndIcon)
-            .padding(.horizontal, height > 40 ? 22 : 12)
-            .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(configuration.isPressed ? p.elevated.opacity(0.6) : p.elevated))
-            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(p.border))
-            .opacity(enabled ? 1 : 0.45)
-            .contentShape(Rectangle())
+    func makeBody(configuration: Configuration) -> some View { Styled(configuration: configuration, height: height, font: font) }
+
+    private struct Styled: View {
+        @Environment(\.palette) private var p
+        @Environment(\.isEnabled) private var enabled
+        let configuration: Configuration
+        let height: CGFloat
+        let font: Font
+        var body: some View {
+            configuration.label
+                .font(font)
+                .labelStyle(.titleAndIcon)
+                .padding(.horizontal, height > 40 ? 22 : 12)
+                .frame(height: height)
+                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(configuration.isPressed ? p.elevated.opacity(0.6) : p.elevated))
+                .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(p.border))
+                .opacity(enabled ? 1 : 0.4)
+                .contentShape(Rectangle())
+        }
     }
 }
 

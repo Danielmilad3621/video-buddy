@@ -22,14 +22,14 @@ tree() { echo "$1"; local p; for p in $(pgrep -P "$1"); do tree "$p"; done; }
   trap '' TERM
   pids=$(tree "$child")
   kill -TERM $pids 2>/dev/null
-  alive=$pids
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-    alive=""
-    for p in $pids; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
-    [ -z "$alive" ] && exit 0
-    sleep 0.1
-  done
-  kill -KILL $alive $(tree "$child") 2>/dev/null
+  survivors() { for p in $pids; do kill -0 "$p" 2>/dev/null && echo "$p"; done; }
+  wait_gone() { for _ in $(seq "$1"); do [ -z "$(survivors)" ] && exit 0; sleep 0.1; done; }
+  wait_gone 30
+  # still running after 3 s: force-stop the programs first, so the scripts waiting on them can still run
+  # their cleanup traps (temp dirs, .part files); then force-stop whatever is left
+  for p in $(survivors); do case "$(ps -p "$p" -o comm= 2>/dev/null)" in */bash|bash|*/sh|sh) ;; *) kill -KILL "$p" 2>/dev/null ;; esac; done
+  wait_gone 20
+  kill -KILL $(survivors) $(tree "$child") 2>/dev/null
 ) >/dev/null 2>&1 &
 watcher=$!
 exec 3<&-

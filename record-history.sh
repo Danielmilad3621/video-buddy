@@ -3,7 +3,7 @@
 # appends one event to Video Summarizer's inbox; the app ingests it whenever it runs, so this never needs the app
 set -uo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
-dir="$HOME/Library/Application Support/Video Summarizer"
+dir=${VS_DATA_DIR:-"$HOME/Library/Application Support/Video Summarizer"}
 inbox="$dir/inbox.jsonl"
 mkdir -p "$dir" || exit 0
 
