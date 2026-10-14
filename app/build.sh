@@ -1,5 +1,5 @@
 #!/bin/bash
-# builds and installs ~/Applications/Video Summarizer.app from this folder (re-run after editing the .swift)
+# builds, self-tests and installs ~/Applications/Video Summarizer.app from this folder (re-run after editing Sources/)
 set -euo pipefail
 cd "$(dirname "$0")"
 app="$HOME/Applications/Video Summarizer.app"
@@ -9,9 +9,12 @@ bundle="$tmp/VideoSummarizer.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" "$tmp/AppIcon.iconset"
 
 swiftc -O -parse-as-library -swift-version 5 -target arm64-apple-macos15.0 \
-  VideoSummarizer.swift -o "$bundle/Contents/MacOS/VideoSummarizer"
-cp Info.plist "$bundle/Contents/"
+  $(find Sources -name '*.swift' | sort) -o "$bundle/Contents/MacOS/VideoSummarizer"
 
+# never install a build whose core logic is broken
+"$bundle/Contents/MacOS/VideoSummarizer" --selftest
+
+cp Info.plist "$bundle/Contents/"
 swift make-icon.swift "$tmp/icon.png"
 for s in 16 32 128 256 512; do
   sips -z $s $s "$tmp/icon.png" --out "$tmp/AppIcon.iconset/icon_${s}x${s}.png" > /dev/null
