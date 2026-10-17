@@ -88,8 +88,8 @@ final class JobController {
             let metadata = Task { await MetadataFetcher.fetch(ref.url) { self.metadataRun = $0 } }
 
             let command = kind == .summary
-                ? ["\(home)/cobalt/raycast/summarize.sh", ref.url]
-                : ["\(home)/cobalt/cobalt-dl.sh", ref.url, kind == .audio ? "audio" : "auto", outDir]
+                ? [Paths.summarize, ref.url]
+                : [Paths.cobaltDL, ref.url, kind == .audio ? "audio" : "auto", outDir]
             var env = ["VS_FROM_APP": "1", "VS_OUT_DIR": outDir]
             if kind == .summary { env["VS_SUMMARY_PROMPT"] = Prompts.build(format, language) }
 

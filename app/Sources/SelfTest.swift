@@ -61,8 +61,9 @@ enum SelfTest {
         check(FileNames.role(of: "X.summary.md")?.stem == "X" && FileNames.role(of: "X.transcript.json")?.stem == "X", "roles")
         check(FileNames.role(of: "notes.txt") == nil, "ignores other files")
 
-        let script = (try? String(contentsOfFile: home + "/cobalt/raycast/summarize.sh", encoding: .utf8)) ?? ""
-        check(script.contains(Prompts.standard), "Standard prompt matches summarize.sh exactly")
+        let script = (try? String(contentsOfFile: Paths.summarize, encoding: .utf8)) ?? ""
+        check(script.contains(Prompts.standard), "Standard prompt matches the bundled summarize.sh exactly (\(Paths.summarize))")
+        check(FileManager.default.isExecutableFile(atPath: Paths.summarize) && FileManager.default.isExecutableFile(atPath: Paths.cobaltDL), "bundled scripts present and executable")
         check(Prompts.build(.standard, .english) == Prompts.standard, "Standard + English adds nothing")
         check(Prompts.build(.adhd, .masri).contains("ADHD") && Prompts.build(.adhd, .masri).contains("Egyptian"), "ADHD + Masri prompt")
 

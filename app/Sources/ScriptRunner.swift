@@ -4,6 +4,17 @@ import Foundation
 let home = NSHomeDirectory()
 let toolPATH = "/opt/homebrew/bin:\(home)/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+/// The pipeline scripts the app runs. build.sh copies them into the app bundle (Contents/Resources/{scripts,raycast}),
+/// so the installed app never depends on where the project folder lives, and never reads the privacy-protected
+/// Desktop folder. VS_SCRIPTS_DIR points at another copy (e.g. the project folder) for testing.
+enum Paths {
+    static var scriptsRoot: String {
+        ProcessInfo.processInfo.environment["VS_SCRIPTS_DIR"]?.nilIfBlank ?? Bundle.main.resourcePath ?? home
+    }
+    static var summarize: String { scriptsRoot + "/raycast/summarize.sh" }
+    static var cobaltDL: String { scriptsRoot + "/scripts/cobalt-dl.sh" }
+}
+
 /// Every subprocess runs under this bash guard. Its fd 3 (the "lifeline") is a pipe whose write end only the
 /// app holds. When the app closes it (Cancel/Quit) or the kernel closes it because the app died (crash,
 /// kill -9), the watcher wakes up and signals the job's whole process tree, parents first so scripts stop
