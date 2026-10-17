@@ -50,6 +50,71 @@ struct RootView: View {
             Text("Its saved summary and transcript are removed from the app. Downloaded files and the files in your downloads folder stay where they are.")
         }
         .overlay(alignment: .bottom) { NoticeToast() }
+        .sheet(item: $model.playlistImport) { PlaylistImportSheet(state: $0).environment(model) }
+        .confirmationDialog("This video is part of a playlist", isPresented: Binding(get: { model.playlistChoice != nil },
+                                                                                       set: { if !$0 { model.playlistChoice = nil } }),
+                            titleVisibility: .visible) {
+            Button("Just This Video") { model.justThisVideo() }
+            Button("Whole Playlist…") { model.wholePlaylist() }
+        } message: {
+            Text("Process only this video, or see the whole playlist and choose which videos to add?")
+        }
+        .confirmationDialog("Delete the playlist “\(model.pendingPlaylistDeletion?.name ?? "")”?",
+                            isPresented: Binding(get: { model.pendingPlaylistDeletion != nil }, set: { if !$0 { model.pendingPlaylistDeletion = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete Playlist", role: .destructive) { model.confirmPlaylistDeletion() }
+        } message: {
+            Text("Only the playlist is deleted. Its videos stay in your history, and their files stay on disk.")
+        }
+        .confirmationDialog("Make \(model.pendingOfflineBatch?.videoIDs.count ?? 0) videos available offline?",
+                            isPresented: Binding(get: { model.pendingOfflineBatch != nil }, set: { if !$0 { model.pendingOfflineBatch = nil } }),
+                            titleVisibility: .visible) {
+            Button("Download Videos") { model.confirmOfflineBatch() }
+        } message: {
+            Text(offlineBatchMessage)
+        }
+        .sheet(item: $model.namePrompt) { NamePromptSheet(prompt: $0).environment(model) }
+    }
+}
+
+extension RootView {
+    var offlineBatchMessage: String {
+        let batch = model.pendingOfflineBatch
+        let time = (batch?.totalDuration ?? 0) > 0 ? " (\(Fmt.watchTime(batch!.totalDuration)) of video)" : ""
+        let free = model.freeDiskSpace.map { " \(Fmt.bytes(Int($0))) is free on this Mac." } ?? ""
+        return "They're downloaded one at a time at your Video quality setting\(time).\(free)"
+    }
+}
+
+/// Name a new playlist, or rename one.
+struct NamePromptSheet: View {
+    @Environment(AppModel.self) private var model
+    let prompt: NamePrompt
+    @State private var name = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(isRename ? "Rename Playlist" : "New Playlist").font(.title3.weight(.semibold))
+            TextField("Playlist name", text: $name).textFieldStyle(.roundedBorder).onSubmit(done)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { model.namePrompt = nil }.keyboardShortcut(.cancelAction)
+                Button(isRename ? "Rename" : "Create", action: done).keyboardShortcut(.defaultAction).disabled(name.nilIfBlank == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .onAppear { if case let .rename(p) = prompt { name = p.name } }
+    }
+
+    private var isRename: Bool { if case .rename = prompt { true } else { false } }
+
+    private func done() {
+        switch prompt {
+        case let .new(videoID): model.createPlaylist(name, adding: videoID)
+        case let .rename(p): model.renamePlaylist(p.id, to: name)
+        }
+        model.namePrompt = nil
     }
 }
 

@@ -7,6 +7,7 @@ struct CenterColumn: View {
         switch model.section {
         case .home: RecentCard()
         case .downloads: DownloadsCard()
+        case .playlists: PlaylistsCard()
         case .favorites: HistoryCard(title: "Favorites", icon: "star")
         case .history, .settings: HistoryCard(title: "History", icon: "clock.arrow.circlepath")
         }
@@ -119,7 +120,7 @@ struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(video.displayTitle).font(.headline).lineLimit(1)
                 Text(video.displayChannel).foregroundStyle(p.secondary).lineLimit(1)
-                Text(Fmt.date(video.lastProcessed)).font(.callout).foregroundStyle(p.secondary)
+                Text(Fmt.date(video.lastProcessed)).font(.callout).foregroundStyle(p.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 6) {
@@ -175,6 +176,14 @@ struct VideoActions: View {
         Button("Show in Finder") { if let m = media { FileOps.reveal(m.path) } }.disabled(media == nil)
         Divider()
         Button(video.favorite ? "Remove from Favorites" : "Add to Favorites") { model.toggleFavorite(video) }
+        Menu("Add to Playlist") {
+            ForEach(model.store.playlists) { pl in Button(pl.name) { model.addToPlaylist(pl.id, video: video) } }
+            if !model.store.playlists.isEmpty { Divider() }
+            Button("New Playlist…") { model.namePrompt = .new(adding: video.id) }
+        }
+        if model.section == .playlists, model.store.openPlaylistID != nil {
+            Button("Remove from This Playlist") { model.removeFromOpenPlaylist(video) }
+        }
         Button("Make Available Offline") { model.makeAvailableOffline(video) }
             .disabled(video.url == nil || model.store.hasLocalVideo(video.id))
         Button("Transcribe on This Mac") { model.transcribe(video) }.disabled(media == nil)
@@ -218,13 +227,22 @@ struct DownloadsCard: View {
         let items = model.store.files.filter(\.isMedia).filter {
             query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ($0.videoTitle ?? "").localizedCaseInsensitiveContains(query)
         }
+        let onDisk = model.store.files.filter { $0.isMedia && $0.exists }
+        let usedBytes = onDisk.reduce(0) { $0 + (Self.diskSize($1.path) ?? 0) }
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.to.line").font(.title2)
                 Text("Downloads").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                 Spacer()
-                Text("\(items.count) files").foregroundStyle(p.secondary)
             }
+            // what your saved audio and video take up, and what's left, for planning a flight
+            HStack(spacing: 6) {
+                Image(systemName: "internaldrive").foregroundStyle(p.secondary)
+                Text(([("\(onDisk.count) files on this Mac"), Fmt.bytes(usedBytes)]
+                      + [model.freeDiskSpace.map { "\(Fmt.bytes(Int($0))) free" }].compactMap { $0 }).joined(separator: " • "))
+            }
+            .font(.callout).foregroundStyle(p.secondary)
+            .accessibilityElement(children: .combine)
             SearchField(text: $query, prompt: "Search downloads…")
             if items.isEmpty {
                 EmptyState(icon: "arrow.down.circle", title: "No downloads yet",
@@ -244,6 +262,10 @@ struct DownloadsCard: View {
         }
         .cardStyle()
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    static func diskSize(_ path: String) -> Int? {
+        (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue
     }
 }
 

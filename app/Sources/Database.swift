@@ -162,6 +162,88 @@ actor Database {
         try db.run("UPDATE jobs SET status='cancelled', finished=?, error='Removed from the queue' WHERE status='queued'", [Date()])
     }
 
+    // MARK: my playlists (collections)
+
+    func createPlaylist(_ name: String, sourceURL: String? = nil) throws -> Int64 {
+        try db.run("INSERT INTO collections(name, source_url, created) VALUES(?, ?, ?)", [name, sourceURL, Date()])
+        return db.lastInsertRowID
+    }
+
+    func renamePlaylist(_ id: Int64, _ name: String) throws { try db.run("UPDATE collections SET name=? WHERE id=?", [name, id]) }
+
+    /// Deletes the playlist only; its videos stay in history and their files stay on disk.
+    func deletePlaylist(_ id: Int64) throws { try db.run("DELETE FROM collections WHERE id=?", [id]) }
+
+    /// Appends videos at the end, skipping ones already in the playlist.
+    func addToPlaylist(_ id: Int64, videoIDs: [Int64]) throws {
+        try db.transaction {
+            var next = try db.query("SELECT coalesce(max(position), -1) + 1 AS n FROM collection_items WHERE collection_id=?", [id])
+                .first?.double("n") ?? 0
+            for v in videoIDs {
+                let added = try db.run("""
+                    INSERT INTO collection_items(collection_id, video_id, position, added) VALUES(?, ?, ?, ?)
+                    ON CONFLICT(collection_id, video_id) DO NOTHING
+                    """, [id, v, next, Date()])
+                if added == 1 { next += 1 }
+            }
+        }
+    }
+
+    func removeFromPlaylist(_ id: Int64, videoID: Int64) throws {
+        try db.run("DELETE FROM collection_items WHERE collection_id=? AND video_id=?", [id, videoID])
+    }
+
+    /// Saves a new order (the full list of the playlist's video ids, first to last).
+    func reorderPlaylist(_ id: Int64, videoIDs: [Int64]) throws {
+        try db.transaction {
+            for (i, v) in videoIDs.enumerated() {
+                try db.run("UPDATE collection_items SET position=? WHERE collection_id=? AND video_id=?", [Double(i), id, v])
+            }
+        }
+    }
+
+    func playlists() throws -> [PlaylistSummary] {
+        try db.query("""
+            SELECT c.id, c.name, c.source_url, count(i.video_id) AS n, coalesce(sum(v.duration), 0) AS total
+            FROM collections c LEFT JOIN collection_items i ON i.collection_id = c.id
+            LEFT JOIN videos v ON v.id = i.video_id
+            GROUP BY c.id ORDER BY c.created DESC, c.id DESC
+            """).map { PlaylistSummary(id: $0.int64("id") ?? 0, name: $0.string("name") ?? "Playlist", sourceURL: $0.string("source_url"),
+                                      count: $0.int("n") ?? 0, totalDuration: $0.double("total") ?? 0) }
+    }
+
+    func playlistIDs(containing videoID: Int64) throws -> Set<Int64> {
+        Set(try db.query("SELECT collection_id FROM collection_items WHERE video_id=?", [videoID]).compactMap { $0.int64("collection_id") })
+    }
+
+    /// Queues the chosen playlist entries in one transaction: an entry per video (existing ones are reused), a queued
+    /// job each, and optionally a new playlist with them in the original order.
+    func importPlaylist(_ entries: [PlaylistEntry], action: JobAction, format: String?, language: String?,
+                        playlistName: String?, sourceURL: String?, at: Date = Date()) throws -> (playlist: Int64?, jobs: Int) {
+        try db.transaction {
+            var playlist: Int64?
+            if let playlistName {
+                try db.run("INSERT INTO collections(name, source_url, created) VALUES(?, ?, ?)", [playlistName, sourceURL, at])
+                playlist = db.lastInsertRowID
+            }
+            var jobs = 0
+            for (i, e) in entries.enumerated() {
+                let video = try upsertVideo(key: "youtube:\(e.id)", url: e.url, platform: "YouTube", at: at,
+                                            info: VideoInfo(title: e.title, channel: e.channel,
+                                                            thumbnail: "https://i.ytimg.com/vi/\(e.id)/mqdefault.jpg"))
+                if let d = e.duration { try db.run("UPDATE videos SET duration = coalesce(duration, ?) WHERE id=?", [d, video]) }
+                if try insertJob(video, NewJob(kind: action.kind, status: .queued, source: .app, action: action,
+                                               started: at.addingTimeInterval(Double(i) / 1000),
+                                               summaryLanguage: language, summaryFormat: format)) != nil { jobs += 1 }
+                if let playlist {
+                    try db.run("INSERT INTO collection_items(collection_id, video_id, position, added) VALUES(?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                               [playlist, video, Double(i), at])
+                }
+            }
+            return (playlist, jobs)
+        }
+    }
+
     // MARK: playback and thumbnails
 
     func savePosition(_ path: String, position: Double, duration: Double?) throws {
@@ -290,7 +372,7 @@ actor Database {
     // MARK: reads
 
     func videos(filter: HistoryFilter = .all, sort: HistorySort = .recent, search: String = "",
-                limit: Int? = nil, onlyID: Int64? = nil) throws -> [Video] {
+                limit: Int? = nil, onlyID: Int64? = nil, playlist: Int64? = nil) throws -> [Video] {
         let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = term.isEmpty ? "" : "%" + term
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -304,12 +386,14 @@ actor Database {
         case .onMac: "1"            // file existence is checked by HistoryStore, not SQL
         case .favorites: "favorite = 1"
         }
-        let order = switch sort {
+        let sortOrder = switch sort {
         case .recent: "last_processed DESC"
         case .oldest: "first_processed ASC"
         case .duration: "duration IS NULL, duration DESC"
         case .title: "title IS NULL, title COLLATE NOCASE ASC"
         }
+        // a playlist lists its videos in their saved order
+        let order = playlist.map { "(SELECT position FROM collection_items WHERE collection_id = \($0) AND video_id = id)" } ?? sortOrder
         let rows = try db.query("""
             SELECT * FROM (
               SELECT v.*,
@@ -323,11 +407,12 @@ actor Database {
                    ORDER BY j.started DESC LIMIT 1) AS language
               FROM videos v
               WHERE (?1 IS NULL OR v.id = ?1)
+                AND (?3 IS NULL OR v.id IN (SELECT video_id FROM collection_items WHERE collection_id = ?3))
                 AND (?2 = '' OR v.title LIKE ?2 ESCAPE '\\' OR v.channel LIKE ?2 ESCAPE '\\' OR v.url LIKE ?2 ESCAPE '\\'
                      OR EXISTS(SELECT 1 FROM jobs j WHERE j.video_id=v.id
                                AND (j.summary LIKE ?2 ESCAPE '\\' OR j.transcript LIKE ?2 ESCAPE '\\')))
             ) WHERE \(where_) ORDER BY \(order)\(limit.map { " LIMIT \($0)" } ?? "")
-            """, [onlyID, pattern])
+            """, [onlyID, pattern, playlist])
         return rows.map(Database.video)
     }
 

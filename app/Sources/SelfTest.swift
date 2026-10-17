@@ -37,6 +37,7 @@ enum SelfTest {
         try await importer(root.appendingPathComponent("import"))
         try await upgrade(root.appendingPathComponent("upgrade"))
         try await queue(root.appendingPathComponent("queue"))
+        try await playlists(root.appendingPathComponent("playlists"))
     }
 
     // MARK: pure parsing
@@ -273,6 +274,51 @@ enum SelfTest {
               "quality: the default sends nothing to the scripts")
         check(JobAction.transcribe.needsNetwork == false && JobAction.resummarize.needsNetwork && JobAction.transcribe.kind == .transcript,
               "transcribing is on-device")
+    }
+
+    private static func playlists(_ dir: URL) async throws {
+        let pl = "PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI"
+        check(PlaylistLink.parse("https://www.youtube.com/playlist?list=\(pl)") == PlaylistLink(listID: pl, url: "https://www.youtube.com/playlist?list=\(pl)", videoID: nil),
+              "playlist link")
+        check(PlaylistLink.parse("https://www.youtube.com/watch?v=jNQXAC9IVRw&list=\(pl)&index=2")?.videoID == "jNQXAC9IVRw", "watch link inside a playlist")
+        check(PlaylistLink.parse("https://youtu.be/jNQXAC9IVRw?list=\(pl)")?.listID == pl, "short link inside a playlist")
+        check(PlaylistLink.parse("https://www.youtube.com/watch?v=jNQXAC9IVRw") == nil && PlaylistLink.parse("https://vimeo.com/1?list=\(pl)") == nil,
+              "not a playlist")
+        check(VideoRef.parse("https://www.youtube.com/watch?v=jNQXAC9IVRw&list=\(pl)")?.key == "youtube:jNQXAC9IVRw", "just-this-video still works")
+
+        let sample = #"{"title":"Test list","entries":[{"id":"jNQXAC9IVRw","title":"Me at the zoo","duration":19,"channel":"jawed"},{"id":"AAAAAAAAAAA","title":"[Private video]"},{"id":"BBBBBBBBBBB","title":"[Deleted video]","duration":null},{"id":"bad","title":"x"},{"id":"CCCCCCCCCCC","title":"Third","duration":61.0,"uploader":"U"}]}"#
+        let preview = PlaylistImport.parse(Data(sample.utf8), url: "u")
+        check(preview?.title == "Test list" && preview?.entries.count == 4 && preview?.available.map(\.id) == ["jNQXAC9IVRw", "CCCCCCCCCCC"],
+              "playlist listing: private/deleted marked, bad ids dropped")
+        check(preview?.entries.last?.channel == "U" && preview?.entries.first?.url == "https://www.youtube.com/watch?v=jNQXAC9IVRw", "playlist entry details")
+
+        let db = try Database(directory: dir)
+        let existing = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
+        let r = try await db.importPlaylist(preview!.available, action: .video, format: nil, language: nil, playlistName: "Trip", sourceURL: "u")
+        check(r.jobs == 2 && r.playlist != nil, "playlist import queues each video")
+        check(try await db.count("videos") == 2, "an entry already in history is reused, not duplicated")
+        let order = try await db.videos(playlist: r.playlist!).map(\.title)
+        check(order == ["Me at the zoo", "Third"], "playlist keeps the original order: \(order)")
+        check(try await db.video(existing.video)?.duration == 19, "duration from the listing")
+        check(try await db.queuedJobs().map(\.job.action) == [.audio, .video, .video], "queued in order")
+
+        let mine = try await db.createPlaylist("Mine")
+        let third = try await db.videos(playlist: r.playlist!)[1].id
+        try await db.addToPlaylist(mine, videoIDs: [third, existing.video, third])
+        check(try await db.videos(playlist: mine).map(\.id) == [third, existing.video], "add appends and skips duplicates")
+        try await db.reorderPlaylist(mine, videoIDs: [existing.video, third])
+        check(try await db.videos(playlist: mine).map(\.id) == [existing.video, third], "reorder")
+        try await db.removeFromPlaylist(mine, videoID: existing.video)
+        check(try await db.videos(playlist: mine).map(\.id) == [third], "remove from playlist")
+        let lists = try await db.playlists()
+        check(lists.map(\.name) == ["Mine", "Trip"] && lists.first { $0.name == "Trip" }?.count == 2 && lists.first { $0.name == "Trip" }?.totalDuration == 80,
+              "playlist summaries")
+        try await db.deleteVideo(third)
+        let mineAfter = try await db.videos(playlist: mine), tripAfter = try await db.videos(playlist: r.playlist!)
+        check(mineAfter.isEmpty && tripAfter.count == 1, "removing history removes it from playlists")
+        try await db.deletePlaylist(r.playlist!)
+        let kept = try await db.video(existing.video), remaining = try await db.playlists()
+        check(kept != nil && remaining.count == 1, "deleting a playlist keeps its videos")
     }
 
     private static func importer(_ dir: URL) async throws {

@@ -57,6 +57,28 @@ enum TestHooks {
         case "resumeQueue": model.jobs.resumeQueue()
         case "clearQueue": model.jobs.clearQueue()
         case "thumbnails": Task { await model.backfillThumbnails() }
+        case "playlistPreview":
+            if let link = PlaylistLink.parse(arg) { model.readPlaylist(link, kind: .audio) }
+        case "playlistImport":
+            // "<action>|<how many>|<playlist name or empty>" — picks the shortest available videos, to keep tests quick
+            let f = arg.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            if let state = model.playlistImport, f.count == 3, let action = JobAction(rawValue: f[0]), let n = Int(f[1]) {
+                let picks = state.preview.available.sorted { ($0.duration ?? .infinity) < ($1.duration ?? .infinity) }.prefix(n)
+                let ordered = state.preview.entries.filter { e in picks.contains { $0.id == e.id } }
+                model.importPlaylist(ordered, action: action, saveAs: f[2].nilIfBlank, sourceURL: state.preview.url)
+            }
+        case "newPlaylist": model.createPlaylist(arg, adding: store.selectedVideo?.id)
+        case "addToPlaylist":
+            if let pl = store.playlists.first(where: { $0.name == arg }), let v = store.selectedVideo { model.addToPlaylist(pl.id, video: v) }
+        case "openPlaylist": store.openPlaylistID = store.playlists.first { $0.name == arg }?.id; model.section = .playlists
+        case "movePlaylistItem":
+            let f = arg.split(separator: "|").compactMap { Int($0) }
+            if f.count == 2 { model.movePlaylistItems(from: IndexSet(integer: f[0]), to: f[1]) }
+        case "removeFromPlaylist": if let v = store.selectedVideo { model.removeFromOpenPlaylist(v) }
+        case "playAll": model.playAll()
+        case "makeAllOffline": model.askMakeAllAvailableOffline(); model.confirmOfflineBatch()
+        case "deletePlaylist":
+            if let pl = store.playlists.first(where: { $0.name == arg }) { model.pendingPlaylistDeletion = pl; model.confirmPlaylistDeletion() }
         case "settings": NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
@@ -94,6 +116,12 @@ enum TestHooks {
             "existingMedia": selected.flatMap { model.existingMedia($0)?.name } ?? "",
             "lastError": store.lastError ?? "",
             "isOnline": model.network.isOnline,
+            "playlists": store.playlists.map { "\($0.name) (\($0.count))" },
+            "openPlaylist": store.playlistVideos.map(\.displayTitle),
+            "upNext": model.playback.upNext.count,
+            "preview": model.playlistImport.map { ["title": $0.preview.title, "count": $0.preview.entries.count,
+                                                   "available": $0.preview.available.count,
+                                                   "entries": $0.preview.entries.prefix(8).map { "\($0.title) [\(Fmt.duration($0.duration) ?? "?")]" }] as [String: Any] } ?? [:],
             "queuePaused": jobs.paused,
             "current": jobs.current.map { "\($0.action.rawValue): \($0.title)" } ?? "",
             "queue": jobs.queue.map { "\($0.action.rawValue): \($0.title)" },

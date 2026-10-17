@@ -4,13 +4,14 @@ import Foundation
 import Observation
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home = "Home", history = "History", favorites = "Favorites", downloads = "Downloads", settings = "Settings"
+    case home = "Home", history = "History", favorites = "Favorites", playlists = "Playlists", downloads = "Downloads", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .home: "house"
         case .history: "clock"
         case .favorites: "star"
+        case .playlists: "music.note.list"
         case .downloads: "arrow.down.to.line"
         case .settings: "gearshape"
         }
@@ -55,6 +56,14 @@ final class AppModel {
     var importStatus: String?
     var pendingRemoval: Video?
     var notice: String?
+    /// A watch link inside a playlist: ask whether they mean the video or the whole playlist.
+    var playlistChoice: (link: PlaylistLink, kind: JobKind)?
+    /// The playlist preview sheet.
+    var playlistImport: PlaylistImportState?
+    var readingPlaylist = false
+    var namePrompt: NamePrompt?
+    var pendingPlaylistDeletion: PlaylistSummary?
+    var pendingOfflineBatch: OfflineBatch?
     private var launched = false
 
     private init() {
@@ -132,7 +141,145 @@ final class AppModel {
 
     func start(_ kind: JobKind) {
         guard let link = link.nilIfBlank else { focusLinkToken += 1; return }
+        if let playlist = PlaylistLink.parse(link) {
+            if playlist.videoID != nil { playlistChoice = (playlist, kind) } else { readPlaylist(playlist, kind: kind) }
+            return
+        }
         jobs.enqueue(JobAction.from(kind: kind), link: link)
+    }
+
+    // MARK: playlists
+
+    func justThisVideo() {
+        guard let choice = playlistChoice else { return }
+        playlistChoice = nil
+        jobs.enqueue(JobAction.from(kind: choice.kind), link: link)
+    }
+
+    func wholePlaylist() {
+        guard let choice = playlistChoice else { return }
+        playlistChoice = nil
+        readPlaylist(choice.link, kind: choice.kind)
+    }
+
+    /// Lists the playlist's videos (a few seconds, nothing downloaded) and opens the preview sheet.
+    func readPlaylist(_ playlist: PlaylistLink, kind: JobKind) {
+        guard network.isOnline else { notice = "Reading a playlist needs internet."; return }
+        readingPlaylist = true
+        notice = "Reading the playlist…"
+        Task {
+            let result = await PlaylistImport.fetch(playlist.url)
+            readingPlaylist = false
+            switch result {
+            case let .success(preview):
+                notice = nil
+                playlistImport = PlaylistImportState(preview: preview, action: JobAction.from(kind: kind))
+            case let .failure(error):
+                notice = "Couldn't read the playlist: \(error.message)"
+            }
+        }
+    }
+
+    /// Queues the chosen videos (one at a time, oldest first) and saves them as one of My Playlists if asked.
+    func importPlaylist(_ entries: [PlaylistEntry], action: JobAction, saveAs name: String?, sourceURL: String) {
+        playlistImport = nil
+        guard !entries.isEmpty else { return }
+        let (format, language) = action == .summarize ? (AppSettings.format.rawValue, AppSettings.language.rawValue) : (nil, nil)
+        Task {
+            do {
+                let r = try await store.db.importPlaylist(entries, action: action, format: format, language: language,
+                                                          playlistName: name?.nilIfBlank, sourceURL: sourceURL)
+                await store.reload()
+                await jobs.refreshQueue()
+                jobs.pump()
+                if let id = r.playlist {
+                    section = .playlists
+                    store.openPlaylistID = id
+                }
+                notice = "Added \(r.jobs) videos to the queue" + (name?.nilIfBlank.map { " and to the playlist “\($0)”." } ?? ".")
+            } catch {
+                notice = "Couldn't add the playlist: \(error)"
+            }
+        }
+    }
+
+    func createPlaylist(_ name: String, adding videoID: Int64? = nil) {
+        guard let name = name.nilIfBlank else { return }
+        Task {
+            guard let id = try? await store.db.createPlaylist(name) else { return }
+            if let videoID { try? await store.db.addToPlaylist(id, videoIDs: [videoID]) }
+            await store.reloadPlaylists()
+            notice = videoID == nil ? "Created “\(name)”." : "Added to the new playlist “\(name)”."
+        }
+    }
+
+    func renamePlaylist(_ id: Int64, to name: String) {
+        guard let name = name.nilIfBlank else { return }
+        Task { try? await store.db.renamePlaylist(id, name); await store.reloadPlaylists() }
+    }
+
+    func confirmPlaylistDeletion() {
+        guard let p = pendingPlaylistDeletion else { return }
+        pendingPlaylistDeletion = nil
+        Task {
+            try? await store.db.deletePlaylist(p.id)
+            if store.openPlaylistID == p.id { store.openPlaylistID = nil }
+            await store.reloadPlaylists()
+            notice = "Deleted the playlist “\(p.name)”. Its videos are still in your history and on disk."
+        }
+    }
+
+    func addToPlaylist(_ id: Int64, video: Video) {
+        Task {
+            try? await store.db.addToPlaylist(id, videoIDs: [video.id])
+            await store.reloadPlaylists()
+            notice = "Added to “\(store.playlists.first { $0.id == id }?.name ?? "playlist")”."
+        }
+    }
+
+    func removeFromOpenPlaylist(_ video: Video) {
+        guard let id = store.openPlaylistID else { return }
+        Task { try? await store.db.removeFromPlaylist(id, videoID: video.id); await store.reloadPlaylists() }
+    }
+
+    func movePlaylistItems(from source: IndexSet, to destination: Int) {
+        guard let id = store.openPlaylistID else { return }
+        var ids = store.playlistVideos.map(\.id)
+        ids.move(fromOffsets: source, toOffset: destination)
+        store.playlistVideos.move(fromOffsets: source, toOffset: destination)   // instant feedback
+        Task { try? await store.db.reorderPlaylist(id, videoIDs: ids); await store.reloadPlaylists() }
+    }
+
+    /// Plays the open playlist in order in the detail panel, skipping videos that aren't on this Mac.
+    func playAll() {
+        let videos = store.playlistVideos
+        let items = videos.compactMap { v in store.playable(for: v.id).map { (videoID: v.id, path: $0.path) } }
+        guard let first = items.first else {
+            notice = "None of these videos are on this Mac yet. Use Make All Available Offline first."
+            return
+        }
+        store.select(first.videoID)
+        playback.play(path: first.path, videoID: first.videoID, upNext: Array(items.dropFirst()))
+        if items.count < videos.count { notice = "Playing \(items.count) of \(videos.count): the others aren't on this Mac yet." }
+    }
+
+    /// Asks first (with the free disk space), then queues a video download for every entry that isn't on this Mac.
+    func askMakeAllAvailableOffline() {
+        let missing = store.playlistVideos.filter { $0.url != nil && !store.hasLocalVideo($0.id) }
+        guard !missing.isEmpty else { notice = "Everything in this playlist is already on this Mac."; return }
+        pendingOfflineBatch = OfflineBatch(videoIDs: missing.map(\.id), totalDuration: missing.compactMap(\.duration).reduce(0, +))
+    }
+
+    func confirmOfflineBatch() {
+        guard let batch = pendingOfflineBatch else { return }
+        pendingOfflineBatch = nil
+        Task {
+            for id in batch.videoIDs { _ = try? await store.db.enqueue(videoID: id, action: .video) }
+            await store.reload()
+            await jobs.refreshQueue()
+            jobs.pump()
+            notice = "Queued \(batch.videoIDs.count) video downloads" + (network.isOnline ? "." : ": they start when you're back online.")
+        }
     }
 
     func pasteLink() {
@@ -299,7 +446,41 @@ final class AppModel {
         }
     }
 
+    var freeDiskSpace: Int64? { DiskSpace.free(at: AppSettings.downloadDir) }
+
     func revealDatabase() {
         NSWorkspace.shared.activateFileViewerSelecting([dataDir.appendingPathComponent("history.sqlite")])
+    }
+}
+
+struct PlaylistImportState: Identifiable {
+    let id = UUID()
+    let preview: PlaylistPreview
+    let action: JobAction
+}
+
+enum NamePrompt: Identifiable {
+    case new(adding: Int64?)
+    case rename(PlaylistSummary)
+    var id: String {
+        switch self {
+        case let .new(v): "new-\(v ?? 0)"
+        case let .rename(p): "rename-\(p.id)"
+        }
+    }
+}
+
+struct OfflineBatch: Identifiable {
+    let id = UUID()
+    let videoIDs: [Int64]
+    let totalDuration: Double
+}
+
+enum DiskSpace {
+    /// Space macOS can free up for important files on the volume holding `path` (what Finder shows as available).
+    static func free(at path: String) -> Int64? {
+        var url = URL(fileURLWithPath: path)
+        while !FileManager.default.fileExists(atPath: url.path), url.pathComponents.count > 1 { url.deleteLastPathComponent() }
+        return (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
     }
 }

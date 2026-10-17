@@ -17,6 +17,10 @@ final class HistoryStore {
     var selectedJobs: [Job] = []
     /// Entries with an audio or video file that's on this Mac right now (watchable offline).
     private(set) var onMacIDs: Set<Int64> = []
+    /// My Playlists, and the videos of the open one in their saved order.
+    var playlists: [PlaylistSummary] = []
+    var openPlaylistID: Int64? { didSet { if openPlaylistID != oldValue { Task { await reloadPlaylists() } } } }
+    var playlistVideos: [Video] = []
     var lastError: String?
 
     init(db: Database) { self.db = db }
@@ -40,7 +44,18 @@ final class HistoryStore {
         } catch {
             lastError = "Couldn't load history: \(error)"
         }
+        await reloadPlaylists()
         await refreshSelection()
+    }
+
+    func reloadPlaylists() async {
+        playlists = (try? await db.playlists()) ?? []
+        if let id = openPlaylistID, playlists.contains(where: { $0.id == id }) {
+            playlistVideos = (try? await db.videos(playlist: id)) ?? []
+        } else {
+            openPlaylistID = nil
+            playlistVideos = []
+        }
     }
 
     func select(_ id: Int64?) {
