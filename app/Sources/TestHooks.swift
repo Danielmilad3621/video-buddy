@@ -39,6 +39,24 @@ enum TestHooks {
         case "remove": if let v = store.selectedVideo { model.pendingRemoval = v; model.confirmRemoval() }
         case "clearAll": model.clearAll()
         case "reload": Task { await store.reload() }
+        case "offline": model.network.forcedOffline = arg == "on"
+        case "play": if let v = store.selectedVideo { model.play(v) }
+        case "pause": model.playback.pause()
+        case "seek": model.playback.seek(to: Double(arg) ?? 0)
+        case "seekLine":
+            if let v = store.selectedVideo, let segs = store.transcriptJob?.segments, let i = Int(arg), segs.indices.contains(i) {
+                model.seek(v, to: segs[i].start)
+            }
+        case "rate": model.playback.rate = Float(arg) ?? 1
+        case "mute": model.playback.muted = arg != "off"
+        case "stopPlayer": model.playback.stop()
+        case "transcribe": if let v = store.selectedVideo { model.transcribe(v) }
+        case "offlineVideo": if let v = store.selectedVideo { model.makeAvailableOffline(v) }
+        case "summarizeTranscript": model.regenerate()
+        case "pauseQueue": model.jobs.pauseQueue()
+        case "resumeQueue": model.jobs.resumeQueue()
+        case "clearQueue": model.jobs.clearQueue()
+        case "thumbnails": Task { await model.backfillThumbnails() }
         case "settings": NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
@@ -75,6 +93,15 @@ enum TestHooks {
             "stats": ["videos": store.stats.videos, "watch": store.stats.watchSeconds, "summaries": store.stats.summaries, "downloads": store.stats.downloads],
             "existingMedia": selected.flatMap { model.existingMedia($0)?.name } ?? "",
             "lastError": store.lastError ?? "",
+            "isOnline": model.network.isOnline,
+            "queuePaused": jobs.paused,
+            "current": jobs.current.map { "\($0.action.rawValue): \($0.title)" } ?? "",
+            "queue": jobs.queue.map { "\($0.action.rawValue): \($0.title)" },
+            "onMac": store.videos.filter { store.onMacIDs.contains($0.id) }.map(\.displayTitle),
+            "thumbnailPath": selected?.thumbnailPath ?? "",
+            "playback": ["path": model.playback.currentPath ?? "", "time": model.playback.currentTime,
+                         "duration": model.playback.duration, "playing": model.playback.isPlaying, "rate": model.playback.rate,
+                         "line": (model.playback.currentVideoID == selected?.id ? store.transcriptJob?.segments.index(at: model.playback.currentTime) : nil) ?? -1],
         ]
         if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("state.json"))

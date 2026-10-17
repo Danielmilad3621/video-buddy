@@ -14,7 +14,7 @@ actor Database {
         self.db = db
         recoveredCorruptFile = aside
         try db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
-        try Database.migrate(db)
+        try Database.migrate(db, backupDir: directory.appendingPathComponent("backups"))
     }
 
     /// Fallback when the real database can't be opened at all: the app still works, nothing is saved.
@@ -39,9 +39,46 @@ actor Database {
         return (try SQLite(path: url.path), aside)
     }
 
-    static func migrate(_ db: SQLite) throws {
+    /// Upgrades the schema step by step. Before changing an existing database it saves a verified copy to
+    /// backups/history-pre-v<N>-<ms>.sqlite (a new name every time, never an existing file); if that copy can't be
+    /// made, the upgrade doesn't run and the error stops the open, so the data on disk is left as it was.
+    static func migrate(_ db: SQLite, backupDir: URL? = nil) throws {
         let version = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
-        guard version < 1 else { return }
+        if version < 1 { try createV1(db) }
+        if version < 2 {
+            if version >= 1, let backupDir { try backupBeforeUpgrade(db, to: backupDir, label: "pre-v2") }
+            try db.transaction {
+                try db.exec("""
+                ALTER TABLE videos ADD COLUMN thumbnail_path TEXT;
+                ALTER TABLE jobs ADD COLUMN action TEXT;
+                UPDATE jobs SET action = CASE kind WHEN 'audio' THEN 'audio' WHEN 'video' THEN 'video' ELSE 'summarize' END;
+                CREATE INDEX jobs_queue ON jobs(status, id);
+                CREATE TABLE playback(file_path TEXT PRIMARY KEY, position REAL NOT NULL, duration REAL, updated REAL NOT NULL);
+                CREATE TABLE collections(id INTEGER PRIMARY KEY, name TEXT NOT NULL, source_url TEXT, created REAL NOT NULL);
+                CREATE TABLE collection_items(
+                  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                  video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                  position REAL NOT NULL, added REAL NOT NULL,
+                  PRIMARY KEY(collection_id, video_id));
+                PRAGMA user_version = 2;
+                """)
+            }
+        }
+    }
+
+    static func backupBeforeUpgrade(_ db: SQLite, to dir: URL, label: String) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let copy = dir.appendingPathComponent("history-\(label)-\(Int(Date().timeIntervalSince1970 * 1000)).sqlite")
+        guard !FileManager.default.fileExists(atPath: copy.path) else { throw SQLiteError(message: "backup name already used") }
+        try db.exec("VACUUM INTO '\(copy.path.replacingOccurrences(of: "'", with: "''"))'")
+        guard isHealthy(copy) else {
+            try? FileManager.default.removeItem(at: copy)
+            throw SQLiteError(message: "couldn't make a verified backup before upgrading the history; nothing was changed")
+        }
+    }
+
+    /// The original (version 1) schema. Kept verbatim so old databases and fresh ones upgrade the same way.
+    static func createV1(_ db: SQLite) throws {
         try db.transaction {
             try db.exec("""
             CREATE TABLE videos(
@@ -66,6 +103,80 @@ actor Database {
             PRAGMA user_version = 1;
             """)
         }
+    }
+
+    // MARK: queue
+
+    /// Queues a job for a link. The video entry is created at once, so it shows up in history while it waits.
+    func enqueue(_ ref: VideoRef, action: JobAction, format: String? = nil, language: String? = nil,
+                 at: Date = Date()) throws -> (video: Int64, job: Int64) {
+        try db.transaction {
+            let video = try upsertVideo(key: ref.key, url: ref.url, platform: ref.platform, at: at,
+                                        info: VideoInfo(thumbnail: ref.thumbnailFallback))
+            guard let job = try insertJob(video, NewJob(kind: action.kind, status: .queued, source: .app, action: action, started: at,
+                                                        summaryLanguage: language, summaryFormat: format)) else {
+                throw SQLiteError(message: "could not queue job")
+            }
+            return (video, job)
+        }
+    }
+
+    /// Queues a job on an existing entry (transcribe a local file, summarize a saved transcript, download again).
+    func enqueue(videoID: Int64, action: JobAction, filePath: String? = nil, format: String? = nil,
+                 language: String? = nil, at: Date = Date()) throws -> Int64 {
+        try db.transaction {
+            guard let job = try insertJob(videoID, NewJob(kind: action.kind, status: .queued, source: .app, action: action, started: at,
+                                                          filePath: filePath, summaryLanguage: language, summaryFormat: format)) else {
+                throw SQLiteError(message: "could not queue job")
+            }
+            return job
+        }
+    }
+
+    /// The oldest queued job that can run now. Without internet only on-device work qualifies.
+    func nextQueued(networkAvailable: Bool) throws -> Job? {
+        try db.query("""
+            SELECT * FROM jobs WHERE status='queued' AND (?1 OR action='transcribe') ORDER BY id LIMIT 1
+            """, [networkAvailable]).first.map(Database.job)
+    }
+
+    func queuedJobs() throws -> [(job: Job, title: String?)] {
+        try db.query("""
+            SELECT j.*, v.title AS video_title FROM jobs j JOIN videos v ON v.id = j.video_id
+            WHERE j.status='queued' ORDER BY j.id
+            """).map { (Database.job($0), $0.string("video_title")) }
+    }
+
+    /// queued → running; false if the job was removed from the queue meanwhile.
+    func markRunning(_ id: Int64, at: Date = Date()) throws -> Bool {
+        try db.run("UPDATE jobs SET status='running', started=? WHERE id=? AND status='queued'", [at, id]) == 1
+    }
+
+    func removeQueued(_ id: Int64) throws {
+        try db.run("UPDATE jobs SET status='cancelled', finished=?, error='Removed from the queue' WHERE id=? AND status='queued'",
+                   [Date(), id])
+    }
+
+    @discardableResult
+    func clearQueue() throws -> Int {
+        try db.run("UPDATE jobs SET status='cancelled', finished=?, error='Removed from the queue' WHERE status='queued'", [Date()])
+    }
+
+    // MARK: playback and thumbnails
+
+    func savePosition(_ path: String, position: Double, duration: Double?) throws {
+        try db.run("""
+            INSERT INTO playback(file_path, position, duration, updated) VALUES(?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET position=excluded.position, duration=excluded.duration, updated=excluded.updated
+            """, [path, position, duration, Date()])
+    }
+
+    func position(_ path: String) -> Double? {
+        (try? db.query("SELECT position FROM playback WHERE file_path=?", [path]))?.first?.double("position")
+    }
+
+    func setThumbnailPath(_ videoID: Int64, _ path: String?) throws {
+        try db.run("UPDATE videos SET thumbnail_path=? WHERE id=?", [path, videoID])
     }
 
     // MARK: writes
@@ -190,6 +301,7 @@ actor Database {
         case .summaries: "has_summary"
         case .audio: "has_audio"
         case .downloads: "has_video"
+        case .onMac: "1"            // file existence is checked by HistoryStore, not SQL
         case .favorites: "favorite = 1"
         }
         let order = switch sort {
@@ -285,6 +397,8 @@ actor Database {
         try db.query("SELECT count(*) AS n FROM \(table)").first?.int("n") ?? 0
     }
 
+    func schemaVersion() throws -> Int { try db.query("PRAGMA user_version").first?.int("user_version") ?? 0 }
+
     func quickCheck() throws -> String { try db.query("PRAGMA quick_check").first?.string("quick_check") ?? "?" }
 
     // MARK: backups
@@ -351,12 +465,12 @@ actor Database {
     /// Returns nil only when the event id was already recorded.
     private func insertJob(_ videoID: Int64, _ j: NewJob) throws -> Int64? {
         let changed = try db.run("""
-            INSERT INTO jobs(video_id, kind, status, source, event_id, started, finished, file_path, file_size,
+            INSERT INTO jobs(video_id, kind, action, status, source, event_id, started, finished, file_path, file_size,
               summary_path, transcript_path, summary, summary_language, summary_format, transcript,
               transcript_segments, transcript_language, error)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(event_id) DO NOTHING
-            """, [videoID, j.kind.rawValue, j.status.rawValue, j.source.rawValue, j.eventID, j.started, j.finished,
+            """, [videoID, j.kind.rawValue, (j.action ?? JobAction.from(kind: j.kind)).rawValue, j.status.rawValue, j.source.rawValue, j.eventID, j.started, j.finished,
                   j.filePath, j.fileSize, j.summaryPath, j.transcriptPath, j.summary, j.summaryLanguage,
                   j.summaryFormat, j.transcript, j.segmentsJSON, j.transcriptLanguage, j.error])
         return changed == 1 ? db.lastInsertRowID : nil
@@ -365,7 +479,7 @@ actor Database {
     private static func video(_ r: Row) -> Video {
         Video(id: r.int64("id") ?? 0, key: r.string("key") ?? "", url: r.string("url"), platform: r.string("platform"),
               title: r.string("title"), channel: r.string("channel"), channelFollowers: r.int("channel_followers"),
-              thumbnailURL: r.string("thumbnail_url"), duration: r.double("duration"), uploadDate: r.string("upload_date"),
+              thumbnailURL: r.string("thumbnail_url"), thumbnailPath: r.string("thumbnail_path"), duration: r.double("duration"), uploadDate: r.string("upload_date"),
               favorite: r.bool("favorite"), firstProcessed: r.date("first_processed") ?? Date(),
               lastProcessed: r.date("last_processed") ?? Date(), lastOpened: r.date("last_opened"),
               hasSummary: r.bool("has_summary"), hasAudio: r.bool("has_audio"), hasVideo: r.bool("has_video"),
@@ -374,7 +488,9 @@ actor Database {
     }
 
     private static func job(_ r: Row) -> Job {
-        Job(id: r.int64("id") ?? 0, videoID: r.int64("video_id") ?? 0, kind: JobKind(rawValue: r.string("kind") ?? "") ?? .summary,
+        let kind = JobKind(rawValue: r.string("kind") ?? "") ?? .summary
+        return Job(id: r.int64("id") ?? 0, videoID: r.int64("video_id") ?? 0, kind: kind,
+            action: r.string("action").flatMap(JobAction.init) ?? JobAction.from(kind: kind),
             status: JobStatus(rawValue: r.string("status") ?? "") ?? .failed, source: JobSource(rawValue: r.string("source") ?? "") ?? .app,
             eventID: r.string("event_id"), started: r.date("started") ?? Date(), finished: r.date("finished"),
             filePath: r.string("file_path"), fileSize: r.int("file_size"), summaryPath: r.string("summary_path"),

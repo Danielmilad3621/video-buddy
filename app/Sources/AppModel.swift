@@ -36,6 +36,8 @@ final class AppModel {
     let store: HistoryStore
     let jobs: JobController
     let ingestor: Ingestor
+    let network = NetworkMonitor()
+    let playback: PlaybackController
     let dataDir: URL
 
     var section = AppSection.history {
@@ -67,8 +69,11 @@ final class AppModel {
         }
         startupWarning = warning
         store = HistoryStore(db: db)
-        jobs = JobController(store: store)
+        jobs = JobController(store: store, network: network)
         ingestor = Ingestor(store: store, inbox: dataDir.appendingPathComponent("inbox.jsonl"))
+        playback = PlaybackController(db: db)
+        jobs.onNotice = { [weak self] in self?.notice = $0 }
+        playback.onAdvance = { [weak self] in self?.store.select($0) }
     }
 
     func launch() async {
@@ -78,13 +83,22 @@ final class AppModel {
         if let aside = await db.recoveredCorruptFile {
             startupWarning = "The history database was damaged. It was kept as \(aside.lastPathComponent) and a fresh one was started."
         }
-        _ = try? await db.recoverInterrupted()
+        _ = try? await db.recoverInterrupted()     // queued jobs stay queued and continue below
+        network.start { [weak self] online in
+            guard let self else { return }
+            if online { self.jobs.pump(); Task { await self.backfillThumbnails() } }
+        }
         if AppSettings.retentionDays > 0 { _ = try? await db.prune(olderThanDays: AppSettings.retentionDays) }
         do { try await db.backupIfDue() } catch { notice = "Backup skipped: \(error)" }
         await store.reload()
         store.selectFirstIfNeeded()
         ingestor.start()
-        Task { await backfillMetadata() }
+        await jobs.refreshQueue()
+        jobs.pump()
+        Task {
+            await backfillMetadata()
+            await backfillThumbnails()
+        }
         if await db.meta("import_offered") == nil {
             let groups = await scanDownloads()
             if groups.isEmpty { try? await db.setMeta("import_offered", "1") } else { importOffer = groups }
@@ -101,39 +115,80 @@ final class AppModel {
         if !missing.isEmpty { await store.reload() }
     }
 
+    /// Saves thumbnails on this Mac for entries that don't have one yet: from the web when online, otherwise
+    /// from a frame of a local video.
+    func backfillThumbnails() async {
+        let videos = (try? await store.db.videos()) ?? []
+        var changed = false
+        for v in videos where v.thumbnailPath.map({ !FileManager.default.fileExists(atPath: $0) }) ?? true {
+            let localVideo = store.mediaFiles(for: v.id).first { $0.role == .video && $0.exists }?.path
+            guard network.isOnline || localVideo != nil else { continue }
+            if await Thumbnails.ensure(v, localVideo: localVideo, db: store.db, online: network.isOnline) != nil { changed = true }
+        }
+        if changed { await store.reload() }
+    }
+
     // MARK: processing
 
     func start(_ kind: JobKind) {
         guard let link = link.nilIfBlank else { focusLinkToken += 1; return }
-        jobs.start(kind, link: link)
+        jobs.enqueue(JobAction.from(kind: kind), link: link)
     }
 
     func pasteLink() {
         if let text = NSPasteboard.general.string(forType: .string)?.nilIfBlank { link = text }
     }
 
-    func retry(_ r: RetryInfo) {
-        link = r.url
-        jobs.start(r.kind, link: r.url)
-    }
+    func retry(_ r: RetryInfo) { jobs.retry(r) }
 
     func processAgain(_ v: Video) {
-        guard let url = v.url else { return }
-        link = url
-        jobs.start(.summary, link: url)
+        guard v.url != nil else { return }
+        jobs.enqueue(.summarize, videoID: v.id, format: AppSettings.format, language: AppSettings.language)
     }
 
     func downloadAgain(_ v: Video, kind: JobKind) {
-        guard let url = v.url else { return }
-        link = url
-        jobs.start(kind, link: url)
+        guard v.url != nil else { return }
+        jobs.enqueue(JobAction.from(kind: kind), videoID: v.id)
     }
 
+    /// Downloads the video file, so the entry can be watched without internet.
+    func makeAvailableOffline(_ v: Video) {
+        guard v.url != nil else { return }
+        jobs.enqueue(.video, videoID: v.id)
+        notice = network.isOnline ? "Downloading “\(v.displayTitle)” for offline viewing." : "Queued: it downloads when you're back online."
+    }
+
+    /// On-device transcript of a file already on this Mac (audio first: it needs no conversion).
+    func transcribe(_ v: Video) {
+        let local = store.mediaFiles(for: v.id).filter(\.exists)
+        guard let file = local.first(where: { $0.role == .audio }) ?? local.first else {
+            notice = "There's no audio or video file of this entry on this Mac."
+            return
+        }
+        jobs.enqueue(.transcribe, videoID: v.id, filePath: file.path)
+    }
+
+    /// A new summary from the saved transcript (queued until online when needed).
     func regenerate(format: SummaryFormat = AppSettings.format, language: SummaryLanguage = AppSettings.language) {
-        guard let v = store.selectedVideo, let transcript = store.transcriptJob?.transcript else { return }
+        guard let v = store.selectedVideo, store.transcriptJob != nil else { return }
         detailTab = .summary
-        jobs.regenerate(videoID: v.id, transcript: transcript, mediaPath: store.mediaFiles(for: v.id).first?.path,
-                        format: format, language: language)
+        jobs.enqueue(.resummarize, videoID: v.id, format: format, language: language)
+    }
+
+    // MARK: playback
+
+    func play(_ v: Video) {
+        guard let file = store.playable(for: v.id) else { return }
+        store.select(v.id)
+        playback.play(path: file.path, videoID: v.id)
+    }
+
+    /// Jumps the built-in player to a transcript line, starting playback if needed.
+    func seek(_ v: Video, to seconds: Double) {
+        guard let file = store.playable(for: v.id) else { return }
+        if !playback.isCurrent(file.path) { playback.play(path: file.path, videoID: v.id) }
+        playback.seek(to: seconds)
+        if !playback.isPlaying { playback.togglePlayPause() }
     }
 
     // MARK: per-video actions
@@ -181,7 +236,9 @@ final class AppModel {
         guard let v = pendingRemoval else { return }
         pendingRemoval = nil
         Task {
+            if playback.currentVideoID == v.id { playback.stop() }
             try? await store.db.deleteVideo(v.id)
+            Thumbnails.remove(videoIDs: [v.id])
             if store.selectedID == v.id { store.select(nil) }
             await store.reload()
             store.selectFirstIfNeeded()
@@ -191,7 +248,9 @@ final class AppModel {
 
     func clearAll() {
         Task {
+            playback.stop()
             try? await store.db.deleteAll()
+            Thumbnails.removeAll()
             store.select(nil)
             await store.reload()
             notice = "History cleared. Your files in the downloads folder were kept."

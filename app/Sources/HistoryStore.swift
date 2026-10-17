@@ -15,6 +15,8 @@ final class HistoryStore {
     private(set) var selectedID: Int64?
     var selectedVideo: Video?
     var selectedJobs: [Job] = []
+    /// Entries with an audio or video file that's on this Mac right now (watchable offline).
+    private(set) var onMacIDs: Set<Int64> = []
     var lastError: String?
 
     init(db: Database) { self.db = db }
@@ -26,9 +28,13 @@ final class HistoryStore {
             async let latest = db.videos(limit: 8)
             async let allFiles = db.files()
             async let counts = db.stats()
-            videos = try await list
+            let files = try await allFiles
+            let onMac = Set(files.filter { $0.isMedia && $0.exists }.map(\.videoID))
+            let loaded = try await list
+            videos = filter == .onMac ? loaded.filter { onMac.contains($0.id) } : loaded
             recent = try await latest
-            files = try await allFiles
+            self.files = files
+            onMacIDs = onMac
             stats = try await counts
             lastError = nil
         } catch {
@@ -70,6 +76,12 @@ final class HistoryStore {
 
     func files(for videoID: Int64) -> [FileItem] { files.filter { $0.videoID == videoID } }
     func mediaFiles(for videoID: Int64) -> [FileItem] { files(for: videoID).filter(\.isMedia) }
+    /// The best file to play in the built-in player: a local video first, then local audio.
+    func playable(for videoID: Int64) -> FileItem? {
+        let local = mediaFiles(for: videoID).filter { $0.exists && $0.isPlayable }
+        return local.first { $0.role == .video } ?? local.first
+    }
+    func hasLocalVideo(_ videoID: Int64) -> Bool { mediaFiles(for: videoID).contains { $0.role == .video && $0.exists } }
 
     var summaryJobs: [Job] {
         selectedJobs.filter { $0.kind == .summary && $0.status == .succeeded && $0.summary?.nilIfBlank != nil }

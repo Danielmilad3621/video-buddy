@@ -13,20 +13,16 @@ export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"   # Raycast doesn't load 
 url=${1:-$(pbpaste)}
 out=${VS_OUT_DIR:-$HOME/Downloads/cobalt}
 prompt=${VS_SUMMARY_PROMPT:-"Summarize this video transcript. Start with a 3-sentence TL;DR, then the key points as bullets, then any actionable takeaways."}
-log="${TMPDIR:-/tmp}/cobalt-whisper-$$.log"
 base=""
-trap 'rm -f "$log"; if [[ -n $base ]]; then rm -f "$base.summary.md.part"; fi' EXIT
+trap 'if [[ -n $base ]]; then rm -f "$base.summary.md.part"; fi' EXIT
 trap 'exit 143' TERM INT
 
 echo "⬇️  Downloading audio…"
 mp3=$("$root/scripts/cobalt-dl.sh" "$url" audio "$out")
 base=${mp3%.*}
 
-echo "🎙️  Transcribing on-device…"
-# whisper-cli prints its GPU init chatter on stderr, so only show it if transcription fails.
-# -oj adds <base>.transcript.json (timestamped segments + detected language) next to the .txt
-whisper-cli -np -l auto -m "$HOME/.config/watch/models/ggml-large-v3-turbo-q5_0.bin" \
-  -f "$mp3" -otxt -oj -of "$base.transcript" > /dev/null 2> "$log" || { cat "$log"; exit 1; }
+# transcribe.sh prints the 🎙️ marker itself and writes <base>.transcript.txt/.json; its last line (the path) isn't shown
+"$root/scripts/transcribe.sh" "$mp3" | grep --line-buffered -v '^/'
 
 echo "🧠 Summarizing…"; echo
 # written to .part first, so a failed or cancelled run never leaves an empty or half summary behind

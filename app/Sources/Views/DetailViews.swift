@@ -40,9 +40,15 @@ struct JobBanner: View {
     @State private var showDetail = false
 
     var body: some View {
-        if let banner = model.jobs.banner {
-            let tint = tint(banner)
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: 10) {
+            if let banner = model.jobs.banner { card(banner) }
+            if model.jobs.current == nil, !model.jobs.queue.isEmpty { WaitingQueueCard() }
+        }
+    }
+
+    private func card(_ banner: Banner) -> some View {
+        let tint = tint(banner)
+        return VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .center, spacing: 14) {
                     icon(banner, tint)
                     VStack(alignment: .leading, spacing: 3) {
@@ -68,7 +74,6 @@ struct JobBanner: View {
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(tint.opacity(0.55)))
             .accessibilityElement(children: .contain)
             .onChange(of: banner) { showDetail = false }
-        }
     }
 
     private func tint(_ b: Banner) -> Color {
@@ -110,9 +115,10 @@ struct JobBanner: View {
     @ViewBuilder private func actions(_ b: Banner) -> some View {
         switch b {
         case .running:
+            if !model.jobs.queue.isEmpty { QueueButton() }
             Button { model.jobs.cancel() } label: { Label("Cancel", systemImage: "stop.circle") }
                 .buttonStyle(SecondaryButtonStyle(height: 36, font: .callout))
-                .help("Stop this job and everything it started (⌘.)")
+                .help("Stop this job and everything it started, and pause the queue (⌘.)")
         case let .success(_, _, file):
             if let file, FileOps.exists(file) {
                 Button { FileOps.reveal(file) } label: { Label("Show in Finder", systemImage: "folder") }
@@ -167,9 +173,7 @@ struct DetailCard: View {
     var body: some View {
         let layout = horizontal ? AnyLayout(HStackLayout(alignment: .top, spacing: 18)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
         layout {
-            Thumbnail(url: video.thumbnailURL, duration: video.duration, cornerRadius: 12, badgeFont: .callout.weight(.semibold))
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxWidth: horizontal ? 280 : .infinity)
+            DetailMedia(video: video, maxWidth: horizontal ? 280 : nil)
             VStack(alignment: .leading, spacing: 14) {
                 Text(video.displayTitle).font(.title2.weight(.bold)).lineLimit(3).textSelection(.enabled)
                 HStack(spacing: 10) {
@@ -193,10 +197,25 @@ struct DetailCard: View {
                         MetaRow(icon: "link", text: "Original link unknown (imported)")
                     }
                 }
+                offline
                 actions
             }
         }
         .cardStyle()
+    }
+
+    /// Whether this entry can be watched without internet, and a one-click way to make it so.
+    @ViewBuilder private var offline: some View {
+        if model.store.hasLocalVideo(video.id) {
+            Label("On this Mac: watch it offline", systemImage: "laptopcomputer")
+                .font(.callout.weight(.medium)).foregroundStyle(p.green)
+        } else if video.url != nil {
+            Button { model.makeAvailableOffline(video) } label: {
+                Label("Make Available Offline", systemImage: "arrow.down.circle").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SecondaryButtonStyle(height: 38, font: .footnote.weight(.medium)))
+            .help("Download the video file so you can watch it without internet")
+        }
     }
 
     private var actions: some View {
@@ -280,7 +299,7 @@ struct SummaryTab: View {
     var body: some View {
         let versions = model.store.summaryJobs
         let current = versions.first { $0.id == versionID } ?? versions.first
-        let canRegenerate = model.store.transcriptJob != nil && !model.jobs.isRunning
+        let canRegenerate = model.store.transcriptJob != nil
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 if versions.count > 1 {
@@ -321,7 +340,7 @@ struct SummaryTab: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .disabled(!canRegenerate)
-                .help(model.store.transcriptJob == nil ? "Needs a saved transcript" : "Make a new summary from the saved transcript (keeps the old ones)")
+                .help(model.store.transcriptJob == nil ? "Needs a saved transcript" : "Make a new summary from the saved transcript (keeps the old ones; waits for internet if you're offline)")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -334,11 +353,7 @@ struct SummaryTab: View {
                         .padding(.bottom, 18)
                 }
             } else {
-                EmptyState(icon: "sparkles", title: "No summary yet",
-                           message: model.store.transcriptJob != nil
-                               ? "There's a saved transcript. Use Regenerate to summarize it."
-                               : (video.url != nil ? "Use Process Again from the ⋮ menu to download, transcribe and summarize it."
-                                                   : "This entry only has files; there's nothing to summarize from."))
+                NoSummaryYet(video: video)
             }
         }
         .onChange(of: video.id) { versionID = nil }
@@ -354,21 +369,24 @@ struct TranscriptTab: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     @State private var query = ""
+    @AppStorage("followTranscript") private var follow = true
 
     var body: some View {
-        if let job = model.store.transcriptJob, let text = job.transcript {
+        if let job = model.store.transcriptJob, let text = job.transcript, let video = model.store.selectedVideo {
             let segments = job.segments
-            let rows: [(String?, String)] = segments.isEmpty
+            let rows: [(start: Double?, text: String)] = segments.isEmpty
                 ? text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map { (nil, $0) }
-                : segments.map { (Fmt.timestamp($0.start), $0.text) }
-            let shown = query.isEmpty ? rows : rows.filter { $0.1.localizedCaseInsensitiveContains(query) }
+                : segments.map { ($0.start, $0.text) }
+            let shown = Array(rows.enumerated()).filter { query.isEmpty || $0.element.text.localizedCaseInsensitiveContains(query) }
+            let canSeek = model.store.playable(for: video.id) != nil && !segments.isEmpty
+            let current = model.playback.currentVideoID == video.id ? segments.index(at: model.playback.currentTime) : nil
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     SearchField(text: $query, prompt: "Search transcript")
                     if !query.isEmpty { Text("\(shown.count) of \(rows.count)").font(.caption).foregroundStyle(p.secondary).fixedSize() }
                     IconButton(icon: "doc.on.doc", label: "Copy transcript") { FileOps.copy(text); model.notice = "Transcript copied" }
                     IconButton(icon: "square.and.arrow.up", label: "Export transcript as .txt") {
-                        if FileOps.export(text, suggestedName: (model.store.selectedVideo?.displayTitle ?? "Video") + " transcript", ext: "txt") {
+                        if FileOps.export(text, suggestedName: video.displayTitle + " transcript", ext: "txt") {
                             model.notice = "Transcript exported"
                         }
                     }
@@ -376,31 +394,62 @@ struct TranscriptTab: View {
                 HStack(spacing: 6) {
                     Image(systemName: "translate").foregroundStyle(p.secondary)
                     Text("Original language: \(Fmt.language(job.transcriptLanguage) ?? "unknown")")
-                    Text(segments.isEmpty ? "• no timestamps were saved for this transcript" : "• \(segments.count) timestamped segments")
+                    Text(segments.isEmpty ? "• no timestamps were saved for this transcript" : "• \(segments.count) timestamped lines")
+                    Spacer()
+                    if canSeek {
+                        Toggle("Follow playback", isOn: $follow).toggleStyle(.checkbox)
+                            .help("Keep the line being spoken in view while the video plays")
+                    }
                 }
                 .font(.caption).foregroundStyle(p.secondary)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 9) {
-                        ForEach(Array(shown.enumerated()), id: \.offset) { _, row in
-                            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                if let ts = row.0 {
-                                    Text(ts).font(.callout.monospacedDigit()).foregroundStyle(p.blue).frame(minWidth: 52, alignment: .leading)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(shown, id: \.offset) { item in
+                                let row = item.element
+                                let isCurrent = item.offset == current
+                                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                    if let start = row.start {
+                                        Text(Fmt.timestamp(start)).font(.callout.monospacedDigit())
+                                            .foregroundStyle(p.blue).frame(minWidth: 52, alignment: .leading)
+                                    }
+                                    Text(highlight(row.text)).fontWeight(isCurrent ? .semibold : .regular)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                Text(highlight(row.1)).fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 4).padding(.horizontal, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(isCurrent ? p.blue.opacity(0.18) : .clear))
+                                .contentShape(Rectangle())
+                                .onTapGesture { if canSeek, let start = row.start { model.seek(video, to: start) } }
+                                .help(canSeek ? "Play from here" : "")
+                                .id(item.offset)
                             }
                         }
+                        .textSelection(.enabled)
                     }
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onChange(of: current) {
+                        guard follow, query.isEmpty, let current else { return }
+                        withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(current, anchor: .center) }
+                    }
                 }
             }
             .padding(16)
             .environment(\.layoutDirection, Markdown.isRTL(text) ? .rightToLeft : .leftToRight)
+        } else if let video = model.store.selectedVideo, model.store.mediaFiles(for: video.id).contains(where: \.exists) {
+            VStack(spacing: 14) {
+                EmptyState(icon: "text.bubble", title: "No transcript yet",
+                           message: "This entry has a file on your Mac. Transcribe it here: it runs on-device and works without internet.")
+                    .frame(maxHeight: 220)
+                Button { model.transcribe(video) } label: { Label("Transcribe on this Mac", systemImage: "waveform.badge.mic") }
+                    .buttonStyle(PrimaryButtonStyle(height: 40))
+                Spacer()
+            }
         } else {
             EmptyState(icon: "text.bubble", title: "No transcript",
-                       message: "Transcripts are saved when a video is summarized. Audio or video downloads don't make one.")
+                       message: "Summarize the video, or save its audio or video and transcribe it on this Mac.")
         }
     }
+
 
     private func highlight(_ s: String) -> AttributedString {
         var a = AttributedString(s)
@@ -412,6 +461,37 @@ struct TranscriptTab: View {
             searchRange = r.upperBound..<a.endIndex
         }
         return a
+    }
+}
+
+/// What to do when there's no summary yet: summarize the saved transcript, transcribe a local file, or process the link.
+struct NoSummaryYet: View {
+    @Environment(AppModel.self) private var model
+    let video: Video
+
+    var body: some View {
+        let hasTranscript = model.store.transcriptJob != nil
+        let hasLocal = model.store.mediaFiles(for: video.id).contains(where: \.exists)
+        VStack(spacing: 14) {
+            EmptyState(icon: "sparkles", title: "No summary yet",
+                       message: hasTranscript
+                           ? "There's a saved transcript. Summarize it now, or while offline: it runs when you're back online."
+                           : hasLocal ? "Transcribe the file on this Mac first (works offline), then summarize it."
+                           : video.url != nil ? "Summarize the link to download, transcribe and summarize it."
+                           : "This entry only has files; there's nothing to summarize from.")
+                .frame(maxHeight: 220)
+            if hasTranscript {
+                Button { model.regenerate() } label: { Label("Summarize Transcript", systemImage: "sparkles") }
+                    .buttonStyle(PrimaryButtonStyle(height: 40))
+            } else if hasLocal {
+                Button { model.transcribe(video) } label: { Label("Transcribe on this Mac", systemImage: "waveform.badge.mic") }
+                    .buttonStyle(PrimaryButtonStyle(height: 40))
+            } else if video.url != nil {
+                Button { model.processAgain(video) } label: { Label("Summarize", systemImage: "brain") }
+                    .buttonStyle(PrimaryButtonStyle(height: 40))
+            }
+            Spacer()
+        }
     }
 }
 

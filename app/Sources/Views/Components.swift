@@ -134,6 +134,7 @@ struct SearchField: View {
 struct Thumbnail: View {
     @Environment(\.palette) private var p
     let url: String?
+    var localPath: String? = nil   // saved copy on this Mac; preferred, so thumbnails show offline
     let duration: Double?
     var cornerRadius: CGFloat = 9
     var badgeFont: Font = .caption.weight(.semibold)
@@ -142,7 +143,9 @@ struct Thumbnail: View {
     var body: some View {
         Color.clear
             .overlay {
-                if let s = url, let u = URL(string: s) {
+                if let localPath, let image = NSImage(contentsOfFile: localPath) {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else if let s = url, let u = URL(string: s) {
                     AsyncImage(url: u) { phase in
                         if let image = phase.image { image.resizable().scaledToFill() } else { placeholder }
                     }
@@ -185,6 +188,7 @@ struct StatusPill: View {
 
     private var style: (String, String, Color) {
         if video.latestStatus == .running { return ("Processing", "hourglass", p.blue) }
+        if video.latestStatus == .queued { return ("Queued", "clock", p.secondary) }
         if video.hasSummary { return ("Summarized", "checkmark.seal.fill", p.green) }
         if video.hasVideo { return ("Downloaded", "checkmark.seal.fill", p.blue) }
         if video.hasAudio { return ("Audio", "waveform", p.purple) }

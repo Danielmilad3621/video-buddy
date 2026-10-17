@@ -48,6 +48,17 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut("f")
         }
+        CommandMenu("Playback") {
+            Button("Play / Pause") {
+                let m = AppModel.shared
+                if m.playback.player != nil { m.playback.togglePlayPause() } else if let v = m.store.selectedVideo { m.play(v) }
+            }
+            .keyboardShortcut("k")
+            Button("Back 10 Seconds") { AppModel.shared.playback.skip(-10) }.keyboardShortcut("[")
+            Button("Forward 10 Seconds") { AppModel.shared.playback.skip(10) }.keyboardShortcut("]")
+            Divider()
+            Button("Close Player") { AppModel.shared.playback.stop() }
+        }
     }
 }
 
@@ -57,8 +68,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Quitting mid-job asks first, then stops the whole job tree before the app goes away.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
-            let jobs = AppModel.shared.jobs
-            guard jobs.isRunning else { return .terminateNow }
+            let jobs = AppModel.shared.jobs, playback = AppModel.shared.playback
+            guard jobs.current != nil else {
+                guard playback.currentPath != nil else { return .terminateNow }
+                // write the playback position before going away, so the video resumes there next time
+                Task { @MainActor in
+                    await playback.savePositionNow()
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                }
+                return .terminateLater
+            }
             let alert = NSAlert()
             alert.messageText = "A video is still being processed"
             alert.informativeText = "Quit and cancel it? Files that were already saved stay where they are."
@@ -67,7 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
             jobs.cancel()
             Task { @MainActor in
-                for _ in 0..<60 where jobs.isRunning { try? await Task.sleep(for: .milliseconds(100)) }
+                for _ in 0..<60 where jobs.current != nil { try? await Task.sleep(for: .milliseconds(100)) }
+                await playback.savePositionNow()
                 NSApp.reply(toApplicationShouldTerminate: true)
             }
             return .terminateLater

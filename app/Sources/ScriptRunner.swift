@@ -13,6 +13,7 @@ enum Paths {
     }
     static var summarize: String { scriptsRoot + "/raycast/summarize.sh" }
     static var cobaltDL: String { scriptsRoot + "/scripts/cobalt-dl.sh" }
+    static var transcribe: String { scriptsRoot + "/scripts/transcribe.sh" }
 }
 
 /// Every subprocess runs under this bash guard. Its fd 3 (the "lifeline") is a pipe whose write end only the

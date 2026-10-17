@@ -52,6 +52,19 @@ enum Prompts {
     }
 }
 
+/// Video downloads from the app. "1080p (default)" sends nothing, so the scripts behave exactly as they always have.
+enum VideoQuality: String, CaseIterable, Identifiable {
+    case p720 = "720p (smaller)", standard = "1080p (default)", best = "Best available"
+    var id: String { rawValue }
+    var scriptValue: String? {
+        switch self {
+        case .p720: "720"
+        case .standard: nil
+        case .best: "max"
+        }
+    }
+}
+
 enum Appearance: String, CaseIterable, Identifiable {
     case dark = "Dark", system = "System", light = "Light"
     var id: String { rawValue }
@@ -71,6 +84,7 @@ enum AppSettings {
     static var format: SummaryFormat { SummaryFormat(rawValue: defaults.string(forKey: "summaryFormat") ?? "") ?? .standard }
     static var downloadDir: String { defaults.string(forKey: "downloadDir")?.nilIfBlank ?? defaultDownloadDir }
     static var retentionDays: Int { defaults.integer(forKey: "retentionDays") }
+    static var videoQuality: VideoQuality { VideoQuality(rawValue: defaults.string(forKey: "videoQuality") ?? "") ?? .standard }
     static let defaultDownloadDir = home + "/Downloads/cobalt"
 
     /// VS_DATA_DIR lets tests use a throwaway history without touching the real one.

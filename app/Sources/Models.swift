@@ -1,9 +1,44 @@
 // Plain value types shared by the database, the pipeline and the views.
 import Foundation
 
-enum JobKind: String { case summary, audio, video }
-enum JobStatus: String { case running, succeeded, failed, cancelled, interrupted }
+enum JobKind: String { case summary, audio, video, transcript }
+enum JobStatus: String { case queued, running, succeeded, failed, cancelled, interrupted }
 enum JobSource: String { case app, raycast, imported = "import" }
+
+/// What a job does. `kind` is what it produces; queued jobs wait for the network unless they run on-device.
+enum JobAction: String, CaseIterable {
+    case summarize, audio, video, transcribe, resummarize
+
+    var kind: JobKind {
+        switch self {
+        case .summarize, .resummarize: .summary
+        case .audio: .audio
+        case .video: .video
+        case .transcribe: .transcript
+        }
+    }
+
+    var needsNetwork: Bool { self != .transcribe }
+
+    var label: String {
+        switch self {
+        case .summarize: "Summarize"
+        case .audio: "Download audio"
+        case .video: "Download video"
+        case .transcribe: "Transcribe on this Mac"
+        case .resummarize: "Summarize transcript"
+        }
+    }
+
+    static func from(kind: JobKind) -> JobAction {
+        switch kind {
+        case .summary: .summarize
+        case .audio: .audio
+        case .video: .video
+        case .transcript: .transcribe
+        }
+    }
+}
 
 struct Video: Identifiable, Hashable {
     var id: Int64
@@ -14,6 +49,7 @@ struct Video: Identifiable, Hashable {
     var channel: String?
     var channelFollowers: Int?
     var thumbnailURL: String?
+    var thumbnailPath: String?  // copy saved on this Mac, so the library looks right offline
     var duration: Double?
     var uploadDate: String?     // yyyyMMdd from the platform; nil when unknown
     var favorite: Bool
@@ -36,6 +72,7 @@ struct Job: Identifiable, Hashable {
     var id: Int64
     var videoID: Int64
     var kind: JobKind
+    var action: JobAction
     var status: JobStatus
     var source: JobSource
     var eventID: String?
@@ -64,6 +101,7 @@ struct NewJob {
     var kind: JobKind
     var status: JobStatus
     var source: JobSource
+    var action: JobAction? = nil        // defaults to the action that produces `kind`
     var eventID: String? = nil
     var started = Date()
     var finished: Date? = nil
@@ -97,8 +135,20 @@ struct Segment: Codable, Hashable {
     var text: String
 }
 
+extension Array where Element == Segment {
+    /// The line being spoken at `t` (segments are in time order); nil before the first one.
+    func index(at t: Double) -> Int? {
+        var lo = 0, hi = count - 1, found: Int?
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if self[mid].start <= t { found = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return found
+    }
+}
+
 enum HistoryFilter: String, CaseIterable, Identifiable {
-    case all = "All", summaries = "Summaries", audio = "Audio", downloads = "Downloads", favorites = "Favorites"
+    case all = "All", summaries = "Summaries", audio = "Audio", downloads = "Downloads", onMac = "On this Mac", favorites = "Favorites"
     var id: String { rawValue }
 }
 
@@ -129,6 +179,9 @@ struct FileItem: Identifiable, Hashable {
     var name: String { (path as NSString).lastPathComponent }
     var exists: Bool { FileManager.default.fileExists(atPath: path) }
     var isMedia: Bool { role == .audio || role == .video }
+    /// Formats the built-in player (AVFoundation) can play; others open in QuickTime/VLC.
+    var isPlayable: Bool { isMedia && FileItem.playableExtensions.contains((path as NSString).pathExtension.lowercased()) }
+    static let playableExtensions: Set<String> = ["mp4", "m4v", "mov", "mp3", "m4a", "aac", "wav"]
 
     static let audioExtensions: Set<String> = ["mp3", "m4a", "opus", "ogg", "wav", "flac", "aac"]
     static let videoExtensions: Set<String> = ["mp4", "webm", "mkv", "mov", "m4v"]

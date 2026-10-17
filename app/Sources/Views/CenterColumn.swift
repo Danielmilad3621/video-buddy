@@ -42,7 +42,7 @@ struct HistoryCard: View {
             SearchField(text: $store.search, prompt: "Search your history…").focused($searchFocused)
             FlowLayout(spacing: 8) {
                 ForEach(HistoryFilter.allCases) { f in
-                    ChipButton(title: f.rawValue, icon: f == .favorites ? "star" : nil, selected: store.filter == f) {
+                    ChipButton(title: f.rawValue, icon: f == .favorites ? "star" : f == .onMac ? "laptopcomputer" : nil, selected: store.filter == f) {
                         store.filter = f
                         if model.section == .favorites, f != .favorites { model.section = .history }
                     }
@@ -104,9 +104,18 @@ struct HistoryRow: View {
     var body: some View {
         let selected = model.store.selectedID == video.id
         HStack(alignment: .top, spacing: 12) {
-            Thumbnail(url: video.thumbnailURL, duration: video.duration,
+            Thumbnail(url: video.thumbnailURL, localPath: video.thumbnailPath, duration: video.duration,
                       icon: video.hasSummary || video.hasVideo ? "play.rectangle.fill" : "waveform")
                 .frame(width: 128, height: 72)
+                .overlay(alignment: .topLeading) {
+                    if model.store.onMacIDs.contains(video.id) {
+                        Image(systemName: "laptopcomputer")
+                            .font(.caption2.weight(.bold)).foregroundStyle(.white)
+                            .padding(4).background(Capsule().fill(p.green.opacity(0.9))).padding(5)
+                            .help("On this Mac: plays offline")
+                            .accessibilityLabel("On this Mac")
+                    }
+                }
             VStack(alignment: .leading, spacing: 3) {
                 Text(video.displayTitle).font(.headline).lineLimit(1)
                 Text(video.displayChannel).foregroundStyle(p.secondary).lineLimit(1)
@@ -152,6 +161,9 @@ struct VideoActions: View {
 
     var body: some View {
         let media = model.existingMedia(video)
+        let playable = model.store.playable(for: video.id)
+        Button("Play") { model.play(video) }.disabled(playable == nil)
+        Divider()
         Button("Open Summary") { model.open(video, tab: .summary) }
         Button("Open Transcript") { model.open(video, tab: .transcript) }
         Divider()
@@ -163,7 +175,10 @@ struct VideoActions: View {
         Button("Show in Finder") { if let m = media { FileOps.reveal(m.path) } }.disabled(media == nil)
         Divider()
         Button(video.favorite ? "Remove from Favorites" : "Add to Favorites") { model.toggleFavorite(video) }
-        Button("Process Again") { model.processAgain(video) }.disabled(video.url == nil || model.jobs.isRunning)
+        Button("Make Available Offline") { model.makeAvailableOffline(video) }
+            .disabled(video.url == nil || model.store.hasLocalVideo(video.id))
+        Button("Transcribe on This Mac") { model.transcribe(video) }.disabled(media == nil)
+        Button("Process Again") { model.processAgain(video) }.disabled(video.url == nil)
         Divider()
         Button("Remove from History…", role: .destructive) { model.pendingRemoval = video }
     }
@@ -263,7 +278,7 @@ struct FileRow: View {
                         .background(Capsule().fill((exists ? p.green : p.red).opacity(0.15)))
                     Button("Open") { FileOps.open(item.path) }.disabled(!exists).opacity(exists ? 1 : 0.35)
                     Button("Show in Finder") { FileOps.reveal(item.path) }.disabled(!exists).opacity(exists ? 1 : 0.35)
-                    if !exists, let onDownloadAgain { Button("Download Again", action: onDownloadAgain).disabled(model.jobs.isRunning) }
+                    if !exists, let onDownloadAgain { Button("Download Again", action: onDownloadAgain) }
                 }
                 .buttonStyle(.link)
                 .font(.caption)

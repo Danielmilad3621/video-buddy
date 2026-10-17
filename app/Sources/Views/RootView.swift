@@ -22,6 +22,7 @@ struct RootView: View {
                     TitleRow()
                     TopBar()
                     if let warning = model.startupWarning { WarningStrip(text: warning) { model.startupWarning = nil } }
+                    if !model.network.isOnline { OfflineStrip() }
                     HStack(alignment: .top, spacing: 16) {
                         CenterColumn().frame(width: center)
                         RightColumn(stacked: stacked)
@@ -159,7 +160,6 @@ struct TopBar: View {
 
     var body: some View {
         @Bindable var model = model
-        let busy = model.jobs.isRunning
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 HStack(spacing: 12) {
@@ -197,9 +197,26 @@ struct TopBar: View {
                     .help("Save the video (⇧⌘D)")
                 Spacer()
             }
-            .disabled(busy || model.link.nilIfBlank == nil)
+            .disabled(model.link.nilIfBlank == nil)
         }
         .onChange(of: model.focusLinkToken) { focused = true }
+    }
+}
+
+/// No internet: say what still works, so the app is useful on a plane.
+struct OfflineStrip: View {
+    @Environment(\.palette) private var p
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.slash").foregroundStyle(p.blue)
+            Text("You're offline: your library, saved summaries and downloaded videos all work. Downloads and new summaries wait in the queue until you're back online.")
+                .font(.callout)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(p.blue.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.blue.opacity(0.4)))
+        .accessibilityElement(children: .combine)
     }
 }
 

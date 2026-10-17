@@ -35,6 +35,8 @@ enum SelfTest {
         try corruption(root.appendingPathComponent("corrupt"))
         try await inbox(root.appendingPathComponent("inbox"))
         try await importer(root.appendingPathComponent("import"))
+        try await upgrade(root.appendingPathComponent("upgrade"))
+        try await queue(root.appendingPathComponent("queue"))
     }
 
     // MARK: pure parsing
@@ -212,6 +214,65 @@ enum SelfTest {
         // a crash before the offset was saved, or a truncated file, replays events: none may duplicate
         for e in Inbox.readNew(file, offset: 999_999).events { check(try await Inbox.ingest(e, db: db) == nil, "replayed event \(e.id) ignored") }
         check(try await db.count("jobs") == 3, "three events, three jobs")
+    }
+
+    /// A real version-1 database (as the app made before 2.1) upgrades without losing anything, after a verified backup.
+    private static func upgrade(_ dir: URL) async throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            let v1 = try SQLite(path: dir.appendingPathComponent("history.sqlite").path)
+            try Database.createV1(v1)
+            try v1.run("INSERT INTO videos(key, url, title, favorite, first_processed, last_processed) VALUES('youtube:jNQXAC9IVRw', 'u', 'Me at the zoo', 1, 1, 2)")
+            try v1.run("INSERT INTO jobs(video_id, kind, status, source, started, summary) VALUES(1, 'summary', 'succeeded', 'app', 1, 'S')")
+            try v1.run("INSERT INTO jobs(video_id, kind, status, source, started, file_path) VALUES(1, 'video', 'succeeded', 'app', 2, '/tmp/v.mp4')")
+        }
+        let db = try Database(directory: dir)
+        check(try await db.schemaVersion() == 2, "upgraded to version 2")
+        let v = try await db.video(1)
+        check(v?.title == "Me at the zoo" && v?.favorite == true && v?.hasSummary == true && v?.hasVideo == true, "data kept through the upgrade")
+        let jobs = try await db.jobs(for: 1)
+        check(jobs.map(\.action) == [.video, .summarize] && jobs.last?.summary == "S", "existing jobs get their action")
+        let backups = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path)) ?? []
+        let pre = backups.filter { $0.hasPrefix("history-pre-v2-") }
+        check(pre.count == 1 && Database.isHealthy(dir.appendingPathComponent("backups/\(pre[0])")), "verified backup made before the upgrade")
+        check(try await db.quickCheck() == "ok", "upgraded database healthy")
+        _ = try Database(directory: dir)   // opening again must not upgrade or back up twice
+        let after = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path)) ?? []
+        check(after.filter { $0.hasPrefix("history-pre-v2-") }.count == 1, "no second upgrade backup")
+    }
+
+    private static func queue(_ dir: URL) async throws {
+        let db = try Database(directory: dir)
+        let a = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .summarize, format: "ADHD-Friendly", language: "English")
+        let t = try await db.enqueue(videoID: a.video, action: .transcribe, filePath: "/tmp/zoo.mp4")
+        let b = try await db.enqueue(VideoRef.parse("https://vimeo.com/5")!, action: .audio)
+        check(try await db.nextQueued(networkAvailable: true)?.id == a.job, "queue runs oldest first")
+        check(try await db.nextQueued(networkAvailable: false)?.id == t, "offline: only on-device work is picked")
+        check(try await db.queuedJobs().map(\.job.id) == [a.job, t, b.job], "queue order")
+        check(try await db.jobs(for: a.video).first { $0.id == a.job }?.summaryFormat == "ADHD-Friendly", "queued job keeps its format")
+        let firstStart = try await db.markRunning(a.job), secondStart = try await db.markRunning(a.job)
+        check(firstStart && !secondStart, "a job starts only once")
+        check(try await db.recoverInterrupted() == 1, "crash recovery touches the running job only")
+        check(try await db.queuedJobs().count == 2, "queued jobs survive a restart")
+        try await db.removeQueued(t)
+        check(try await db.nextQueued(networkAvailable: false) == nil, "removed job is gone from the queue")
+        let cleared = try await db.clearQueue(), left = try await db.queuedJobs()
+        check(cleared == 1 && left.isEmpty, "clear queue")
+        check(try await db.video(a.video)?.latestStatus == .interrupted, "an entry shows its most recently started job (the interrupted one)")
+
+        try await db.savePosition("/tmp/zoo.mp4", position: 12.5, duration: 19)
+        try await db.savePosition("/tmp/zoo.mp4", position: 14, duration: 19)
+        let saved = await db.position("/tmp/zoo.mp4"), none = await db.position("/tmp/none.mp4")
+        check(saved == 14 && none == nil, "resume position saved per file")
+        try await db.setThumbnailPath(a.video, "/tmp/t.jpg")
+        check(try await db.video(a.video)?.thumbnailPath == "/tmp/t.jpg", "thumbnail path stored")
+
+        let segs = [Segment(start: 0, end: 4, text: "a"), Segment(start: 4, end: 12, text: "b"), Segment(start: 12, end: 19, text: "c")]
+        check(segs.index(at: 5) == 1 && segs.index(at: 0) == 0 && segs.index(at: 30) == 2 && segs.index(at: -1) == nil, "transcript line at a time")
+        check(VideoQuality.standard.scriptValue == nil && VideoQuality.p720.scriptValue == "720" && VideoQuality.best.scriptValue == "max",
+              "quality: the default sends nothing to the scripts")
+        check(JobAction.transcribe.needsNetwork == false && JobAction.resummarize.needsNetwork && JobAction.transcribe.kind == .transcript,
+              "transcribing is on-device")
     }
 
     private static func importer(_ dir: URL) async throws {

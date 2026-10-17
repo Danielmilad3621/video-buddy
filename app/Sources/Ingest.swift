@@ -108,6 +108,9 @@ final class Ingestor {
         for item in added {
             if let url = item.url, let info = await MetadataFetcher.fetch(url) {
                 try? await db.applyInfo(item.video, info, override: true)
+                if let v = (try? await db.video(item.video)) ?? nil {
+                    await Thumbnails.ensure(v, localVideo: FileItem.mediaRole(item.file) == .video ? item.file : nil, db: db, online: true)
+                }
             }
             if (try? await db.video(item.video))??.duration == nil, let d = await MetadataFetcher.probeDuration(item.file) {
                 try? await db.applyInfo(item.video, VideoInfo(duration: d), override: false)

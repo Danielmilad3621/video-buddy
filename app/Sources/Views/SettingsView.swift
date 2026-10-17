@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("summaryLanguage") private var language = SummaryLanguage.english.rawValue
     @AppStorage("summaryFormat") private var format = SummaryFormat.standard.rawValue
     @AppStorage("downloadDir") private var downloadDir = ""
+    @AppStorage("videoQuality") private var videoQuality = VideoQuality.standard.rawValue
     @AppStorage("retentionDays") private var retention = 0
     @AppStorage("appearance") private var appearance = Appearance.dark.rawValue
 
@@ -31,7 +32,12 @@ struct SettingsView: View {
                     Button("Choose…") { choose() }
                     Button("Use Default") { downloadDir = "" }.disabled(downloadDir.isEmpty)
                 }
-                Text("Raycast commands always save to ~/Downloads/cobalt.").font(.caption).foregroundStyle(.secondary)
+                Picker("Video quality", selection: $videoQuality) {
+                    ForEach(VideoQuality.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }
+                Text("For Video downloads from the app. 720p is roughly half the size, handy for filling a laptop before a flight.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Raycast commands always save to ~/Downloads/cobalt at the default quality.").font(.caption).foregroundStyle(.secondary)
             }
             Section("History") {
                 Picker("Keep history", selection: $retention) {

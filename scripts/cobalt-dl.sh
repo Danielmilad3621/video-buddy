@@ -27,8 +27,9 @@ place() {
   echo "$out/$dest.$ext"
 }
 
-body=$(jq -n --arg url "$url" --arg mode "$mode" \
-  '{url: $url, downloadMode: $mode, audioFormat: "mp3", filenameStyle: "pretty"}')
+quality=${VS_VIDEO_QUALITY:-}   # 720 | 1080 | max from the app's setting; unset = the defaults, exactly as before
+body=$(jq -n --arg url "$url" --arg mode "$mode" --arg q "$quality" \
+  '{url: $url, downloadMode: $mode, audioFormat: "mp3", filenameStyle: "pretty"} + (if $q != "" then {videoQuality: $q} else {} end)')
 resp=$(curl -sS --max-time 60 http://localhost:9000/ \
   -H 'Accept: application/json' -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || resp='{}'
 reason=$(jq -r '.error.code // .status // "unreachable"' <<<"$resp" 2>/dev/null) || reason=unreachable
@@ -46,7 +47,13 @@ if [[ $reason == tunnel || $reason == redirect ]]; then
 fi
 
 echo "cobalt: $reason, falling back to yt-dlp" >&2
-if [[ $mode == audio ]]; then fmt=(-x --audio-format mp3); else fmt=(-t mp4); fi
+if [[ $mode == audio ]]; then
+  fmt=(-x --audio-format mp3)
+else
+  fmt=(-t mp4)
+  # keep -t mp4's H.264/AAC preference (plays everywhere, including the app's player) and cap the height
+  if [[ $quality =~ ^[0-9]+$ ]]; then fmt+=(-S "vcodec:h264,res:$quality,acodec:aac"); fi
+fi
 # ponytail: youtube 403s ~1 in 6 tries without a PO token, and a fresh extraction usually passes;
 # if retries stop being enough, add the bgutil-ytdlp-pot-provider plugin
 for attempt in 1 2 3; do
