@@ -6,6 +6,11 @@
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 url=$1 mode=$2 out=$3
+# a playlist link with no single video in it would make yt-dlp download the whole list: those belong in the app
+if [[ $url =~ (youtube\.com|youtu\.be)/.*[?\&]list= && ! $url =~ ([?\&]v=|youtu\.be/|/shorts/|/live/)[A-Za-z0-9_-]{11} ]]; then
+  echo "Playlist link: paste it into the Video Summarizer app to pick videos" >&2
+  exit 2
+fi
 mkdir -p "$out"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/cobalt-dl.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT

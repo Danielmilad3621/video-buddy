@@ -111,6 +111,8 @@ The script folder is `~/Desktop/Dev/video-summarizer/raycast`. Add it in Raycast
 
 Leaving the argument blank uses the clipboard. Raycast always uses the Standard prompt in English and always saves to `~/Downloads/cobalt`.
 
+**Playlist links** (`youtube.com/playlist?list=…`) stop at once with *"Playlist link: paste it into the Video Summarizer app to pick videos"*. Paste them into the app instead. A video link that's part of a playlist (`watch?v=…&list=…`) still works and downloads just that video.
+
 ### The cobalt web page: http://localhost:9001
 This is cobalt's own interface, running on your Mac. It's good for one-off downloads with format or quality options.
 
@@ -170,6 +172,10 @@ This is cobalt's own interface, running on your Mac. It's good for one-off downl
 ### 4.1 `scripts/cobalt-dl.sh <url> <audio|auto> <out-dir>`
 It prints the saved file's path as its last stdout line, and progress on stderr.
 
+0. **Playlist guard.** A YouTube link with `list=` but no video in it (`playlist?list=…`, `watch?list=…`) is refused with `Playlist link: paste it into the Video Summarizer app to pick videos` on stderr and exit code 2. This happens before anything is created or downloaded.
+   - Why: yt-dlp ignores `--no-playlist` for such links and goes through every video in the list.
+   - Not refused: links that name a video (`v=`, `youtu.be/<id>`, `/shorts/<id>`, `/live/<id>`), even with `list=`, and every other site.
+   - The app never sends these links here: it opens its playlist preview instead (§5.14).
 1. Creates a private temp folder, `mktemp -d $TMPDIR/cobalt-dl.XXXXXX`.
    - `trap 'rm -rf "$tmp"' EXIT` deletes it on every exit.
    - `trap 'exit 143' TERM INT` turns Cancel into a normal exit, so the cleanup trap runs.
@@ -546,6 +552,16 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - The test player would have played sound on your Mac, so there's a test-only mute.
 - **Measured** (§11): offline transcription of a 19-second mp4 in 2.8 s, a queue that survives `kill -9` (0 of 9 job processes left alive), playlist import of 2 of 1,004 videos in order, 720p downloads at exactly 1280×720 H.264.
 
+### 2026-10-18: Raycast refuses playlist links
+- **Question:** does a playlist link work? In the app, yes. In Raycast it didn't, and it failed wastefully:
+  1. cobalt rejects playlist links, so the script fell back to yt-dlp.
+  2. Measured on this Mac: for `playlist?list=X` and `watch?list=X`, yt-dlp **ignores `--no-playlist`** and goes through the whole list. It printed the first video ids of the 1,004-video test playlist.
+  3. The download then fails, because several paths come back instead of one, and is retried up to 3 times.
+- **Fix:** one check at the top of `scripts/cobalt-dl.sh` (§4.1, step 0). It refuses YouTube links with `list=` but no video id, before anything is created, and points you to the app. All three Raycast commands go through this script, so one check covers them.
+- **Unchanged:** every other link's arguments, output and exit codes. A `watch?v=…&list=…` link still downloads just that video.
+- **App rebuild:** not needed. Raycast runs the script from this folder, and the app never passes such links to it. The bundled copy picks up the check on the next `bash app/build.sh`.
+- **Left out:** channel links (`/@name`) have the same yt-dlp behaviour. Add them to the check if you ever paste one.
+
 ---
 
 ## 8. Setting it up from scratch
@@ -635,6 +651,7 @@ All commands run from this folder.
 | "Processing failed" with `HTTP Error 403` three times | YouTube's bot checks. `brew upgrade yt-dlp`; retry later. The long-term fix is the `bgutil-ytdlp-pot-provider` plugin for yt-dlp |
 | A job seems stuck at the start, or an import says "Importing…" forever | A macOS privacy prompt is waiting (Downloads or Desktop folder access), possibly behind other windows. Click **Allow**. Every rebuild of the app re-asks, because of the ad-hoc signature |
 | Raycast: "command not found" | Raycast doesn't load your shell profile. The scripts export `PATH=/opt/homebrew/bin:~/.local/bin:…`; check the tools are installed there |
+| Raycast says "Playlist link: paste it into the Video Summarizer app…" | It was a playlist link, which Raycast refuses on purpose (§4.1, step 0). Paste it into the app to preview and pick videos, or copy a single video's link instead |
 | Raycast commands vanished | The script directory moved. Re-add `raycast/` in Raycast settings |
 | The web page shows nothing / localhost:9001 doesn't load | `colima status`; `docker compose up -d`; check `vendor/cobalt/web/build` exists |
 | `docker: unknown command: docker compose` | `~/.docker/config.json` is missing `cliPluginsExtraDirs` |
@@ -722,12 +739,19 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - **Raycast `summarize.sh`:** the same 4 marker lines with `transcribe.sh` inside.
   - **Your real history:** upgraded v1 → v2 (2 videos, 3 jobs, `quick_check ok`, verified pre-upgrade copy).
   - **Your `~/Downloads/cobalt`:** byte-identical to the 2026-10-14 list.
+- **Playlist guard (10-18):**
+  - `cobalt-dl.sh`, `download-audio.sh` and `summarize.sh` with a playlist link all end with the message and exit code 2. No output folder was created, no yt-dlp process started, and no history line was written.
+  - A `watch?v=…&list=…` link still saves exactly one mp3 (19.1 s, "Me at the zoo").
+  - The check was dry-run on 10 sample links (playlist, `watch?list=`, m./music., `v=` before and after `list=`, `youtu.be/<id>?list=`, plain video, Shorts, another site): all as intended.
+  - `~/Downloads/cobalt` was still byte-identical afterwards.
+  - Re-run it yourself: `scripts/cobalt-dl.sh "https://www.youtube.com/playlist?list=PL1EBE78CC528B52E8" audio /tmp/x; echo $?` should print the message and `2`, and create no `/tmp/x`.
 
 ### Not verified
 - **Real mouse clicks and keyboard shortcuts.** Accessibility scripting is blocked in the terminal that ran the tests.
 - The **save dialogs**, and how the **import alert**, the **Settings window** and the **playlist preview sheet** look (the window snapshot renders separate windows blank). The **video picture** in the player also renders black in snapshots; the playback itself was verified through the player's state.
 - **Real Wi-Fi off.** Offline was simulated with `offline on`, because turning Wi-Fi off would have cut the test session. The captive-portal check was not exercised on a real login-page Wi-Fi. → Use the checklist below once.
 - (The Light theme *was* seen in 2.1 snapshots, because your Settings were on Light.)
+- **The Raycast toast for a playlist link.** The scripts were run from the terminal, because Raycast can't be clicked from here. → Run *Download Audio* in Raycast with a playlist link once: the toast should show "Playlist link: …".
 
 ### Your one-time real offline check
 1. With internet, make sure at least one video is **On this Mac** and one entry has an mp3 but no transcript.
