@@ -222,6 +222,7 @@ struct TopBar: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     @FocusState private var focused: Bool
+    @AppStorage("transcribeDownloads") private var transcribe = false
 
     var body: some View {
         @Bindable var model = model
@@ -251,18 +252,24 @@ struct TopBar: View {
                     .help("Paste a link from the clipboard (⇧⌘V)")
             }
             HStack(spacing: 12) {
-                Button { model.start(.summary) } label: { Label("Summarize", systemImage: "brain") }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .help("Download, transcribe on-device and summarize (⌘↩)")
-                Button { model.start(.audio) } label: { Label("Audio", systemImage: "music.note") }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .help("Save the audio as mp3 (⇧⌘A)")
-                Button { model.start(.video) } label: { Label("Video", systemImage: "film") }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .help("Save the video (⇧⌘D)")
+                Group {
+                    Button { model.start(.summary) } label: { Label("Summarize", systemImage: "brain") }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .help("Download, transcribe on-device and summarize (⌘↩)")
+                    Button { model.start(.audio) } label: { Label("Audio", systemImage: "music.note") }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .help(transcribe ? "Save the audio as mp3, then transcribe it on this Mac (⇧⌘A)" : "Save the audio as mp3 (⇧⌘A)")
+                    Button { model.start(.video) } label: { Label("Video", systemImage: "film") }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .help(transcribe ? "Save the video, then transcribe it on this Mac (⇧⌘D)" : "Save the video (⇧⌘D)")
+                }
+                .disabled(model.link.nilIfBlank == nil)
+                // works before a link is pasted, and is remembered between launches
+                Toggle("+ Transcript", isOn: $transcribe)
+                    .toggleStyle(.checkbox)
+                    .help("Also transcribe Audio and Video downloads on this Mac (no summary)")
                 Spacer()
             }
-            .disabled(model.link.nilIfBlank == nil)
         }
         .onChange(of: model.focusLinkToken) { focused = true }
     }

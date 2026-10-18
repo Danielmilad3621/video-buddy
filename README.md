@@ -72,6 +72,9 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows the m
 ```
 
 - **Top bar (on every screen):** paste a link, then press **Summarize** (download → transcribe → summarize → save), **Audio** (mp3 only) or **Video** (mp4).
+  - **☑ + Transcript**, next to Video: when it's ticked, Audio and Video also transcribe the file on this Mac afterwards, with no summary and no Claude.
+  - So you choose *just the media* (to watch, or listen) or *media + transcript* (for topics you'll want to read or search; search covers transcripts).
+  - The checkbox is remembered between launches, and the playlist preview has the same one.
 - **Home:** recent activity. **History:** everything. **Favorites:** starred items. **Playlists:** your own playlists (see below). **Downloads:** every saved file with its size and whether it still exists, plus *"N files on this Mac • size • free space"*. **Settings** (⌘,): summary language and format, download folder, **video quality**, history retention, theme, *Import from Downloads Folder…*
 - **Filters:** All · Summaries · Audio · Downloads · **On this Mac** (can be watched offline right now) · Favorites. A green laptop badge on a thumbnail means the same.
 - **Middle column:** search (titles, channels, links, summaries and transcripts), filter chips, sort menu, and rows with a status pill (Summarized / Audio / Downloaded / Failed / Interrupted), a ★, and a ⋮ menu (also on right-click). The menu has: open summary or transcript, copy, open the original link, open the file, show in Finder, favorite, process again, remove from history.
@@ -94,7 +97,7 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows the m
 - **Keyboard:** ⌘L focus the link field · ⇧⌘V paste link · ⌘↩ Summarize · ⇧⌘A Audio · ⇧⌘D Video · ⌘. Cancel · ⌘F search history · ↑/↓ move through the list · **⌘K play/pause · ⌘[ back 10 s · ⌘] forward 10 s** (Playback menu; ⌘[ and ⌘] were chosen over ⌘←/⌘→ so the link field keeps its normal cursor keys).
 
 ### Before a flight (2-minute checklist)
-1. Online: for each video you want, press **Video** (or *Make Available Offline*, or *Make All Available Offline* on a playlist). Use **Summarize** too if you want to read the summary. Settings → Video quality → **720p** fits about twice as much.
+1. Online: for each video you want, press **Video** (or *Make Available Offline*, or *Make All Available Offline* on a playlist). Tick **+ Transcript** first if you'll want to search what was said. Use **Summarize** too if you want to read the summary. Settings → Video quality → **720p** fits about twice as much.
 2. Check **Downloads**: the files are there, and the free space is enough.
 3. Filter **On this Mac**: that's exactly what you can watch offline.
 4. On the plane: press ▶, read summaries, search transcripts, *Transcribe on this Mac* for audio-only entries. New downloads and summaries queue up and run when you land.
@@ -262,7 +265,7 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Ingest.swift` | Reads the Raycast `inbox.jsonl` and ingests events (deduplicated by event ID) |
 | `Importer.swift` | Read-only import of an existing downloads folder |
 | `Prompts.swift` | Summary formats and languages, prompt building, `AppSettings`, `Appearance` |
-| `SelfTest.swift` | 110 checks on throwaway data; `build.sh` refuses to install if any fail |
+| `SelfTest.swift` | 113 checks on throwaway data; `build.sh` refuses to install if any fail |
 | `TestHooks.swift` | Test-only remote control (`VS_TEST_HOOKS=1`); see [Testing](#11-testing) |
 | `Views/Theme.swift` | Dark and light palettes (`#0B1220`, `#101A2B`, `#131F30`, `#087CFF`, `#19C785`, …), applies the theme |
 | `Views/Components.swift` | Card style, primary and secondary button styles, chips, search field, thumbnail, status pill, avatar, `FlowLayout`, `FileOps` (open, reveal, copy, export) |
@@ -296,7 +299,7 @@ videos(id PK, key UNIQUE, url, platform, title, channel, channel_followers, thum
        favorite, first_processed, last_processed, last_opened,
        thumbnail_path /*v2: the copy saved on this Mac*/)
 jobs(id PK, video_id → videos ON DELETE CASCADE,
-     kind summary|audio|video|transcript, action summarize|audio|video|transcribe|resummarize /*v2*/,
+     kind summary|audio|video|transcript, action summarize|audio|video|transcribe|resummarize|audio_transcript|video_transcript /*v2; the last two since 10-18, same column*/,
      status queued /*v2*/|running|succeeded|failed|cancelled|interrupted,
      source app|raycast|import, event_id UNIQUE /*Raycast event id → no duplicates*/,
      started, finished, file_path, file_size, summary_path, transcript_path,
@@ -344,6 +347,11 @@ Stats:
 10. `pump()` moves on to the next queued job.
 
 **Transcribe on this Mac** (action `transcribe`, 2.1) runs `transcribe.sh` on the entry's local file (audio preferred, because it needs no conversion) and saves a `transcript` job: text, timestamped segments, language. It needs no internet.
+
+**Audio / Video + Transcript** (actions `audio_transcript` and `video_transcript`, 10-18) run exactly like Audio and Video.
+- When the download succeeds, they queue a `transcribe` job for the exact saved file, which then runs as above. The banner says "• transcript next".
+- It's two jobs, not one: the download is saved first, so a cancelled or failed transcription loses nothing.
+- The entry ends up with an audio or video job plus a transcript job.
 
 **Regenerate / Summarize Transcript** (action `resummarize`) writes the saved transcript to a private temp file, then runs `claude -p --model sonnet "<prompt>" < transcript > summary`, and saves the result as a new version. It never downloads or transcribes again.
 
@@ -404,6 +412,9 @@ The keys are `summaryLanguage`, `summaryFormat`, `downloadDir` (empty means `~/D
 - **One at a time:** `pump()` claims the runner before any `await`, so two callers can't start two jobs. It's called after enqueueing, after each job, on launch, on *Resume*, and whenever the network comes back.
 - **Offline:** `NWPathMonitor` reports whether a network path exists. Before each network job the app also sends one `HEAD https://www.youtube.com/generate_204` (6 s timeout). If nothing answers, as on Wi-Fi stuck at a login page, the Mac counts as offline for 30 s, network jobs wait, and on-device jobs (`transcribe`) still run.
 - **Cancel** stops the running job (the process guard, §5.5) and **pauses** the queue, so nothing else starts behind your back. *Resume* continues. *Pause* in the Queue popover lets the current job finish and then waits.
+- **+ Transcript order:** the follow-up `transcribe` job joins the end of the queue.
+  - A single link: the download, then its transcript straight away.
+  - A playlist: all the downloads first, then the transcripts. The downloads need internet and the transcripts don't, so they can finish offline.
 - **Notices** say what happened: *"Added to the queue. It starts by itself when you're back online."*, *"(3 waiting)"*, *"The queue is paused…"*.
 
 ### 5.12 The player (2.1)
@@ -562,6 +573,28 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 - **App rebuild:** not needed. Raycast runs the script from this folder, and the app never passes such links to it. The bundled copy picks up the check on the next `bash app/build.sh`.
 - **Left out:** channel links (`/@name`) have the same yt-dlp behaviour. Add them to the check if you ever paste one.
 
+### 2026-10-18: test videos removed, "+ Transcript", the series queue
+- **Request:** delete the demo and test videos. Then two ways to download: *just the media*, to watch on a plane, or *the media plus a transcript*, when it's needed for a topic.
+- **Cleanup**, done with the app quit and after a verified copy (`history-before-cleanup-20261018-044153.sqlite` in the app's `backups/`):
+  - removed the two test entries from history, with their 3 jobs, the resume position and the cached thumbnail:
+    - "Inside the Mind of a Master Procrastinator | Tim Urban | TED", the first end-to-end test on 10-13;
+    - "Me at the zoo".
+  - moved their 6 files in `~/Downloads/cobalt` to the Trash. The Zoo mp4 was already there.
+  - A copy of the TED mp3 is still in the Music app's library; delete it there.
+  - `backups/2026-10-14-downloads-sha256.txt` now lists files that are gone. It's kept as a record, but it's no longer the "downloads unchanged" check.
+- **The series queue:**
+  - The 36 episodes of *Lann Aeish fi Gilbab Aby* had been queued as Summarize. Episode 1 was cancelled, which paused the queue.
+  - Its 35 waiting jobs were marked "Removed from the queue", and 36 **video** jobs were queued in episode order.
+  - Measured on episode 1 (46 min): about 690 MB at Best and 270 MB at 720p.
+- **Feature:** a **+ Transcript** checkbox, in the toolbar and the playlist preview.
+  - Two new action values, `audio_transcript` and `video_transcript`, stored in the existing `jobs.action` column, so there's no schema change.
+  - After a successful download they queue a `transcribe` job for the saved file (§5.4), using `transcribe.sh` as before.
+- **Why two jobs, not one:**
+  - the download is saved first, so a cancelled transcription loses nothing;
+  - in a playlist, the downloads (which need internet) all finish before the transcripts (which don't).
+- **Found while testing:** a scripted quit is refused ("User canceled") while the app shows its import-offer sheet. That's macOS behaviour and isn't new; the test copy was stopped with SIGTERM instead.
+- **Unchanged:** Summarize, plain Audio and Video, Raycast, and every script.
+
 ---
 
 ## 8. Setting it up from scratch
@@ -651,6 +684,7 @@ All commands run from this folder.
 | "Processing failed" with `HTTP Error 403` three times | YouTube's bot checks. `brew upgrade yt-dlp`; retry later. The long-term fix is the `bgutil-ytdlp-pot-provider` plugin for yt-dlp |
 | A job seems stuck at the start, or an import says "Importing…" forever | A macOS privacy prompt is waiting (Downloads or Desktop folder access), possibly behind other windows. Click **Allow**. Every rebuild of the app re-asks, because of the ad-hoc signature |
 | Raycast: "command not found" | Raycast doesn't load your shell profile. The scripts export `PATH=/opt/homebrew/bin:~/.local/bin:…`; check the tools are installed there |
+| Ticked **+ Transcript**, but there's no transcript yet | The transcript is a separate job at the end of the queue; in a playlist it runs after all the downloads. Check the Queue popover. If it failed, use ⋮ → *Transcribe on this Mac* |
 | Raycast says "Playlist link: paste it into the Video Summarizer app…" | It was a playlist link, which Raycast refuses on purpose (§4.1, step 0). Paste it into the app to preview and pick videos, or copy a single video's link instead |
 | Raycast commands vanished | The script directory moved. Re-add `raycast/` in Raycast settings |
 | The web page shows nothing / localhost:9001 doesn't load | `colima status`; `docker compose up -d`; check `vendor/cobalt/web/build` exists |
@@ -670,7 +704,7 @@ All commands run from this folder.
 
 ## 11. Testing
 
-### The self-test: `app/build.sh` runs it on every build (110 checks)
+### The self-test: `app/build.sh` runs it on every build (113 checks)
 - **Link parsing:** 6 YouTube link forms, rejecting non-video pages and non-http links, normalising other sites.
 - **Filename parsing and grouping:** cobalt audio/video names, `(2)` repeats, yt-dlp names, file roles.
 - **Prompts:** Standard is identical to the **bundled** `summarize.sh`; the bundled scripts exist and are executable; the Masri and ADHD prompts.
@@ -682,6 +716,7 @@ All commands run from this folder.
 - **Import:** 2 videos and 3 jobs from 8 files, a second scan finds nothing, files byte-identical, URLs left unknown.
 - **Upgrade (2.1):** a real v1 database with data upgrades to v2 with nothing lost; existing jobs get their action; exactly one verified pre-upgrade backup, even when the database is opened again.
 - **Queue (2.1):** oldest first; offline picks only on-device work; queued jobs keep their format; a job starts only once; crash recovery leaves queued jobs alone; remove and clear; resume positions per file; thumbnail path; transcript line lookup; quality → script values (the default sends nothing); transcribe needs no network.
+- **+ Transcript (10-18):** the checkbox → action mapping (unticked is the same as before); the kinds stay audio/video; the action survives the queue with no schema change.
 - **Playlists (2.1):** playlist / watch-in-playlist / short links; listing parse with private, deleted and invalid entries; import queues each video in order, reuses existing entries and takes durations from the listing; add skips duplicates; reorder; remove; summaries; cascade on history removal; deleting a playlist keeps the videos.
 
 Run it by hand: `~/Applications/"Video Summarizer.app"/Contents/MacOS/VideoSummarizer --selftest`
@@ -745,8 +780,19 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - The check was dry-run on 10 sample links (playlist, `watch?list=`, m./music., `v=` before and after `list=`, `youtu.be/<id>?list=`, plain video, Shorts, another site): all as intended.
   - `~/Downloads/cobalt` was still byte-identical afterwards.
   - Re-run it yourself: `scripts/cobalt-dl.sh "https://www.youtube.com/playlist?list=PL1EBE78CC528B52E8" audio /tmp/x; echo $?` should print the message and `2`, and create no `/tmp/x`.
+- **+ Transcript and the cleanup (10-18):**
+  - **Audio + Transcript** on "Me at the zoo": the mp3, then a transcript job ran by itself (3 lines, English). No summary.
+  - **Video + Transcript:** an H.264 mp4, then its transcript through ffmpeg. The earlier mp3 and transcript stayed byte-identical.
+  - **A playlist with Video + Transcript** for 2 videos: both downloads first, then both transcripts, in order. Distinct file names, and the playlist saved.
+  - **Cancel during the follow-up transcription** of a 46-minute episode: whisper-cli and both scripts gone, no temp folders, the mp3 kept, the job `cancelled`, the queue paused.
+  - **Unticked**, Audio gives the mp3 only, with no transcript job, saved as `(2)` without overwriting.
+  - The window snapshot shows the checkbox next to Video.
+  - **Your history after the cleanup:** 36 videos, no test rows, no orphan jobs, `quick_check ok`. The pre-cleanup copy has 38 videos.
+  - **Your queue:** 36 video jobs, episode 1 first, still paused.
+  - The tests ran on a throwaway copy. Your settings were exported first and restored afterwards.
 
 ### Not verified
+- **Clicking the + Transcript checkbox.** The tests set it with a launch argument (`-transcribeDownloads YES`); the snapshot shows it.
 - **Real mouse clicks and keyboard shortcuts.** Accessibility scripting is blocked in the terminal that ran the tests.
 - The **save dialogs**, and how the **import alert**, the **Settings window** and the **playlist preview sheet** look (the window snapshot renders separate windows blank). The **video picture** in the player also renders black in snapshots; the playback itself was verified through the player's state.
 - **Real Wi-Fi off.** Offline was simulated with `offline on`, because turning Wi-Fi off would have cut the test session. The captive-portal check was not exercised on a real login-page Wi-Fi. → Use the checklist below once.

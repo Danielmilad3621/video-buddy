@@ -274,6 +274,16 @@ enum SelfTest {
               "quality: the default sends nothing to the scripts")
         check(JobAction.transcribe.needsNetwork == false && JobAction.resummarize.needsNetwork && JobAction.transcribe.kind == .transcript,
               "transcribing is on-device")
+        check(JobAction.download(.audio, transcript: true) == .audioTranscript && JobAction.download(.video, transcript: true) == .videoTranscript
+              && JobAction.download(.audio, transcript: false) == .audio && JobAction.download(.summary, transcript: true) == .summarize,
+              "+ Transcript picks the action; unticked is the same as before")
+        check(JobAction.audioTranscript.kind == .audio && JobAction.videoTranscript.kind == .video && JobAction.videoTranscript.needsNetwork
+              && JobAction.videoTranscript.transcribesAfter && !JobAction.video.transcribesAfter && !JobAction.summarize.transcribesAfter,
+              "+ Transcript downloads are still audio/video entries")
+        _ = try await db.enqueue(VideoRef.parse("https://vimeo.com/6")!, action: .videoTranscript)
+        let stored = try await db.queuedJobs().first?.job
+        check(stored?.action == .videoTranscript && stored?.kind == .video, "+ Transcript survives the queue (no schema change)")
+        try await db.clearQueue()
     }
 
     private static func playlists(_ dir: URL) async throws {

@@ -145,15 +145,18 @@ final class AppModel {
             if playlist.videoID != nil { playlistChoice = (playlist, kind) } else { readPlaylist(playlist, kind: kind) }
             return
         }
-        jobs.enqueue(JobAction.from(kind: kind), link: link)
+        jobs.enqueue(downloadAction(kind), link: link)
     }
+
+    /// Audio and Video follow the "+ Transcript" checkbox; Summarize always transcribes anyway.
+    private func downloadAction(_ kind: JobKind) -> JobAction { .download(kind, transcript: AppSettings.transcribeDownloads) }
 
     // MARK: playlists
 
     func justThisVideo() {
         guard let choice = playlistChoice else { return }
         playlistChoice = nil
-        jobs.enqueue(JobAction.from(kind: choice.kind), link: link)
+        jobs.enqueue(downloadAction(choice.kind), link: link)
     }
 
     func wholePlaylist() {
@@ -173,7 +176,7 @@ final class AppModel {
             switch result {
             case let .success(preview):
                 notice = nil
-                playlistImport = PlaylistImportState(preview: preview, action: JobAction.from(kind: kind))
+                playlistImport = PlaylistImportState(preview: preview, action: downloadAction(kind))
             case let .failure(error):
                 notice = "Couldn't read the playlist: \(error.message)"
             }

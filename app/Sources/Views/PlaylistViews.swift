@@ -138,6 +138,7 @@ struct PlaylistImportSheet: View {
     let state: PlaylistImportState
     @State private var selected: Set<String> = []
     @State private var action = JobAction.summarize
+    @AppStorage("transcribeDownloads") private var transcribe = false
     @State private var save = true
     @State private var name = ""
 
@@ -158,6 +159,10 @@ struct PlaylistImportSheet: View {
                 Text("Video").tag(JobAction.video)
             }
             .pickerStyle(.segmented)
+            if action != .summarize {
+                Toggle("+ Transcript: also transcribe each one on this Mac (no summary)", isOn: $transcribe)
+                    .toggleStyle(.checkbox)
+            }
             HStack {
                 Button("Select All") { selected = Set(preview.available.map(\.id)) }
                 Button("Select None") { selected = [] }
@@ -191,7 +196,8 @@ struct PlaylistImportSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { model.playlistImport = nil }.keyboardShortcut(.cancelAction)
                 Button("Add \(chosen.count) to Queue") {
-                    model.importPlaylist(chosen, action: action, saveAs: save ? name : nil, sourceURL: preview.url)
+                    model.importPlaylist(chosen, action: .download(action.kind, transcript: transcribe),
+                                         saveAs: save ? name : nil, sourceURL: preview.url)
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(chosen.isEmpty)
@@ -201,7 +207,7 @@ struct PlaylistImportSheet: View {
         .frame(width: 620, height: 640)
         .onAppear {
             selected = Set(preview.available.map(\.id))
-            action = state.action == .transcribe || state.action == .resummarize ? .summarize : state.action
+            action = state.action.kind == .audio || state.action.kind == .video ? .from(kind: state.action.kind) : .summarize
             name = preview.title
         }
     }

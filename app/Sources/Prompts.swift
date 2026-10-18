@@ -85,6 +85,8 @@ enum AppSettings {
     static var downloadDir: String { defaults.string(forKey: "downloadDir")?.nilIfBlank ?? defaultDownloadDir }
     static var retentionDays: Int { defaults.integer(forKey: "retentionDays") }
     static var videoQuality: VideoQuality { VideoQuality(rawValue: defaults.string(forKey: "videoQuality") ?? "") ?? .standard }
+    /// the "+ Transcript" checkbox: Audio and Video downloads also get an on-device transcript
+    static var transcribeDownloads: Bool { defaults.bool(forKey: "transcribeDownloads") }
     static let defaultDownloadDir = home + "/Downloads/cobalt"
 
     /// VS_DATA_DIR lets tests use a throwaway history without touching the real one.

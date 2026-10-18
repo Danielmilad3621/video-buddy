@@ -189,7 +189,7 @@ final class JobController {
         await refreshQueue()
         await store.reload()
         switch job.action {
-        case .summarize, .audio, .video: await runDownload(job, video)
+        case .summarize, .audio, .video, .audioTranscript, .videoTranscript: await runDownload(job, video)
         case .transcribe: await runTranscribe(job, video)
         case .resummarize: await runResummarize(job, video)
         }
@@ -300,10 +300,17 @@ final class JobController {
         for i in steps.indices { steps[i].state = .done }
         let saved = (try? await db.video(video.id)) ?? nil
         if let saved { await Thumbnails.ensure(saved, localVideo: kind == .video ? media.path : nil, db: db, online: network.isOnline) }
+        // "+ Transcript": the transcript is its own queued job for this exact file, so it's cancel-safe and never
+        // blocks the next download (in a playlist, the transcripts run after the waiting downloads)
+        var transcriptQueued = false
+        if job.action.transcribesAfter {
+            transcriptQueued = (try? await db.enqueue(videoID: video.id, action: .transcribe, filePath: media.path)) != nil
+            await refreshQueue()
+        }
         let duration = saved?.duration.flatMap(Fmt.duration)
         let subtitle = kind == .summary
             ? "Summary saved" + (duration.map { " • \($0) video" } ?? "") + " • \(Fmt.bytes(size)) mp3"
-            : "Downloaded successfully • \(Fmt.bytes(size))"
+            : "Downloaded successfully • \(Fmt.bytes(size))" + (transcriptQueued ? " • transcript next" : "")
         banner = .success(title: "Saved \(media.lastPathComponent)", subtitle: subtitle, file: media.path)
     }
 

@@ -8,25 +8,40 @@ enum JobSource: String { case app, raycast, imported = "import" }
 /// What a job does. `kind` is what it produces; queued jobs wait for the network unless they run on-device.
 enum JobAction: String, CaseIterable {
     case summarize, audio, video, transcribe, resummarize
+    /// a download followed by an on-device transcript (a second, queued transcribe job), with no summary
+    case audioTranscript = "audio_transcript", videoTranscript = "video_transcript"
 
     var kind: JobKind {
         switch self {
         case .summarize, .resummarize: .summary
-        case .audio: .audio
-        case .video: .video
+        case .audio, .audioTranscript: .audio
+        case .video, .videoTranscript: .video
         case .transcribe: .transcript
         }
     }
 
     var needsNetwork: Bool { self != .transcribe }
 
+    var transcribesAfter: Bool { self == .audioTranscript || self == .videoTranscript }
+
     var label: String {
         switch self {
         case .summarize: "Summarize"
         case .audio: "Download audio"
         case .video: "Download video"
+        case .audioTranscript: "Download audio + transcript"
+        case .videoTranscript: "Download video + transcript"
         case .transcribe: "Transcribe on this Mac"
         case .resummarize: "Summarize transcript"
+        }
+    }
+
+    /// What the Audio / Video buttons queue, depending on the "+ Transcript" checkbox.
+    static func download(_ kind: JobKind, transcript: Bool) -> JobAction {
+        switch (kind, transcript) {
+        case (.audio, true): .audioTranscript
+        case (.video, true): .videoTranscript
+        default: from(kind: kind)
         }
     }
 
