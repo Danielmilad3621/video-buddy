@@ -20,8 +20,12 @@ final class PlaybackController {
     private(set) var upNext: [(videoID: Int64, path: String)] = []
     /// What Play All already played, so Previous can go back.
     private(set) var played: [(videoID: Int64, path: String)] = []
+    /// The playlist this is playing from; nil for a standalone video.
+    private(set) var context: PlaylistContext?
     /// Set when Play All moves on, so the window can follow along.
     var onAdvance: (Int64) -> Void = { _ in }
+    /// After a resume position is written (watched marks and Continue follow it).
+    var onSaved: () -> Void = {}
 
     private let db: Database
     private var timeObserver: Any?
@@ -33,15 +37,17 @@ final class PlaybackController {
 
     func isCurrent(_ path: String?) -> Bool { path != nil && path == currentPath }
 
-    /// Plays a file in the detail panel, picking up where you stopped (unless you'd nearly finished it).
-    func play(path: String, videoID: Int64, upNext: [(videoID: Int64, path: String)] = []) {
+    /// Plays a file in the detail panel, picking up where you stopped (unless you'd nearly finished it). From a playlist,
+    /// `upNext` and `played` are the episodes after and before it, so Next and Previous stay in the playlist.
+    func play(path: String, videoID: Int64, upNext: [(videoID: Int64, path: String)] = [],
+              played: [(videoID: Int64, path: String)] = [], context: PlaylistContext? = nil) {
         if path == currentPath, let player {
-            self.upNext = upNext.isEmpty ? self.upNext : upNext
+            if context != nil || !upNext.isEmpty { (self.upNext, self.played, self.context) = (upNext, played, context) }
             player.rate = rate
             return
         }
         stop()
-        self.upNext = upNext
+        (self.upNext, self.played, self.context) = (upNext, played, context)
         let item = AVPlayerItem(url: URL(fileURLWithPath: path))
         let player = AVPlayer(playerItem: item)
         player.isMuted = muted
@@ -55,7 +61,7 @@ final class PlaybackController {
             let total = (try? await item.asset.load(.duration)).map { CMTimeGetSeconds($0) } ?? 0
             if total.isFinite { duration = total }
             // "nearly finished" = the last 5% (at most 10 s): those start over, everything else resumes
-            let nearEnd = total > 0 ? min(10, total * 0.05) : 0
+            let nearEnd = WatchState.nearEnd(total)
             if let saved = await db.position(path), saved > 1, total == 0 || saved < total - nearEnd {
                 await player.seek(to: CMTime(seconds: saved, preferredTimescale: 600))
                 currentTime = saved
@@ -111,6 +117,7 @@ final class PlaybackController {
         isPlaying = false
         upNext = []
         played = []
+        context = nil
     }
 
     /// Saves the position and waits for it to be written (used when quitting).
@@ -123,7 +130,10 @@ final class PlaybackController {
         guard let path = currentPath, currentTime > 0 else { return }
         let (position, total) = (currentTime, duration > 0 ? duration : nil)
         lastSaved = Date()
-        Task { try? await db.savePosition(path, position: position, duration: total) }
+        Task { [db] in
+            try? await db.savePosition(path, position: position, duration: total)
+            onSaved()
+        }
     }
 
     private func tick(_ seconds: Double) {
@@ -152,19 +162,29 @@ final class PlaybackController {
 
     private func advance(to item: (videoID: Int64, path: String), upNext rest: [(videoID: Int64, path: String)],
                          played history: [(videoID: Int64, path: String)]) {
-        let keepRate = rate
+        let (keepRate, keepContext) = (rate, context)
         stop()
         rate = keepRate
-        play(path: item.path, videoID: item.videoID, upNext: rest)
-        played = history
+        play(path: item.path, videoID: item.videoID, upNext: rest, played: history, context: keepContext)
         onAdvance(item.videoID)
     }
 
     private func finished() {
-        // finished: next time this file starts from the beginning
-        if let path = currentPath { Task { try? await db.savePosition(path, position: 0, duration: duration) } }
+        // finished: saved at its full length, which counts as watched and starts over next time
+        if let path = currentPath, duration > 0 {
+            Task { [db, duration] in
+                try? await db.savePosition(path, position: duration, duration: duration)
+                onSaved()
+            }
+        }
         currentTime = 0
         guard let next = upNext.first else { isPlaying = false; return }
         advance(to: next, upNext: Array(upNext.dropFirst()), played: played + current)
     }
+}
+
+struct PlaylistContext: Equatable {
+    let id: Int64
+    let name: String
+    let count: Int
 }

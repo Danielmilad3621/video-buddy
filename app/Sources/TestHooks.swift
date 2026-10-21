@@ -65,7 +65,8 @@ enum TestHooks {
             if let state = model.playlistImport, f.count == 3, let action = JobAction(rawValue: f[0]), let n = Int(f[1]) {
                 let picks = state.preview.available.sorted { ($0.duration ?? .infinity) < ($1.duration ?? .infinity) }.prefix(n)
                 let ordered = state.preview.entries.filter { e in picks.contains { $0.id == e.id } }
-                model.importPlaylist(ordered, action: action, saveAs: f[2].nilIfBlank, sourceURL: state.preview.url)
+                model.importPlaylist(ordered, all: state.preview.entries, action: action,
+                                     into: f[2].nilIfBlank.map { .new($0) }, sourceURL: state.preview.url)
             }
         case "newPlaylist": model.createPlaylist(arg, adding: store.selectedVideo?.id)
         case "addToPlaylist":
@@ -76,7 +77,7 @@ enum TestHooks {
             if f.count == 2 { model.movePlaylistItems(from: IndexSet(integer: f[0]), to: f[1]) }
         case "removeFromPlaylist": if let v = store.selectedVideo { model.removeFromOpenPlaylist(v) }
         case "playAll": model.playAll()
-        case "makeAllOffline": model.askMakeAllAvailableOffline(); model.confirmOfflineBatch()
+        case "makeAllOffline": model.askDownloadMissing(); model.confirmOfflineBatch()
         case "deletePlaylist":
             if let pl = store.playlists.first(where: { $0.name == arg }) { model.pendingPlaylistDeletion = pl; model.confirmPlaylistDeletion() }
         case "next": model.playback.next()
@@ -91,6 +92,33 @@ enum TestHooks {
                 .map { JobStep(id: $0.offset, label: $0.element, state: states[$0.offset]) }
             model.jobs.banner = arg == "off" ? nil : .running("Summarizing (sample)…")
         case "settings": NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        // 3.1: playlists as collections
+        case "layout": UserDefaults.standard.set(arg, forKey: "libraryLayout")
+        case "expand":
+            switch arg {
+            case "all": store.expanded = Set(store.playlists.map(\.id))
+            case "none": store.expanded = []
+            default: if let pl = store.playlists.first(where: { $0.name.contains(arg) }) { store.expanded.insert(pl.id) }
+            }
+        case "playPlaylist": if let pl = store.playlists.first(where: { $0.name.contains(arg) }) { model.playAll(pl.id) }
+        case "continuePlaylist": if let pl = store.playlists.first(where: { $0.name.contains(arg) }) { model.continuePlaylist(pl.id) }
+        case "checkPlaylist": if let pl = store.playlists.first(where: { $0.name.contains(arg) }) { model.checkPlaylist(pl) }
+        case "linkPlaylist":
+            // the sheet's main button in Check mode: nothing ticked, so it only links library videos
+            if let state = model.playlistImport, let id = state.checking {
+                model.importPlaylist([], all: state.preview.entries, action: .video, into: .existing(id), sourceURL: state.preview.url)
+            }
+        case "closeSheet": model.playlistImport = nil
+        case "downloadMissing": if let pl = store.playlists.first(where: { $0.name.contains(arg) }) { model.askDownloadMissing(pl.id) }
+        case "confirmOffline": model.confirmOfflineBatch()
+        case "cancelOffline": model.pendingOfflineBatch = nil
+        case "selectEpisode":
+            // "<playlist name part>|<episode number>"
+            let f = arg.split(separator: "|").map(String.init)
+            if f.count == 2, let pl = store.playlists.first(where: { $0.name.contains(f[0]) }), let n = Int(f[1]),
+               let id = store.members[pl.id].flatMap({ $0.indices.contains(n - 1) ? $0[n - 1] : nil }), let v = store.video(id) {
+                model.open(v, tab: model.detailTab)
+            }
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
         default: break
@@ -130,6 +158,25 @@ enum TestHooks {
             "playlists": store.playlists.map { "\($0.name) (\($0.count))" },
             "openPlaylist": store.playlistVideos.map(\.displayTitle),
             "upNext": model.playback.upNext.count,
+            "played": model.playback.played.count,
+            "layout": UserDefaults.standard.string(forKey: "libraryLayout") ?? "Grouped",
+            "groups": { () -> [[String: Any]] in
+                let g = Grouping.make(store.videos, playlists: store.playlists, members: store.members)
+                return g.groups.map { grp in
+                    let id = grp.playlist.id
+                    return ["name": grp.playlist.name, "members": store.members[id]?.count ?? 0, "shown": grp.videos.count,
+                            "offline": store.offlineCount(id), "audioOnly": store.audioOnlyCount(id),
+                            "expanded": store.expanded.contains(id), "first": grp.videos.first?.displayTitle ?? "",
+                            "episodes": grp.videos.map { store.episode($0.id, in: id) ?? 0 },
+                            "resume": store.resumeTarget(id).flatMap { store.episode($0, in: id) } ?? 0] as [String: Any]
+                } + [["name": "Individual Videos", "titles": g.individual.map(\.displayTitle)]]
+            }(),
+            "watch": selected.flatMap { store.watch[$0.id] }.map { "\($0.state)" } ?? "none",
+            "videoOnMac": store.videoOnMacIDs.count,
+            "offlineBatch": model.pendingOfflineBatch?.videoIDs.count ?? -1,
+            "previewChecking": model.playlistImport?.checking ?? -1,
+            "context": model.playback.context.map { ["name": $0.name, "count": $0.count,
+                                                     "episode": model.playback.currentVideoID.flatMap { store.episode($0, in: model.playback.context!.id) } ?? 0] as [String: Any] } ?? [:],
             "preview": model.playlistImport.map { ["title": $0.preview.title, "count": $0.preview.entries.count,
                                                    "available": $0.preview.available.count,
                                                    "entries": $0.preview.entries.prefix(8).map { "\($0.title) [\(Fmt.duration($0.duration) ?? "?")]" }] as [String: Any] } ?? [:],

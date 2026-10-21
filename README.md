@@ -6,7 +6,8 @@ Paste a video link and get:
 - an **mp3**,
 - an **on-device transcript** with timestamps,
 - an **AI summary** written by Claude,
-- a permanent, searchable **history** of everything you've watched and learned.
+- a permanent, searchable **history** of everything you've watched and learned,
+- **playlists kept together** as collections, like albums in Apple Music (3.1): a 36-episode series is one collection of 36 episodes everywhere in the app.
 
 You can use it three ways: a native macOS app (**Video Buddy.app**), three **Raycast** commands, or a self-hosted **cobalt** web page for downloads.
 
@@ -82,15 +83,20 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
   - The paste button is the 📋 icon inside the field (or ⇧⌘V); ✕ clears the field.
   - **☑ + Transcript**: when it's ticked, Audio and Video also transcribe the file on this Mac afterwards, with no summary and no Claude. So you choose *just the media* (to watch, or listen) or *media + transcript* (for topics you'll want to read or search). Summarize always makes its transcript. The checkbox is remembered between launches, and the playlist preview has the same one.
   - Narrow windows show the buttons as icons only, in the same order.
-- **Sidebar:** the logo, **Home · Library · Favorites · Playlists · Downloads · Queue · Settings** (the selected one in dark red; **Queue** has a red badge with the number of jobs waiting plus the one running), **My Playlists** (artwork = the first video's thumbnail, the name and "N videos", **+** for a new one, right-click to rename or delete), and **Learning Stats** from the database: videos processed, summaries generated, available offline (entries with a file on this Mac), learning time (the length of the videos you've summarized). Under ~1360 points wide it folds to icons; the button at the bottom folds it by hand.
+- **Sidebar:** the logo, **Home · Library · Favorites · Playlists · Downloads · Queue · Settings** (the selected one in dark red; **Queue** has a red badge with the number of jobs waiting plus the one running), **My Playlists** (artwork = the first video's thumbnail, the name and "N videos", **+** for a new one, right-click to rename or delete), and **Learning Stats** from the database: videos processed, summaries generated, **videos offline** (entries with a *video* file on this Mac; audio-only doesn't count, 3.1), learning time (the length of the videos you've summarized). Under ~1360 points wide it folds to icons; the button at the bottom folds it by hand.
 - **Every section keeps the player and the AI panel**; only the left column changes:
-  - **Home:** the library list with **Continue watching** on top (up to 3 entries you stopped part-way through, with a red progress bar; click to resume).
+  - **Home:** **Your Playlists** (3.1: album-style cards with the artwork, name, "N videos • M offline", a red ▶ and *Continue: episode N*; click a card to open the playlist), **Continue watching** (up to 3 entries you stopped part-way through, with a red progress bar and, for a playlist, "playlist • Episode N"; click to resume), then the library list.
   - **Library:** everything. **Favorites:** starred entries.
   - **Playlists**, **Downloads**, **Queue:** see below. **Settings** uses the whole area (also ⌘, in its own window).
-- **The library list:** search (titles, channels, links, summaries and transcripts), the **≡** button (sort: recent, oldest, duration, title, plus *Clear All History…* with its confirmation), the chips **All · Summaries · Audio · Video · Offline · ♥** (Favorites), and rows with the thumbnail, title, channel, duration, a status pill, ★ and ⋮ (also on right-click). The selected row is dark red with a red border. ↑/↓ move through the list.
-  - **Status pills:** Processing, Queued, **Summarized**, **Available Offline** (a file is on this Mac right now), **File missing** (it was downloaded but isn't there any more), Cancelled, Interrupted, Failed. A small ⬇ badge on a summarized entry's thumbnail means it's on this Mac too.
-  - The ⋮ menu: Play, open summary or transcript, copy summary / transcript / link, open the original link, open the file, Show in Finder, favorite, Add to Playlist ▸, Make Available Offline, Transcribe on This Mac, Process Again, Remove from Library.
-- **The video column:** the 16:9 player (Apple's own controls over the picture: play/pause, scrubbing, time, volume, **full screen**, **Picture in Picture**), then ±10 s and the **speed** menu (0.75×–2×), the title with ★, the channel's initial, name and subscribers, duration · upload date · platform, and **Play · Show in Finder · Copy Link · Favorite · ⋯**.
+- **Grouped | All Videos (3.1)**, under the search field in Home, Library and Favorites (remembered between launches; Grouped by default):
+  - **Grouped:** each playlist is one collapsible **album row**: artwork, name, "36 videos • 34 offline", a chevron, and a red ▶ (**Continue** where you are in it, else **Play All**). Click the row to open it: its episodes in playlist order with **episode numbers**, each a normal row (open, ★, play, summarize, transcribe, download, ⋮). Everything that's in no playlist is under **Individual Videos**. A video in two playlists shows under both; it's still one record.
+  - Search, the chips and Favorites work the same in both modes: grouped shows what matches *under its playlist* ("4 of 36 videos"), and groups open by themselves while you search. Searching a **playlist's name** finds all its videos.
+  - **All Videos:** the flat list, as in 3.0.
+  - Thumbnails show how far you got: a red bar part-way, a ✓ when finished, nothing before you start.
+- **The library list:** search (titles, channels, links, summaries, transcripts and, from 3.1, playlist names), the **≡** button (sort: recent, oldest, duration, title, plus *Clear All History…* with its confirmation), the chips **All · Summaries · Audio · Video · Offline · ♥** (Favorites), and rows with the thumbnail, title, channel, duration, a status pill, ★ and ⋮ (also on right-click). The selected row is dark red with a red border. ↑/↓ move through the list.
+  - **Status pills:** Processing, Queued, **Summarized**, **Available Offline** (a video file is on this Mac right now), **Audio Offline** (3.1: only an mp3 is here), **File missing** (it was downloaded but isn't there any more), Cancelled, Interrupted, Failed. A small ⬇ badge on a summarized entry's thumbnail means it's on this Mac too.
+  - The ⋮ menu: Play, open summary or transcript, copy summary / transcript / link, open the original link, open the file, Show in Finder, favorite, Add to Playlist ▸, **Show in Playlist “…”** (3.1), Make Available Offline, Transcribe on This Mac, Process Again, Remove from Library.
+- **The video column:** the 16:9 player (Apple's own controls over the picture: play/pause, scrubbing, time, volume, **full screen**, **Picture in Picture**), then ±10 s and the **speed** menu (0.75×–2×), the title with ★, for a playlist video a red **"Episode 4 of 36 • playlist"** link (3.1, opens the playlist), the channel's initial, name and subscribers, duration · upload date · platform, and **Play · Show in Finder · Copy Link · Favorite · ⋯**.
   - **About this video:** the platform's description (3 lines, *Show more*) and its tags. *Show more* also shows the processed date, transcript language, the original link and *Make Available Offline*. Entries saved before 3.0 have no description yet: **Load details** reads it with yt-dlp (metadata only, nothing is downloaded, no AI).
   - Your place is saved every few seconds, on pause and on quit, so the next play **resumes** there (the last 5% of a video, at most 10 s, counts as finished and starts over). mp4/m4v/mov/mp3/m4a/aac/wav play inside; other formats open in QuickTime/VLC. For an mp3 the picture stays and the mini-player has the controls.
 - **The AI panel:** **Summary · Transcript · Downloads** (red underline).
@@ -99,17 +105,19 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
   - **Downloads:** every file of that video with its format (MP4/MP3), size, Available/Missing, Open, Show in Finder and *Download Again* for a missing file.
   - There's no Chapters tab: the app doesn't save chapter data yet.
 - **The processing strip** (under the top bar, only when there's work): the job's thumbnail and *"Processing: title"*, its **real stages** in order (✔ done, a moving bar on the one running, numbers for the ones to come: Summarize has 4, Audio/Video and Transcribe have 2), **Queue (N)** and a red **Cancel**. No percentages or time estimates, because the scripts don't report any. The same strip shows success (Show in Finder), failure (Details, Retry), cancelled, *"Queue paused"* (Resume) and *"Waiting for internet"*.
-- **The mini-player** (bottom, in every section while something is loaded): thumbnail, title and channel (click to show that entry), ⏮ (back to the start, or in the first 3 seconds to the previous Play All item), ⏯, ⏭ (the next Play All item), a red position slider, the times, **volume**, **Up Next** (the Play All list) and ✕. It drives the same player as the video column, so only one thing ever plays.
-- **Queue section:** *Running now* (stages and Cancel), *Waiting* (numbered, remove one, **Pause/Resume**, **Clear**) and **Failed** (the latest failed or interrupted job of each kind per entry, with **Retry**; it leaves the list once it's retried or done again).
-- **Downloads section:** *"N files on this Mac • size • free space"*, search, **All · Available · Missing**, and the file rows.
+- **The mini-player** (bottom, in every section while something is loaded): thumbnail, title and channel, or for a playlist **"4 of 36 • playlist"** (3.1) (click to show that entry), ⏮ (back to the start, or in the first 3 seconds to the previous Play All item), ⏯, ⏭ (the next Play All item), a red position slider, the times, **volume**, **Up Next** (the Play All list) and ✕. It drives the same player as the video column, so only one thing ever plays.
+- **Queue section:** *Running now* (stages and Cancel), *Waiting* (numbered, remove one, **Pause/Resume**, **Clear**; 3.1: consecutive jobs from one playlist sit under a header such as *"Series • 1 downloading • 5 queued • 2 failed • 34 of 36 offline"*, rows say "Episode 8 • Download video", and the numbers stay the real queue order) and **Failed** (the latest failed or interrupted job of each kind per entry, with **Retry**; it leaves the list once it's retried or done again).
+- **Downloads section (3.1):** *"N videos offline • N files • size • free space"*, search (also by playlist name), **All · Available · Missing**, then the files **grouped by playlist** (then *Individual Downloads*). A playlist's header: *"34 of 36 videos downloaded • 2 missing • 22.9 GB"*, *Available offline / Partly offline*, and ⬇ **Download Missing**. Inside, **one row per video** with each of its files as a line (MP4 • 692.8 MB • Available, MP3 • Missing → *Download Again*), so two downloads of one video are still one video. Counts are unique videos, and an mp3 never counts as the video being offline.
 - **Settings:** summary language and format, download folder, **video quality**, history retention, *Import from Downloads Folder…*, *Show Database in Finder*, theme (Dark / System / Light).
 - **Offline (2.1):** with no internet a strip says what still works. Video / Audio / Summarize still accept links: they go into the queue and start when you're back online. *Transcribe on this Mac* works offline for any entry with a local mp3 or mp4, and a summary of a saved transcript can be requested offline and runs later.
 - **Queue (2.1):** the buttons never block; extra jobs wait their turn. **Cancel** stops the current job and pauses the queue; **Resume** continues.
-- **Playlists (2.1):**
-  - Paste a playlist link (`youtube.com/playlist?list=…`) and press Summarize, Audio or Video. A preview lists every video with checkboxes, durations and the total time, with private and deleted videos greyed out. Choose the action, untick what you don't want, keep *Save as one of My Playlists* on, and press *Add N to Queue*.
+- **Playlists (2.1, collections since 3.1):**
+  - Paste a playlist link (`youtube.com/playlist?list=…`) and press Summarize, Audio or Video. The preview lists every video with its number, duration and **what you already have** (*On this Mac*, *Audio on this Mac*, *In library*), with private and deleted videos greyed out. Only videos **not in your library at all** are ticked, so pasting a playlist you already downloaded never downloads it again. **Save to** picks the playlist with the same YouTube link automatically (or a new one, or any other). Saving links *every* library video of that YouTube playlist to it by its video ID, ticked or not; ticked ones are queued. With nothing ticked the button is **Link N Library Videos**, which downloads nothing.
   - A watch link that's part of a playlist (`watch?v=…&list=…`) asks: **Just This Video** or **Whole Playlist…**
-  - In **Playlists** (or click one under *My Playlists*): *New Playlist*, open one, drag rows to reorder, **Play All** (plays the ones on this Mac in order, moving to the next automatically; ⏮/⏭ in the mini-player), **All Offline** (downloads every missing video, after a confirmation showing free disk space), ⋯ → Rename / Open on YouTube / Delete. Deleting a playlist never touches the history or any file.
-  - Any video's ⋮ menu has *Add to Playlist ▸* and, inside a playlist, *Remove from This Playlist*.
+  - **The playlist page** (Playlists, a card on Home, or *My Playlists*): large artwork, the name, *"36 videos • 26h 45m • 34 downloaded"*, **Play All**, **Continue Ep N**, **Download N Missing** (only videos with no video file here, after a confirmation with the total length and free disk space; ones already queued are left out), **Add Videos** (tick library videos, or **From Folder…** to tick the ones whose files are in a folder you choose), and ⋯ → Rename, **Check Against YouTube…**, Open on YouTube, Delete. Below: the numbered episodes; drag to reorder.
+  - **Check Against YouTube** reads the playlist's saved link (metadata only) and opens the same preview with **nothing ticked**: *Link N Library Videos* adds the videos you already have by their YouTube ID. Your order stays: each new one goes next to its YouTube neighbour.
+  - **Play All / Continue / ▶ on any playlist video** play inside that playlist: ⏭ and ⏮ move through its episodes on this Mac, Up Next lists the rest. A video in no playlist plays on its own, as before. **Continue** resumes the episode you stopped in; if you finished it, the next one on this Mac you haven't finished.
+  - Deleting a playlist never touches its videos, summaries, history or files. Any video's ⋮ menu has *Add to Playlist ▸* and, inside a playlist, *Remove from This Playlist*.
 - **Keyboard (unchanged in 3.0):** ⌘L focus the link field · ⇧⌘V paste link · ⌘↩ Summarize (and Return in the link field) · ⇧⌘A Audio · ⇧⌘D Video · ⌘. Cancel · ⌘F search the library · ↑/↓ move through the list · **⌘K play/pause · ⌘[ back 10 s · ⌘] forward 10 s** (Playback menu; ⌘[ and ⌘] were chosen over ⌘←/⌘→ so the link field keeps its normal cursor keys).
 
 ### Before a flight (2-minute checklist)
@@ -261,7 +269,7 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 
 ## 5. Inside the app
 
-### 5.1 Source map: `app/Sources/` (about 6,700 lines)
+### 5.1 Source map: `app/Sources/` (about 7,700 lines)
 
 | File | Role |
 |---|---|
@@ -270,31 +278,31 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Models.swift` | `Video`, `Job`, `NewJob`, `VideoInfo`, `Segment`, `FileItem`, filters and sorts, the whisper JSON reader, `SummaryOutputs` (reads `<base>.summary.md/.transcript.*`), formatters |
 | `SQLite.swift` | Small wrapper over the SQLite C API: parameterised queries, `transaction {}` (BEGIN IMMEDIATE / COMMIT / ROLLBACK) |
 | `Database.swift` | `actor Database`, the single writer, off the main thread: schema and migrations, every query, stats, crash recovery, retention, corruption handling, rotating backups |
-| `HistoryStore.swift` | What the views show (list, recent, files, stats, selection, 3.0: *Continue watching* and the Failed list), loaded asynchronously |
+| `HistoryStore.swift` | What the views show (list, recent, files, stats, selection, 3.0: *Continue watching* and the Failed list; 3.1: every entry, playlist memberships, video-offline vs any-offline sets, watch states, Continue per playlist), loaded asynchronously |
 | `JobController.swift` | **The queue runner (2.1):** enqueue from a link or an entry, `pump()` runs queued jobs one at a time (network jobs wait while offline), pause/resume/remove/clear, Cancel (pauses the queue). Per action: download/summarize via the scripts, *transcribe* via `transcribe.sh`, *resummarize* via `claude -p`. Steps, marker parsing, output checks, saving, metadata, thumbnails |
 | `NetworkMonitor.swift` | `NWPathMonitor` + captive-Wi-Fi check → `isOnline`; test override `VS_FORCE_OFFLINE` |
 | `Playback.swift` | One `AVPlayer` for the app: play/pause/seek/skip/speed/volume, resume positions per file, Play All list with next/previous (3.0), saves on pause/stop/quit |
 | `Thumbnails.swift` | Saves thumbnails to the app's cache (web image, or a frame of the local video via `AVAssetImageGenerator`) |
-| `Playlists.swift` | `PlaylistLink` (playlist and watch-in-playlist links), `PlaylistImport` (`yt-dlp --flat-playlist -J` + parsing), playlist types |
+| `Playlists.swift` | `PlaylistLink` (playlist and watch-in-playlist links), `PlaylistImport` (`yt-dlp --flat-playlist -J` + parsing), playlist types; 3.1: `PlaylistOrder` (merge new members without moving existing ones, positions between neighbours, the Continue rule) and `Grouping` (grouped lists, queue runs) |
 | `ScriptRunner.swift` | `Paths` (where the bundled scripts are) and `RunningScript` (the bash **lifeline guard**, line streaming, cancel) |
 | `Metadata.swift` | `VideoRef` (link → identity), `FileNames` (cobalt/yt-dlp filename parsing), `MetadataFetcher` (`yt-dlp -j`, `ffprobe`) |
 | `Ingest.swift` | Reads the Raycast `inbox.jsonl` and ingests events (deduplicated by event ID) |
 | `Importer.swift` | Read-only import of an existing downloads folder |
 | `Prompts.swift` | Summary formats and languages, prompt building, `AppSettings`, `Appearance` |
-| `SelfTest.swift` | 126 checks on throwaway data; `build.sh` refuses to install if any fail |
+| `SelfTest.swift` | 161 checks on throwaway data; `build.sh` refuses to install if any fail |
 | `TestHooks.swift` | Test-only remote control (`VS_TEST_HOOKS=1`); see [Testing](#11-testing) |
 | `Views/Theme.swift` | The Video Buddy palette (bg `#09090B`, sidebar `#111114`, cards `#191A1E`, elevated `#222327`, hover `#2D2E33`, red `#FA233B` → `#B8132C`, text `#F5F5F7` / `#A0A0A8`, borders `#33343A`), a light version with the same roles, applies the theme |
 | `Views/Components.swift` | Card and panel styles, the red primary / charcoal secondary / red-outline button styles (hover, press, Reduce Motion), the red **+ Transcript** checkbox, chips, section header, search field, thumbnail, status pill, avatar, `FlowLayout`, `FileOps` (open, reveal, copy, export) |
 | `Views/Markdown.swift` | Block Markdown parser (headings, bullets, numbered lists, rules, inline styling), **summary cards** (`Markdown.sections` → TL;DR / Key Points / Action Takeaways / other, English and Arabic headings), right-to-left detection |
 | `Views/RootView.swift` | Window layout and breakpoints (sidebar folds under ~1360 pt, two columns under ~1120 pt of content), the sidebar (logo, navigation with the Queue badge, My Playlists, Learning Stats), the top bar, notices, dialogs |
-| `Views/CenterColumn.swift` | The library column: list with search, sort, chips and *Continue watching*, the rows and ⋮ actions, the Downloads list, file rows |
+| `Views/CenterColumn.swift` | The library column: list with search, sort, chips, *Grouped / All Videos*, album rows, *Your Playlists* and *Continue watching*, the rows and ⋮ actions, watched marks, the grouped Downloads list, file rows |
 | `Views/DetailViews.swift` | The video column (details, actions, *About this video*), the AI panel and its Summary / Transcript / Downloads tabs |
 | `Views/PlayerView.swift` | `AVPlayerView` wrapper, the 16:9 player area, ±10 s / speed, the **mini-player** and Up Next |
 | `Views/QueueView.swift` | The processing strip and its stage track, the waiting strip, the Queue section (running, waiting, failed) |
 | `Views/SettingsView.swift` | Settings, in the window and in the ⌘, window |
-| `Views/PlaylistViews.swift` | My Playlists list and detail (reorder, Play All, All Offline), the YouTube playlist preview sheet |
+| `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
-Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.0), `make-icon.swift` (draws the red gradient tile with a white `play.fill`), `tests/vsctl.swift`.
+Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`), `tests/vsctl.swift`.
 
 ### 5.2 Video identity: one entry per video
 `VideoRef.parse` turns a link into a **key**:
@@ -343,18 +351,25 @@ Filters:
 - **Offline** (called On this Mac before 3.0): has an audio or video file that exists on disk right now. This is checked against the files, not the database.
 - **Favorites:** starred.
 
-Search uses escaped `LIKE` over title, channel, URL, summary and transcript, with a 180 ms debounce.
+Search uses escaped `LIKE` over title, channel, URL, summary, transcript and (3.1) the names of the video's playlists, with a 180 ms debounce.
 
 Stats:
 - **Videos processed:** distinct videos with any succeeded job.
 - **Summaries generated:** succeeded summary jobs.
-- **Available offline (3.0):** entries with an audio or video file on this Mac right now.
+- **Videos offline (3.1; "available offline" in 3.0):** entries with a *video* file on this Mac right now. Audio-only entries still play, but don't count.
 - **Learning time:** the sum of *known* durations of videos with a succeeded summary.
 
 Other 3.0 reads:
 - **Failed list:** failed or interrupted jobs with no newer job of the same kind for that entry (`failedJobs`, at most 20). Retry queues the same action. A failed job's file path isn't kept (`finishJob` writes the result's fields), so a retried transcription uses the entry's file that's on this Mac.
 - **Continue watching:** `playback` rows joined to the succeeded job with that file, position over 1 s and not "nearly finished", latest first, at most 3, and only when the file is still playable.
 - **Playlist artwork:** the thumbnail of each playlist's first item.
+
+3.1 reads and rules (no schema change; still v3):
+- **Memberships:** `memberships()` loads every `(playlist, video)` row in order once; every screen groups from it, so there is never a second copy of a video.
+- **Watch states:** `watchStates()` takes the latest `playback` row per video (through `jobs.file_path`). **Finished** = the length is known and the position is in the "nearly finished" margin; the player now saves the **full length** when a file plays to its end (3.0 saved 0). Position 0, an unknown length or no row is **not started**, never finished. Over 1 s otherwise = part-watched.
+- **Continue (per playlist):** the member played last; if it's finished, the next member that's on this Mac and not finished (`PlaylistOrder.resume`).
+- **No duplicate downloads:** `insertJob` refuses a queued audio or video job when the same video already has one of that kind *queued or running* (it throws `AlreadyQueued`; the app says "Already in the queue"). Every path goes through it: Video/Audio, Download Missing, Make Available Offline, Download Again, playlist import, Retry.
+- **Playlist import / Check:** one transaction. Ticked entries get a video row and a queued job. With a target (new, or an existing playlist, whose empty `source_url` is then filled in), every entry of the YouTube playlist that's in the library is linked by `youtube:<id>`; `PlaylistOrder.merge` slots new members after their nearest YouTube predecessor that's already a member (else before the nearest later one, else at the end), and they get positions *between* their neighbours, so existing rows aren't rewritten.
 
 ### 5.4 A job's life (`JobController`)
 1. Parse the link. If it's bad, show an inline error and run nothing. Playlist links open the playlist flow (§5.14).
@@ -443,7 +458,8 @@ The keys are `summaryLanguage`, `summaryFormat`, `downloadDir` (empty means `~/D
 ### 5.12 The player (2.1)
 - `PlaybackController` owns one `AVPlayer`, created for the file being played (`AVPlayerItem(url:)`). It reads the time every 0.5 s (this drives the transcript highlight), saves the position every 5 s while playing, and saves on pause, switching file, closing and quitting (Quit waits for the write).
 - **Resume rule:** a saved position over 1 s is used unless it's in the last 5% of the file (at most 10 s). Those start over. The resumed spot lands on the nearest keyframe, a fraction of a second early.
-- **Play All** keeps an ordered "up next" list. When an item ends (`AVPlayerItemDidPlayToEndTime`), the next one plays and the detail panel follows it.
+- **Play All** keeps an ordered "up next" list. When an item ends (`AVPlayerItemDidPlayToEndTime`), its position is saved as its full length (3.1, so it reads as finished), the next one plays and the detail panel follows it.
+- **Playlist context (3.1):** playing a playlist video sets `context` (id, name, count), `upNext` = the later members on this Mac and `played` = the earlier ones, so ⏭/⏮ stay in the playlist. Every saved position refreshes the watched marks and Continue (`onSaved`).
 - The transcript's highlighted line is found by a binary search over segment start times (`[Segment].index(at:)`).
 - The player view is AppKit's `AVPlayerView` (`controlsStyle .floating` since 3.0, full-screen toggle, Picture in Picture). For audio the thumbnail stays and the mini-player has the controls.
 - **Mini-player (3.0):** drives the same `PlaybackController` (no second player). ⏭ = `next()` (the next Play All item), ⏮ = `previous()` (back to the start, or within the first 3 s to the item played before, kept in a small `played` list), the slider seeks on release, and `volume` is kept across files.
@@ -458,6 +474,7 @@ The keys are `summaryLanguage`, `summaryFormat`, `downloadDir` (empty means `~/D
 - **Preview:** `yt-dlp --flat-playlist -J` lists the playlist without downloading anything (about 5 s; a 1,004-video playlist took the same). Entries with invalid ids are dropped; `[Private video]` / `[Deleted video]` are shown greyed out and can't be selected.
 - **Import:** one transaction creates or reuses an entry per video (key `youtube:<id>`, title, channel, duration and thumbnail from the listing). It adds a queued job each, with start times spaced a millisecond apart so the queue keeps the playlist order, and creates the playlist with the same order.
 - **My Playlists:** `collections` + `collection_items` with a `position`. Adding appends and skips duplicates, dragging saves the full new order, and removing a video from history removes it from its playlists (cascade). Deleting a playlist deletes only the playlist.
+- **Collections (3.1):** see §5.3 for linking, the merge, Continue and duplicate prevention. Membership belongs to the video, not to a job or a file, so later Summarize, Audio or Transcribe jobs keep it, and restarting changes nothing.
 
 ---
 
@@ -637,6 +654,14 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - The app was renamed `Video Buddy.app`. The data folder (`Application Support/Video Summarizer`), the UserDefaults domain and the bundle ID stayed, so history, settings, resume positions and Raycast's inbox carry over without a migration.
 - **Found while testing:** a sample summary inserted with SQLite's `readfile()` is a BLOB and reads as empty (test data only; fixed with `CAST(… AS TEXT)`). The window can't be taller than the screen's visible area, so the 1536×1024 snapshots are 1536×863.
 
+### 2026-10-21: Video Buddy 3.1, playlists as collections
+- **Request:** keep playlists grouped like Apple Music albums everywhere (Library, Home, Downloads, Favorites, Queue, search, player), for the series already on this Mac and for future imports, without downloading anything again or changing the queue.
+- **What was found (read-only):** the schema already had `collections` / `collection_items`, and the series was already a playlist with its YouTube link, holding **35 of its 36 episodes**: episode 1 had been downloaded before the import and was never linked. On disk: 34 episodes plus a second identical copy of episode 1 (`… (2).mp4`); episodes 8 and 18 had failed. The old import also always made a *new* playlist and ticked everything, so pasting the link again would have downloaded ~23 GB a second time.
+- **Safety first:** git tag `checkpoint-before-3.1`, a verified history copy (`history-before-3.1-20261021-135026.sqlite`, quick_check ok) and a settings export. No schema change.
+- **What changed:** the grouped Library/Home/Favorites (album rows, Individual Videos, the toggle), *Your Playlists* cards, the album-style playlist page (Continue, Download Missing, Add Videos, From Folder), **Check Against YouTube** (link by ID only; nothing ticked), the preview's library badges, default ticks and *Save to*, Downloads grouped by playlist with one row per video, Queue headers per playlist, the player's playlist context, watched marks, and the duplicate-download guard.
+- **Your amendments, as built:** Check only links; downloads happen only from *Download Missing* or ticked entries. Video and audio availability are separate (unique videos; mp3-only = "audio only"). Finished is detected from the end of the file, not from position 0. Reconciliation never moves existing members. Nothing on disk is moved, renamed, deleted or downloaded again.
+- **Found while testing:** the watched marks and Continue didn't update until the next full reload, because positions are saved by the player, not through the store; now every save refreshes them. Group and video ids collided in one lazy list (playlist 1 vs video 1), hiding episode 1; group ids are now strings. Sizes in Downloads follow symlinks (only the test copy uses them).
+
 ---
 
 ## 8. Setting it up from scratch
@@ -744,13 +769,17 @@ All commands run from this folder.
 | ▶ isn't shown for an entry | No playable file on this Mac: the file is missing, or it's a format the built-in player can't play (webm/mkv): use ⋮ → *Open Downloaded File*. Or there's no download yet: *Make Available Offline* |
 | A video doesn't resume | It was within its last 5% (at most 10 s), so it counts as watched and starts over |
 | Playlist preview fails | Reading a playlist needs internet; private playlists can't be read; `brew upgrade yt-dlp` if YouTube changed something |
+| A playlist shows fewer videos than it has on YouTube, or one episode sits under *Individual Videos* | It was downloaded before (or apart from) the playlist import. Open the playlist → ⋯ → **Check Against YouTube…** → **Link N Library Videos** (metadata only, nothing downloads). Without a YouTube link: **Add Videos** → tick it, or **From Folder…** |
+| "Already in the queue" | That video already has a download of the same kind waiting or running; nothing was queued twice. See the **Queue** section |
+| An episode shows ✓ but you didn't finish it | You stopped within its last 5% (at most 10 s), which counts as finished. Play it again to start over |
 | Arabic shows left-to-right | Right-to-left is detected from the first letter. Regenerate, or check the summary actually starts with Arabic text |
 
 ---
 
 ## 11. Testing
 
-### The self-test: `app/build.sh` runs it on every build (126 checks)
+### The self-test: `app/build.sh` runs it on every build (161 checks)
+- **3.1 collections (35 new):** a new playlist links every library video of the YouTube playlist and queues only the ticked ones; re-importing queues nothing already waiting and makes no second playlist; **Check links the already-downloaded episode and adds no jobs**; the hand-made order stays (episode 1 lands right before episode 2); merge and position rules; **a second video download of the same video is refused while one waits or runs**, audio is a separate download; a video in two playlists is grouped twice and stored once; favorites stay under their playlist in its order; searching a playlist name finds its videos; queue headers keep FIFO numbers; **position 0 and unknown lengths are never finished**, the end and the nearly-finished margin are; Continue after a finished episode is the next one, skipping missing and finished ones, never-played → Play All; the player's end-of-file save reads as finished; deleting a playlist keeps videos and jobs.
 - **Link parsing:** 6 YouTube link forms, rejecting non-video pages and non-http links, normalising other sites.
 - **Filename parsing and grouping:** cobalt audio/video names, `(2)` repeats, yt-dlp names, file roles.
 - **Prompts:** Standard is identical to the **bundled** `summarize.sh`; the bundled scripts exist and are executable; the Masri and ADHD prompts.
@@ -785,7 +814,9 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 
 3.0 adds: `next`, `previous`, `volume <0…1>`, `loadDetails`, `retryFailed`, and `showSteps` / `showSteps off` (test-only: fills the processing strip with a sample of the 4 Summarize stages, so its look can be checked without a download or an AI call). `state` also reports `failed`, `continueWatching`, `description`, `tags`, `queueBadge`, and `playback.volume` / `playback.hasPrevious`.
 
-**Testing safely on a copy of your library (as done for 3.0):** copy `history.sqlite` with `sqlite3 … ".backup …"` into `$T/data`; in the copy only, set `queued`/`running` jobs to `cancelled` and rewrite every `file_path`/`summary_path`/`transcript_path` and `playback.file_path` from `~/Downloads/cobalt` to the test folder (then nothing under ~/Downloads is read, so macOS never asks); link those names to a sample made with `say` + `ffmpeg`; launch with `-queuePaused YES` and send `offline on` first so no network job can start. The test instance shares your UserDefaults, so `defaults export local.video-summarizer` before and `defaults import` after.
+3.1 adds: `layout Grouped|All Videos`, `expand <playlist name part>|all|none`, `playPlaylist <name part>`, `continuePlaylist <name part>`, `checkPlaylist <name part>` (Check Against YouTube: a metadata read, needs `offline off`), `linkPlaylist` (the sheet's *Link N Library Videos*), `closeSheet`, `downloadMissing <name part>` → `confirmOffline` / `cancelOffline`, `selectEpisode <name part>|<n>`. `state` also reports `groups` (per playlist: members, shown, offline, audioOnly, episodes, resume), `layout`, `watch` (the selected video's state), `videoOnMac`, `offlineBatch`, `previewChecking`, `played` and `context` (playlist name, count, episode).
+
+**Testing safely on a copy of your library (as done for 3.0 and 3.1):** copy `history.sqlite` with `sqlite3 … ".backup …"` into `$T/data`; in the copy only, set `queued`/`running` jobs to `cancelled` and rewrite every `file_path`/`summary_path`/`transcript_path` and `playback.file_path` from `~/Downloads/cobalt` to the test folder (then nothing under ~/Downloads is read, so macOS never asks); link those names to a sample made with `say` + `ffmpeg`; launch with `-queuePaused YES` and send `offline on` first so no network job can start. The test instance shares your UserDefaults, so `defaults export local.video-summarizer` before and `defaults import` after.
 
 `VS_DATA_DIR` keeps the history in the temp folder, and `-downloadDir` the files. `VS_SCRIPTS_DIR` points the app at another copy of the scripts.
 
@@ -857,7 +888,21 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - **Your real library:** after a verified copy (`history-before-video-buddy-20261021-102939.sqlite`, `quick_check ok`) and a settings export, Video Buddy opened it and upgraded it to **v3**: 36 videos, 38 jobs, 1 playlist, 2 resume positions, `quick_check ok`, and the `pre-v3` copy verified (v2, 36 videos, 38 jobs). The old `Video Summarizer.app` was moved to the Trash afterwards (it wasn't in the Dock).
   - Your settings were exported before the tests and imported afterwards; a diff showed them identical.
 
+**3.1 on a copy of your library** (from `history-before-3.1-…`, media = 13.9 s sample clips at the real names, only the files that really exist, offline and queue paused; built into the job's temp folder, so the installed app wasn't touched while testing):
+- **Recognised:** Grouped showed the series as one collection of **35** (33 offline, episodes 8 and 18 missing) with episode 1 under *Individual Videos*.
+- **Check Against YouTube** (the only network step: `yt-dlp --flat-playlist`, queue paused): 36 on YouTube • 36 in your library • 34 on this Mac, **0 ticked**; *Link 1 Library Video* → 36 members, episode 1 first, **0 jobs added** (38 before and after, none queued). With a hand-made order (episode 3 dragged above 2) episode 1 went in between at position 0.5; every existing position was unchanged (diff of `collection_items`: one added row).
+- **Restart:** grouping and order the same.
+- **Modes and filters:** All Videos 36; Video and Offline 34 (episodes 8, 18 left out, numbers kept); Summaries 1 (episode 1); Favorites showed episodes 4 and 9 under the series; search by playlist name → 36, by title "الحلقة الثالثة" → episodes 3, 13, 23, 33 under the series ("4 of 36 videos"), by channel → 36.
+- **Downloads:** *34 of 36 videos downloaded • 2 missing*; episode 1 is one row with its two MP4s and the missing MP3. **Download Missing** offered exactly episodes 8 and 18; asking again said they're already queued, and ⋮ → *Make Available Offline* on episode 8 was refused by the database ("Already in the queue"). The queue was cleared afterwards (nothing ran: offline and paused).
+- **Queue:** one header for the series (2 queued • 34 of 36 offline), rows "Episode 8 • Download video", numbers 1–2.
+- **Player:** Play All → episode 1 with 33 up next (the 34 on this Mac minus the current); ⏭ → episode 2, ⏮ within 3 s → episode 1; ▶ on episode 6 → 5 played before, 28 up next; mini-player "4 of 36 • series".
+- **Finished vs started:** episode 3 played to its real end was saved at 13.93 of 13.93 s → **finished** (✓); episode 4, started automatically and paused at 0.86 s → **not started**; Continue → **episode 4**. Before that (positions from your library) Continue was episode 1, where you'd stopped.
+- **Untouched:** your real `~/Downloads/cobalt` (35 files: sizes, modification times and inodes identical before and after), your real history (36 videos, 38 jobs, 35 members), episode 1's summary (759 characters) in both. Settings: the test only added `libraryLayout`, removed afterwards; `transcribeDownloads` changed while the test ran (from your app; no test command touches it) and was left as you set it.
+- **Your real library:** with nothing running or queued, a second verified copy (`history-before-3.1-install-20261021-142338.sqlite`, quick_check ok: 36 videos, 38 jobs, 35 members, 3 positions), then the app was quit normally, 3.1 installed (161 checks) and reopened: still v3 (no migration), the same counts, nothing queued, quick_check ok, `~/Downloads/cobalt` unchanged.
+- **Screenshots:** `design/screenshots/3.1-*.png`: grouped Library, Home, playlist page, playing from a playlist, Downloads, Queue, Favorites, search, and Library / playlist / Downloads / Home-playing at 1280×800 and 1024×700.
+
 ### Not verified
+- **3.1 by hand:** real clicks on album rows, drag-to-reorder with the mouse, the *Add Videos* sheet and *From Folder…* (its folder match is code-checked only), and pasting a playlist link in *import* mode (default ticks = not in library) were not driven end to end; Check mode was. The preview sheet's native controls render blank in snapshots. **Your real library still has 35 members** until you press *Check Against YouTube → Link 1 Library Video* (I didn't run a YouTube check or change it from here).
 - **3.0 by hand:** real hover, clicks and keyboard focus in the new layout (driven through the test hooks instead), the full-screen and PiP buttons themselves, and the native player controls (they render black in snapshots, like the video picture). A real Summarize run through the new strip wasn't done, to avoid an AI call; it uses the same strip as `showSteps` and the transcription run.
 - **Clicking the + Transcript checkbox.** The tests set it with a launch argument (`-transcribeDownloads YES`); the snapshot shows it.
 - **Real mouse clicks and keyboard shortcuts.** Accessibility scripting is blocked in the terminal that ran the tests.
@@ -903,5 +948,7 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 4. A Raycast command that adds a playlist or a link to the app's queue.
 5. **Chapters** (yt-dlp has them for many videos): a Chapters tab that jumps the player, as in the reference design.
 6. Shuffle and repeat in the mini-player, also in the reference design.
+7. *Just This Video* on a `watch?v=…&list=…` link could join the video to that playlist when you already have it (3.1 doesn't).
+8. Whisper picks the wrong language when a video opens with music (episode 1's transcript is "Music playing."): detect the language from a later part, or let you choose it.
 7. **Whisper picks the wrong language when a video starts with music** (episode 1's transcript is "Music playing." throughout): detect the language from the middle of the file, and let a stuck transcript be redone.
 5. A Raycast command to search the history.

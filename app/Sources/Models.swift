@@ -304,3 +304,26 @@ enum Fmt {
         return Locale(identifier: "en").localizedString(forLanguageCode: code) ?? code
     }
 }
+
+/// How far you got in a video. Position 0 or an unknown length never counts as finished: only reaching the player's
+/// "nearly finished" margin does (the player saves the full length when a file plays to its end).
+enum WatchState: Equatable {
+    case notStarted, partial(Double), finished   // partial: 0…1, or 0 when the length isn't known
+
+    init(position: Double, duration: Double?) {
+        if let d = duration, d > 0, position >= d - WatchState.nearEnd(d) { self = .finished }
+        else if position > 1 { self = .partial(duration.map { $0 > 0 ? min(position / $0, 1) : 0 } ?? 0) }
+        else { self = .notStarted }
+    }
+
+    /// The last 5% of a file, at most 10 s: stopping there counts as finished, and it starts over next time.
+    static func nearEnd(_ duration: Double) -> Double { duration > 0 ? min(10, duration * 0.05) : 0 }
+}
+
+struct Watch: Equatable {
+    let state: WatchState
+    let updated: Date
+}
+
+/// A download of this kind is already waiting or running for the video, so nothing was queued.
+struct AlreadyQueued: Error { let videoID: Int64 }

@@ -66,7 +66,7 @@ struct RootView: View {
         } message: {
             Text("Only the playlist is deleted. Its videos stay in your library, and their files stay on disk.")
         }
-        .confirmationDialog("Make \(model.pendingOfflineBatch?.videoIDs.count ?? 0) videos available offline?",
+        .confirmationDialog("Download \(model.pendingOfflineBatch?.videoIDs.count ?? 0) missing videos?",
                             isPresented: Binding(get: { model.pendingOfflineBatch != nil }, set: { if !$0 { model.pendingOfflineBatch = nil } }),
                             titleVisibility: .visible) {
             Button("Download Videos") { model.confirmOfflineBatch() }
@@ -74,6 +74,7 @@ struct RootView: View {
             Text(offlineBatchMessage)
         }
         .sheet(item: $model.namePrompt) { NamePromptSheet(prompt: $0).environment(model) }
+        .sheet(item: $model.addingVideosTo) { AddVideosSheet(playlist: $0).environment(model) }
     }
 }
 
@@ -82,7 +83,7 @@ extension RootView {
         let batch = model.pendingOfflineBatch
         let time = (batch?.totalDuration ?? 0) > 0 ? " (\(Fmt.watchTime(batch!.totalDuration)) of video)" : ""
         let free = model.freeDiskSpace.map { " \(Fmt.bytes(Int($0))) is free on this Mac." } ?? ""
-        return "They're downloaded one at a time at your Video quality setting\(time).\(free)"
+        return "Only videos that aren't on this Mac are downloaded, one at a time at your Video quality setting\(time). Files you already have are never downloaded again.\(free)"
     }
 }
 
@@ -314,7 +315,7 @@ struct LearningStats: View {
             }
             stat("play.fill", "\(s.videos)", "videos processed")
             stat("doc.text.fill", "\(s.summaries)", "summaries generated")
-            stat("arrow.down", "\(model.store.onMacIDs.count)", "available offline")
+            stat("arrow.down", "\(model.store.videoOnMacIDs.count)", "videos offline")
             stat("clock.fill", Fmt.watchTime(s.watchSeconds), "learning time")
                 .help("The total length of the videos you've summarized")
         }

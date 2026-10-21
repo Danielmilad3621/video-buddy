@@ -214,6 +214,55 @@ struct ChipButton: View {
     }
 }
 
+/// Two or three choices in one capsule (Grouped | All Videos), the selected one raised.
+struct SegmentedToggle: View {
+    @Environment(\.palette) private var p
+    let options: [(title: String, icon: String)]
+    @Binding var selection: String
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.title) { o in
+                let on = selection == o.title
+                Button { selection = o.title } label: {
+                    Label(o.title, systemImage: o.icon)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).frame(height: 26)
+                        .foregroundStyle(on ? p.text : p.secondary)
+                        .background(Capsule().fill(on ? p.hover : .clear))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(p.elevated))
+        .fixedSize()
+    }
+}
+
+/// The red round play button on playlist rows and cards.
+struct PlayCircle: View {
+    @Environment(\.palette) private var p
+    @Environment(\.isEnabled) private var enabled
+    let label: String
+    var size: CGFloat = 34
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "play.fill").font(.system(size: size * 0.4, weight: .bold)).foregroundStyle(.white)
+                .offset(x: size * 0.03)
+                .frame(width: size, height: size)
+                .background(Circle().fill(p.accentGradient))
+                .opacity(enabled ? 1 : 0.4)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
 /// A heading for a library column (Queue, Downloads, Playlists) with room for actions on the right.
 struct SectionHeader<Trailing: View>: View {
     let title: String
@@ -297,6 +346,7 @@ struct StatusPill: View {
     @Environment(\.palette) private var p
     let video: Video
     let onMac: Bool
+    var audioOnly = false   // only an audio file is here: it plays, but it isn't the video offline
     var compact = false     // icon only, for narrow rows (the word stays as the tooltip and for VoiceOver)
     var body: some View {
         let (text, icon, color) = style
@@ -319,7 +369,7 @@ struct StatusPill: View {
         if video.latestStatus == .running { return ("Processing", "hourglass", p.accent) }
         if video.latestStatus == .queued { return ("Queued", "clock.fill", p.accent) }
         if video.hasSummary { return ("Summarized", "sparkles", p.accent) }
-        if onMac { return ("Available Offline", "arrow.down.circle.fill", p.text) }
+        if onMac { return audioOnly ? ("Audio Offline", "headphones", p.text) : ("Available Offline", "arrow.down.circle.fill", p.text) }
         if video.hasVideo || video.hasAudio { return ("File missing", "questionmark.folder", p.secondary) }
         switch video.latestStatus {
         case .cancelled: return ("Cancelled", "xmark.circle", p.secondary)

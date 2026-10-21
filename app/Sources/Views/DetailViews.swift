@@ -27,6 +27,16 @@ struct VideoDetail: View {
                            tint: video.favorite ? p.gold : p.secondary) { model.toggleFavorite(video) }
                     .font(.title3)
             }
+            // its playlist, like an album name under a song: opens the playlist with this episode selected
+            ForEach(model.store.playlistsOf(video.id)) { pl in
+                Button { model.openPlaylist(pl.id, selecting: video.id) } label: {
+                    Label([pl.name, model.store.episode(video.id, in: pl.id).map { "Episode \($0) of \(model.store.members[pl.id]?.count ?? pl.count)" }]
+                            .compactMap { $0 }.joined(separator: " • "), systemImage: "music.note.list")
+                        .font(.callout.weight(.medium)).foregroundStyle(p.accent).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .help("Open this playlist")
+            }
             HStack(spacing: 10) {
                 Avatar(name: video.channel)
                 VStack(alignment: .leading, spacing: 1) {

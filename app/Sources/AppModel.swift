@@ -61,6 +61,8 @@ final class AppModel {
     var namePrompt: NamePrompt?
     var pendingPlaylistDeletion: PlaylistSummary?
     var pendingOfflineBatch: OfflineBatch?
+    /// The Add Videos sheet's playlist.
+    var addingVideosTo: PlaylistSummary?
     /// Entries whose details (description, tags) are being read from the platform right now.
     var loadingDetails: Set<Int64> = []
     private var launched = false
@@ -82,6 +84,7 @@ final class AppModel {
         playback = PlaybackController(db: db)
         jobs.onNotice = { [weak self] in self?.notice = $0 }
         playback.onAdvance = { [weak self] in self?.store.select($0) }
+        playback.onSaved = { [weak self] in Task { await self?.store.reloadWatch() } }
     }
 
     func launch() async {
@@ -164,8 +167,9 @@ final class AppModel {
         readPlaylist(choice.link, kind: choice.kind)
     }
 
-    /// Lists the playlist's videos (a few seconds, nothing downloaded) and opens the preview sheet.
-    func readPlaylist(_ playlist: PlaylistLink, kind: JobKind) {
+    /// Lists the playlist's videos (a few seconds, nothing downloaded) and opens the preview sheet. `checking`: opened
+    /// from Check Against YouTube on that playlist, so nothing is ticked and saving only links library videos.
+    func readPlaylist(_ playlist: PlaylistLink, kind: JobKind, checking: Int64? = nil) {
         guard network.isOnline else { notice = "Reading a playlist needs internet."; return }
         readingPlaylist = true
         notice = "Reading the playlist…"
@@ -175,22 +179,35 @@ final class AppModel {
             switch result {
             case let .success(preview):
                 notice = nil
-                playlistImport = PlaylistImportState(preview: preview, action: downloadAction(kind))
+                playlistImport = PlaylistImportState(preview: preview, action: downloadAction(kind), checking: checking)
             case let .failure(error):
                 notice = "Couldn't read the playlist: \(error.message)"
             }
         }
     }
 
-    /// Queues the chosen videos (one at a time, oldest first) and saves them as one of My Playlists if asked.
-    func importPlaylist(_ entries: [PlaylistEntry], action: JobAction, saveAs name: String?, sourceURL: String) {
+    /// Check Against YouTube: reads the playlist's saved link (metadata only) and opens the sheet in linking mode.
+    func checkPlaylist(_ p: PlaylistSummary) {
+        guard let url = p.sourceURL, let link = PlaylistLink.parse(url) else { return }
+        readPlaylist(link, kind: .video, checking: p.id)
+    }
+
+    /// The playlist a pasted link already belongs to (same YouTube playlist), if any.
+    func playlist(forSource url: String) -> PlaylistSummary? {
+        let list = PlaylistLink.parse(url)?.listID
+        return store.playlists.first { $0.sourceURL.flatMap(PlaylistLink.parse)?.listID == list && list != nil }
+    }
+
+    /// Queues the chosen videos (one at a time, oldest first) and, with a target, saves the playlist: library videos
+    /// that are in the YouTube playlist join it by video id even when not chosen. Nothing is downloaded that isn't chosen.
+    func importPlaylist(_ entries: [PlaylistEntry], all: [PlaylistEntry], action: JobAction, into target: PlaylistTarget?, sourceURL: String) {
         playlistImport = nil
-        guard !entries.isEmpty else { return }
+        guard !entries.isEmpty || target != nil else { return }
         let (format, language) = action == .summarize ? (AppSettings.format.rawValue, AppSettings.language.rawValue) : (nil, nil)
         Task {
             do {
-                let r = try await store.db.importPlaylist(entries, action: action, format: format, language: language,
-                                                          playlistName: name?.nilIfBlank, sourceURL: sourceURL)
+                let r = try await store.db.importPlaylist(entries, all: all, action: action, format: format, language: language,
+                                                          into: target, sourceURL: sourceURL)
                 await store.reload()
                 await jobs.refreshQueue()
                 jobs.pump()
@@ -198,11 +215,23 @@ final class AppModel {
                     section = .playlists
                     store.openPlaylistID = id
                 }
-                notice = "Added \(r.jobs) videos to the queue" + (name?.nilIfBlank.map { " and to the playlist “\($0)”." } ?? ".")
+                let skipped = entries.count - r.jobs
+                let linked = r.playlist == nil ? nil : "\(r.linked) \(r.linked == 1 ? "video" : "videos") linked to the playlist"
+                notice = entries.isEmpty ? "\(linked ?? "Nothing changed"). Nothing was downloaded."
+                    : ([r.jobs > 0 ? "Queued \(r.jobs) \(r.jobs == 1 ? "video" : "videos")" : nil,
+                        skipped > 0 ? "\(skipped) already waiting in the queue" : nil, linked] as [String?])
+                        .compactMap { $0 }.joined(separator: "; ") + "."
             } catch {
                 notice = "Couldn't add the playlist: \(error)"
             }
         }
+    }
+
+    /// Opens a playlist's page (and selects one of its videos when given).
+    func openPlaylist(_ id: Int64, selecting videoID: Int64? = nil) {
+        section = .playlists
+        store.openPlaylistID = id
+        if let videoID { store.select(videoID) }
     }
 
     func createPlaylist(_ name: String, adding videoID: Int64? = nil) {
@@ -239,6 +268,16 @@ final class AppModel {
         }
     }
 
+    func addVideos(_ ids: [Int64], to playlistID: Int64) {
+        addingVideosTo = nil
+        guard !ids.isEmpty else { return }
+        Task {
+            try? await store.db.addToPlaylist(playlistID, videoIDs: ids)
+            await store.reloadPlaylists()
+            notice = "Added \(ids.count) \(ids.count == 1 ? "video" : "videos") to the playlist."
+        }
+    }
+
     func removeFromOpenPlaylist(_ video: Video) {
         guard let id = store.openPlaylistID else { return }
         Task { try? await store.db.removeFromPlaylist(id, videoID: video.id); await store.reloadPlaylists() }
@@ -252,23 +291,35 @@ final class AppModel {
         Task { try? await store.db.reorderPlaylist(id, videoIDs: ids); await store.reloadPlaylists() }
     }
 
-    /// Plays the open playlist in order in the detail panel, skipping videos that aren't on this Mac.
-    func playAll() {
-        let videos = store.playlistVideos
-        let items = videos.compactMap { v in store.playable(for: v.id).map { (videoID: v.id, path: $0.path) } }
-        guard let first = items.first else {
-            notice = "None of these videos are on this Mac yet. Use Make All Available Offline first."
+    /// Plays a playlist in order from its first episode on this Mac (Play All), skipping ones that aren't here.
+    func playAll(_ playlistID: Int64? = nil) {
+        guard let id = playlistID ?? store.openPlaylistID else { return }
+        let items = store.playableMembers(id)
+        guard let first = items.first, let v = store.video(first.videoID) else {
+            notice = "None of these videos are on this Mac yet. Use Download Missing first."
             return
         }
-        store.select(first.videoID)
-        playback.play(path: first.path, videoID: first.videoID, upNext: Array(items.dropFirst()))
-        if items.count < videos.count { notice = "Playing \(items.count) of \(videos.count): the others aren't on this Mac yet." }
+        play(v, in: id)
+        let total = store.members[id]?.count ?? 0
+        if items.count < total { notice = "Playing \(items.count) of \(total): the others aren't on this Mac yet." }
     }
 
-    /// Asks first (with the free disk space), then queues a video download for every entry that isn't on this Mac.
-    func askMakeAllAvailableOffline() {
-        let missing = store.playlistVideos.filter { $0.url != nil && !store.hasLocalVideo($0.id) }
-        guard !missing.isEmpty else { notice = "Everything in this playlist is already on this Mac."; return }
+    /// Continue: the episode you stopped in, or the next one after the last you finished (else Play All).
+    func continuePlaylist(_ playlistID: Int64) {
+        guard let id = store.resumeTarget(playlistID), let v = store.video(id) else { playAll(playlistID); return }
+        play(v, in: playlistID)
+    }
+
+    /// Asks first (with the size and free disk space), then queues a video download for every member without a video
+    /// file on this Mac. Ones already waiting or downloading are left out (and the database refuses duplicates anyway).
+    func askDownloadMissing(_ playlistID: Int64? = nil) {
+        guard let id = playlistID ?? store.openPlaylistID else { return }
+        let busy = Set(jobs.queue.filter { $0.action.kind == .video }.map(\.videoID) + [jobs.current?.videoID].compactMap { $0 })
+        let missing = store.memberVideos(id).filter { $0.url != nil && !store.hasLocalVideo($0.id) && !busy.contains($0.id) }
+        guard !missing.isEmpty else {
+            notice = busy.isEmpty ? "Every video in this playlist is already on this Mac." : "The missing videos are already in the queue."
+            return
+        }
         pendingOfflineBatch = OfflineBatch(videoIDs: missing.map(\.id), totalDuration: missing.compactMap(\.duration).reduce(0, +))
     }
 
@@ -276,11 +327,15 @@ final class AppModel {
         guard let batch = pendingOfflineBatch else { return }
         pendingOfflineBatch = nil
         Task {
-            for id in batch.videoIDs { _ = try? await store.db.enqueue(videoID: id, action: .video) }
+            var queued = 0
+            for id in batch.videoIDs where (try? await store.db.enqueue(videoID: id, action: .video)) != nil { queued += 1 }
             await store.reload()
             await jobs.refreshQueue()
             jobs.pump()
-            notice = "Queued \(batch.videoIDs.count) video downloads" + (network.isOnline ? "." : ": they start when you're back online.")
+            let skipped = batch.videoIDs.count - queued
+            notice = "Queued \(queued) video \(queued == 1 ? "download" : "downloads")"
+                + (skipped > 0 ? " (\(skipped) already in the queue)" : "")
+                + (network.isOnline || queued == 0 ? "." : ": they start when you're back online.")
         }
     }
 
@@ -326,10 +381,19 @@ final class AppModel {
 
     // MARK: playback
 
-    func play(_ v: Video) {
+    /// Plays a video; in a playlist (the one given, else the first it's in) Next, Previous and Up Next follow that
+    /// playlist. A video in no playlist plays on its own, as before.
+    func play(_ v: Video, in playlistID: Int64? = nil) {
         guard let file = store.playable(for: v.id) else { return }
         store.select(v.id)
-        playback.play(path: file.path, videoID: v.id)
+        let items = (playlistID ?? store.playlistsOf(v.id).first?.id).map { store.playableMembers($0) } ?? []
+        guard let pid = playlistID ?? store.playlistsOf(v.id).first?.id, let i = items.firstIndex(where: { $0.videoID == v.id }),
+              let p = store.playlists.first(where: { $0.id == pid }) else {
+            playback.play(path: file.path, videoID: v.id)
+            return
+        }
+        playback.play(path: items[i].path, videoID: v.id, upNext: Array(items[(i + 1)...]), played: Array(items[..<i]),
+                      context: PlaylistContext(id: pid, name: p.name, count: store.members[pid]?.count ?? 0))
     }
 
     /// Jumps the built-in player to a transcript line, starting playback if needed.
@@ -480,6 +544,7 @@ struct PlaylistImportState: Identifiable {
     let id = UUID()
     let preview: PlaylistPreview
     let action: JobAction
+    var checking: Int64? = nil
 }
 
 enum NamePrompt: Identifiable {

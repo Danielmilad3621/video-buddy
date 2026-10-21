@@ -126,7 +126,7 @@ actor Database {
                                         info: VideoInfo(thumbnail: ref.thumbnailFallback))
             guard let job = try insertJob(video, NewJob(kind: action.kind, status: .queued, source: .app, action: action, started: at,
                                                         summaryLanguage: language, summaryFormat: format)) else {
-                throw SQLiteError(message: "could not queue job")
+                throw AlreadyQueued(videoID: video)
             }
             return (video, job)
         }
@@ -138,7 +138,7 @@ actor Database {
         try db.transaction {
             guard let job = try insertJob(videoID, NewJob(kind: action.kind, status: .queued, source: .app, action: action, started: at,
                                                           filePath: filePath, summaryLanguage: language, summaryFormat: format)) else {
-                throw SQLiteError(message: "could not queue job")
+                throw AlreadyQueued(videoID: videoID)
             }
             return job
         }
@@ -242,18 +242,21 @@ actor Database {
         Set(try db.query("SELECT collection_id FROM collection_items WHERE video_id=?", [videoID]).compactMap { $0.int64("collection_id") })
     }
 
-    /// Queues the chosen playlist entries in one transaction: an entry per video (existing ones are reused), a queued
-    /// job each, and optionally a new playlist with them in the original order.
-    func importPlaylist(_ entries: [PlaylistEntry], action: JobAction, format: String?, language: String?,
-                        playlistName: String?, sourceURL: String?, at: Date = Date()) throws -> (playlist: Int64?, jobs: Int) {
+    /// Every playlist membership, each playlist's videos in their saved order.
+    func memberships() throws -> [(playlist: Int64, video: Int64)] {
+        try db.query("SELECT collection_id, video_id FROM collection_items ORDER BY collection_id, position, added")
+            .compactMap { r in r.int64("collection_id").flatMap { c in r.int64("video_id").map { (c, $0) } } }
+    }
+
+    /// Queues the chosen playlist entries in one transaction (an entry per video, existing ones reused; a download
+    /// already waiting or running is not queued twice) and, with a target, saves the playlist: every entry of the
+    /// YouTube playlist that's in the library joins it by video id, ticked or not. Members it already has keep their
+    /// positions; new ones are slotted in next to their YouTube neighbours.
+    func importPlaylist(_ chosen: [PlaylistEntry], all: [PlaylistEntry]? = nil, action: JobAction, format: String?, language: String?,
+                        into target: PlaylistTarget?, sourceURL: String?, at: Date = Date()) throws -> PlaylistImportResult {
         try db.transaction {
-            var playlist: Int64?
-            if let playlistName {
-                try db.run("INSERT INTO collections(name, source_url, created) VALUES(?, ?, ?)", [playlistName, sourceURL, at])
-                playlist = db.lastInsertRowID
-            }
             var jobs = 0
-            for (i, e) in entries.enumerated() {
+            for (i, e) in chosen.enumerated() {
                 let video = try upsertVideo(key: "youtube:\(e.id)", url: e.url, platform: "YouTube", at: at,
                                             info: VideoInfo(title: e.title, channel: e.channel,
                                                             thumbnail: "https://i.ytimg.com/vi/\(e.id)/mqdefault.jpg"))
@@ -261,12 +264,35 @@ actor Database {
                 if try insertJob(video, NewJob(kind: action.kind, status: .queued, source: .app, action: action,
                                                started: at.addingTimeInterval(Double(i) / 1000),
                                                summaryLanguage: language, summaryFormat: format)) != nil { jobs += 1 }
-                if let playlist {
-                    try db.run("INSERT INTO collection_items(collection_id, video_id, position, added) VALUES(?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                               [playlist, video, Double(i), at])
-                }
             }
-            return (playlist, jobs)
+            guard let target else { return PlaylistImportResult(playlist: nil, jobs: jobs, linked: 0) }
+            let playlist: Int64
+            switch target {
+            case let .new(name):
+                try db.run("INSERT INTO collections(name, source_url, created) VALUES(?, ?, ?)", [name, sourceURL, at])
+                playlist = db.lastInsertRowID
+            case let .existing(id):
+                playlist = id
+                try db.run("UPDATE collections SET source_url = coalesce(source_url, ?) WHERE id=?", [sourceURL, id])
+            }
+            var youtube: [Int64] = []
+            for e in (all ?? chosen).sorted(by: { $0.index < $1.index }) {
+                if let id = try db.query("SELECT id FROM videos WHERE key=?", ["youtube:\(e.id)"]).first?.int64("id") { youtube.append(id) }
+            }
+            var position: [Int64: Double] = [:]
+            var current: [Int64] = []
+            for r in try db.query("SELECT video_id, position FROM collection_items WHERE collection_id=? ORDER BY position, added", [playlist]) {
+                guard let v = r.int64("video_id") else { continue }
+                current.append(v)
+                position[v] = r.double("position") ?? 0
+            }
+            var linked = 0
+            for (id, p) in PlaylistOrder.newPositions(PlaylistOrder.merge(current: current, youtube: youtube), existing: position) {
+                linked += try db.run("""
+                    INSERT INTO collection_items(collection_id, video_id, position, added) VALUES(?, ?, ?, ?) ON CONFLICT DO NOTHING
+                    """, [playlist, id, p, at])
+            }
+            return PlaylistImportResult(playlist: playlist, jobs: jobs, linked: linked)
         }
     }
 
@@ -291,6 +317,21 @@ actor Database {
             WHERE p.position > 1 AND (p.duration IS NULL OR p.position < p.duration - min(10, p.duration * 0.05))
             GROUP BY j.video_id ORDER BY latest DESC LIMIT ?
             """, [limit]).compactMap { r in r.int64("video_id").map { ($0, r.double("position") ?? 0, r.double("duration")) } }
+    }
+
+    /// How far you got in each video: its most recently saved position (any of its files).
+    func watchStates() throws -> [Int64: Watch] {
+        var out: [Int64: Watch] = [:]
+        for r in try db.query("""
+            SELECT j.video_id, p.position, p.duration, max(p.updated) AS latest FROM playback p
+            JOIN jobs j ON j.file_path = p.file_path AND j.status = 'succeeded'
+            GROUP BY j.video_id
+            """) {
+            guard let v = r.int64("video_id") else { continue }
+            out[v] = Watch(state: WatchState(position: r.double("position") ?? 0, duration: r.double("duration")),
+                           updated: r.date("latest") ?? .distantPast)
+        }
+        return out
     }
 
     func setThumbnailPath(_ videoID: Int64, _ path: String?) throws {
@@ -447,6 +488,8 @@ actor Database {
               WHERE (?1 IS NULL OR v.id = ?1)
                 AND (?3 IS NULL OR v.id IN (SELECT video_id FROM collection_items WHERE collection_id = ?3))
                 AND (?2 = '' OR v.title LIKE ?2 ESCAPE '\\' OR v.channel LIKE ?2 ESCAPE '\\' OR v.url LIKE ?2 ESCAPE '\\'
+                     OR EXISTS(SELECT 1 FROM collection_items ci JOIN collections c ON c.id = ci.collection_id
+                               WHERE ci.video_id = v.id AND c.name LIKE ?2 ESCAPE '\\')
                      OR EXISTS(SELECT 1 FROM jobs j WHERE j.video_id=v.id
                                AND (j.summary LIKE ?2 ESCAPE '\\' OR j.transcript LIKE ?2 ESCAPE '\\')))
             ) WHERE \(where_) ORDER BY \(order)\(limit.map { " LIMIT \($0)" } ?? "")
@@ -585,8 +628,12 @@ actor Database {
         return id
     }
 
-    /// Returns nil only when the event id was already recorded.
+    /// Returns nil when the event id was already recorded, or for a download (audio or video) of a video that already
+    /// has one of the same kind waiting or running, so nothing downloads twice.
     private func insertJob(_ videoID: Int64, _ j: NewJob) throws -> Int64? {
+        if j.status == .queued, j.kind == .audio || j.kind == .video, try !db.query("""
+            SELECT 1 FROM jobs WHERE video_id=? AND kind=? AND status IN ('queued', 'running') LIMIT 1
+            """, [videoID, j.kind.rawValue]).isEmpty { return nil }
         let changed = try db.run("""
             INSERT INTO jobs(video_id, kind, action, status, source, event_id, started, finished, file_path, file_size,
               summary_path, transcript_path, summary, summary_language, summary_format, transcript,

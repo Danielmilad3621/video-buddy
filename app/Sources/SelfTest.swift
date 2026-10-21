@@ -38,6 +38,7 @@ enum SelfTest {
         try await upgrade(root.appendingPathComponent("upgrade"))
         try await queue(root.appendingPathComponent("queue"))
         try await playlists(root.appendingPathComponent("playlists"))
+        try await grouping(root.appendingPathComponent("grouping"))
     }
 
     // MARK: pure parsing
@@ -370,7 +371,7 @@ enum SelfTest {
 
         let db = try Database(directory: dir)
         let existing = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
-        let r = try await db.importPlaylist(preview!.available, action: .video, format: nil, language: nil, playlistName: "Trip", sourceURL: "u")
+        let r = try await db.importPlaylist(preview!.available, action: .video, format: nil, language: nil, into: .new("Trip"), sourceURL: "u")
         check(r.jobs == 2 && r.playlist != nil, "playlist import queues each video")
         check(try await db.count("videos") == 2, "an entry already in history is reused, not duplicated")
         let order = try await db.videos(playlist: r.playlist!).map(\.title)
@@ -397,6 +398,109 @@ enum SelfTest {
         try await db.deletePlaylist(r.playlist!)
         let kept = try await db.video(existing.video), remaining = try await db.playlists()
         check(kept != nil && remaining.count == 1, "deleting a playlist keeps its videos")
+    }
+
+    /// 3.1: playlists as collections. An already-downloaded episode joins by video id without downloading anything,
+    /// hand-made order survives, nothing downloads twice, grouping follows filters and search, and Continue knows
+    /// finished from not started.
+    private static func grouping(_ dir: URL) async throws {
+        let db = try Database(directory: dir)
+        let ids = (1...5).map { String(format: "EPISODE%04d", $0) }
+        let all = ids.enumerated().map { i, id in
+            PlaylistEntry(id: id, index: i, title: "Episode \(i + 1)", duration: 100, url: "https://www.youtube.com/watch?v=\(id)",
+                          channel: "C", available: true)
+        }
+        let source = "https://www.youtube.com/playlist?list=PLtest000001"
+        // episode 1 was downloaded on its own before the playlist existed
+        let ep1 = try await db.recordCompleted(key: "youtube:\(ids[0])", url: all[0].url, platform: "YouTube", info: VideoInfo(title: "Episode 1"),
+                                               job: NewJob(kind: .video, status: .succeeded, source: .app, finished: Date(), filePath: "/tmp/ep1.mp4"))!.video
+        let made = try await db.importPlaylist(Array(all[1...]), all: all, action: .video, format: nil, language: nil,
+                                               into: .new("Series"), sourceURL: source)
+        let series = made.playlist!
+        check(made.jobs == 4 && made.linked == 5, "a new playlist links every library video of it, queues only the chosen: \(made)")
+        try await db.removeFromPlaylist(series, videoID: ep1)        // the 3.0 state: episode 1 left out
+        let again = try await db.importPlaylist(Array(all[1...]), action: .video, format: nil, language: nil,
+                                                into: .existing(series), sourceURL: source)
+        check(again.jobs == 0 && again.linked == 0, "re-importing doesn't queue downloads that are already waiting: \(again)")
+        check(try await db.playlists().count == 1, "re-importing into the playlist doesn't create another")
+        let byKey = Dictionary(try await db.videos().map { ($0.key, $0.id) }, uniquingKeysWith: { a, _ in a })
+        let (e2, e3, e4, e5) = (byKey["youtube:\(ids[1])"]!, byKey["youtube:\(ids[2])"]!, byKey["youtube:\(ids[3])"]!, byKey["youtube:\(ids[4])"]!)
+        check(try await db.videos(playlist: series).map(\.id) == [e2, e3, e4, e5], "the playlist keeps YouTube's order")
+        try await db.reorderPlaylist(series, videoIDs: [e3, e2, e4, e5])      // dragged by hand
+        let queuedBefore = try await db.queuedJobs().count, jobsBefore = try await db.count("jobs")
+        let checked = try await db.importPlaylist([], all: all, action: .video, format: nil, language: nil,
+                                                  into: .existing(series), sourceURL: source)
+        check(checked.jobs == 0 && checked.linked == 1, "Check Against YouTube links the downloaded episode and queues nothing: \(checked)")
+        let (queuedAfter, jobsAfter) = (try await db.queuedJobs().count, try await db.count("jobs"))
+        check(queuedAfter == queuedBefore && jobsAfter == jobsBefore, "linking adds no jobs")
+        check(try await db.videos(playlist: series).map(\.id) == [e3, ep1, e2, e4, e5],
+              "the hand-made order stays; episode 1 goes right before episode 2")
+        check(try await db.count("videos") == 5, "one record per video")
+
+        check(PlaylistOrder.merge(current: [], youtube: [1, 2, 3]) == [1, 2, 3], "a new playlist takes YouTube's order")
+        check(PlaylistOrder.merge(current: [2], youtube: [1, 2, 3]) == [1, 2, 3], "missing ones slot in around existing members")
+        check(PlaylistOrder.merge(current: [3, 1, 9], youtube: [1, 2, 3]) == [3, 1, 2, 9], "existing members never move")
+        let placed = PlaylistOrder.newPositions([1, 2, 3], existing: [2: 0])
+        check(placed.map(\.0) == [1, 3] && placed.map(\.1) == [-1, 1], "new positions sit between neighbours: \(placed)")
+
+        // nothing downloads twice: the same video and media type while one waits or runs
+        let ep1Video = try await db.enqueue(videoID: ep1, action: .video)
+        var refused = false
+        do { _ = try await db.enqueue(videoID: ep1, action: .videoTranscript) } catch is AlreadyQueued { refused = true }
+        check(refused, "a second video download of the same video is refused while one is waiting")
+        check((try? await db.enqueue(videoID: ep1, action: .audio)) != nil, "audio of the same video is a different download")
+        _ = try await db.markRunning(ep1Video)
+        refused = false
+        do { _ = try await db.enqueue(VideoRef.parse(all[0].url)!, action: .video) } catch is AlreadyQueued { refused = true }
+        check(refused, "nor while it's downloading")
+
+        // many-to-many, grouping and search
+        let other = try await db.createPlaylist("Road trip")
+        try await db.addToPlaylist(other, videoIDs: [e3])
+        let solo = try await db.enqueue(VideoRef.parse("https://youtu.be/SOLOVIDEO01")!, action: .audio).video
+        let members = Dictionary(grouping: try await db.memberships(), by: \.playlist).mapValues { $0.map(\.video) }
+        let lists = try await db.playlists()
+        let g = Grouping.make(try await db.videos(), playlists: lists, members: members)
+        check(g.groups.map(\.playlist.name) == ["Road trip", "Series"] && g.groups.last?.videos.map(\.id) == [e3, ep1, e2, e4, e5],
+              "grouped: playlists in order, episodes in playlist order")
+        check(g.groups.first?.videos.map(\.id) == [e3] && g.individual.map(\.id) == [solo], "a video in two playlists shows in both; others are individual")
+        check(try await db.count("videos") == 6, "…and is still stored once")
+        try await db.setFavorite(e4, true); try await db.setFavorite(e2, true)
+        let fav = Grouping.make(try await db.videos(filter: .favorites), playlists: lists, members: members)
+        check(fav.groups.map(\.playlist.name) == ["Series"] && fav.groups[0].videos.map(\.id) == [e2, e4] && fav.individual.isEmpty,
+              "favorites stay under their playlist, in its order; empty playlists drop out")
+        let found = try await db.videos(search: "series").map(\.id)
+        check(Set(found) == Set([e3, ep1, e2, e4, e5]), "searching a playlist name finds its videos")
+        let runs = Grouping.runs(["a", "a", "b", "x", "a"]) { $0 == "x" ? nil : $0 == "a" ? 1 : 2 }
+        check(runs.map(\.playlist) == [1, 2, nil, 1] && runs[0].items.map(\.number) == [1, 2] && runs[3].items.map(\.number) == [5],
+              "queue headers group consecutive jobs and keep their FIFO numbers")
+
+        // finished vs not started: position 0 or an unknown length is never "finished"
+        check(WatchState(position: 0, duration: 100) == .notStarted, "position 0 is not finished")
+        check(WatchState(position: 100, duration: nil) == .partial(0), "an unknown length is never finished")
+        check(WatchState(position: 100, duration: 100) == .finished && WatchState(position: 96, duration: 100) == .finished,
+              "the end, or the nearly-finished margin, is finished")
+        check(WatchState(position: 50, duration: 100) == .partial(0.5), "part-way is part-watched")
+        let t = Date()
+        let w = { (s: WatchState, ago: Double) in Watch(state: s, updated: t.addingTimeInterval(-ago)) }
+        let order: [Int64] = [1, 2, 3, 4]
+        check(PlaylistOrder.resume(order: order, watch: [1: w(.finished, 0)], playable: [1, 2, 3, 4]) == 2, "after finishing 1, Continue is 2")
+        check(PlaylistOrder.resume(order: order, watch: [1: w(.partial(0.4), 0)], playable: [1, 2]) == 1, "part-way resumes the same one")
+        check(PlaylistOrder.resume(order: order, watch: [1: w(.notStarted, 0)], playable: [1, 2]) == 1, "position 0 doesn't skip an episode")
+        check(PlaylistOrder.resume(order: order, watch: [2: w(.finished, 0), 3: w(.finished, 50)], playable: [1, 2, 3, 4]) == 4,
+              "skips ones already finished")
+        check(PlaylistOrder.resume(order: order, watch: [1: w(.finished, 0)], playable: [1, 3]) == 3, "skips ones not on this Mac")
+        check(PlaylistOrder.resume(order: order, watch: [:], playable: [1]) == nil, "never played: Play All instead")
+        try await db.savePosition("/tmp/ep1.mp4", position: 0, duration: 100)
+        check(try await db.watchStates()[ep1]?.state == .notStarted, "a saved 0 reads as not started")
+        try await db.savePosition("/tmp/ep1.mp4", position: 100, duration: 100)
+        check(try await db.watchStates()[ep1]?.state == .finished, "the player's end-of-file save reads as finished")
+        check(try await db.continueWatching().isEmpty, "finished episodes aren't in Continue watching")
+
+        let jobs = try await db.count("jobs")
+        try await db.deletePlaylist(series)
+        let (videosLeft, jobsLeft) = (try await db.count("videos"), try await db.count("jobs"))
+        check(videosLeft == 6 && jobsLeft == jobs, "deleting a playlist keeps its videos and their jobs")
     }
 
     private static func importer(_ dir: URL) async throws {

@@ -280,7 +280,7 @@ struct QueueColumn: View {
                     group("Running now") {
                         if let current = jobs.current {
                             VStack(alignment: .leading, spacing: 10) {
-                                row(current.videoID, title: current.title, detail: current.action.label) {
+                                row(current.videoID, title: current.title, detail: detail(current.videoID, current.action.label)) {
                                     Button("Cancel") { jobs.cancel() }.buttonStyle(OutlineButtonStyle(height: 28))
                                 }
                                 StageTrack(steps: jobs.steps)
@@ -294,9 +294,17 @@ struct QueueColumn: View {
                         if jobs.queue.isEmpty {
                             Text("Nothing waiting.").font(.callout).foregroundStyle(p.secondary)
                         }
-                        ForEach(Array(jobs.queue.enumerated()), id: \.element.id) { i, item in
-                            row(item.videoID, title: item.title, detail: item.action.label, position: i + 1) {
-                                IconButton(icon: "xmark.circle.fill", label: "Remove from the queue") { jobs.removeFromQueue(item.id) }
+                        // consecutive jobs from one playlist share a header; the numbers are the real FIFO order
+                        let runs = Grouping.runs(jobs.queue) { model.store.playlistsOf($0.videoID).first?.id }
+                        ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let pid = run.playlist { playlistHeader(pid) }
+                                ForEach(run.items, id: \.item.id) { n, item in
+                                    row(item.videoID, title: item.title, detail: detail(item.videoID, item.action.label), position: n) {
+                                        IconButton(icon: "xmark.circle.fill", label: "Remove from the queue") { jobs.removeFromQueue(item.id) }
+                                    }
+                                    .padding(.leading, run.playlist == nil ? 0 : 8)
+                                }
                             }
                         }
                     }
@@ -304,7 +312,7 @@ struct QueueColumn: View {
                         group("Failed • \(failed.count)") {
                             ForEach(failed) { f in
                                 row(f.job.videoID, title: f.title,
-                                    detail: f.job.action.label + (f.job.status == .interrupted ? " • interrupted" : " • failed \(Fmt.date(f.job.finished ?? f.job.started))")) {
+                                    detail: detail(f.job.videoID, f.job.action.label + (f.job.status == .interrupted ? " • interrupted" : " • failed \(Fmt.date(f.job.finished ?? f.job.started))"))) {
                                     Button { model.retry(f.retry) } label: { Label("Retry", systemImage: "arrow.clockwise") }
                                         .buttonStyle(SecondaryButtonStyle(height: 28, font: .caption.weight(.semibold)))
                                 }
@@ -317,6 +325,32 @@ struct QueueColumn: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// "Episode 4 • Download video" for a playlist video, else just the action.
+    private func detail(_ videoID: Int64, _ text: String) -> String {
+        guard let pl = model.store.playlistsOf(videoID).first, let n = model.store.episode(videoID, in: pl.id) else { return text }
+        return "Episode \(n) • \(text)"
+    }
+
+    /// A playlist's name with its job counts, straight from the job states.
+    private func playlistHeader(_ id: Int64) -> some View {
+        let store = model.store, jobs = model.jobs
+        let inIt = Set(store.members[id] ?? [])
+        let running = jobs.current.map { inIt.contains($0.videoID) } == true
+        let waiting = jobs.queue.filter { inIt.contains($0.videoID) }.count
+        let failed = store.failed.filter { inIt.contains($0.job.videoID) }.count
+        let downloading = running && [.audio, .video].contains(jobs.current!.action.kind)
+        return HStack(spacing: 6) {
+            Image(systemName: "music.note.list").foregroundStyle(p.accent)
+            Text(store.playlists.first { $0.id == id }?.name ?? "Playlist").font(.caption.weight(.semibold)).lineLimit(1)
+            Text(([running ? (downloading ? "1 downloading" : "1 running") : nil, "\(waiting) queued",
+                   failed > 0 ? "\(failed) failed" : nil, "\(store.offlineCount(id)) of \(inIt.count) offline"] as [String?])
+                .compactMap { $0 }.joined(separator: " • "))
+                .font(.caption).foregroundStyle(p.secondary).lineLimit(1)
+        }
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

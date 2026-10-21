@@ -73,6 +73,9 @@ final class JobController {
                 await store.reload()
                 store.select(ids.video)
                 await queued(action)
+            } catch let e as AlreadyQueued {
+                store.select(e.videoID)
+                onNotice("Already in the queue: this \(action.kind.rawValue) is waiting or downloading.")
             } catch {
                 banner = .failure(title: "Couldn't add to the queue", detail: "\(error)", retry: nil)
             }
@@ -88,6 +91,8 @@ final class JobController {
                                          format: format?.rawValue, language: language?.rawValue)
                 await store.reload()
                 await queued(action)
+            } catch is AlreadyQueued {
+                onNotice("Already in the queue: this \(action.kind.rawValue) is waiting or downloading.")
             } catch {
                 banner = .failure(title: "Couldn't add to the queue", detail: "\(error)", retry: nil)
             }

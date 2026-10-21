@@ -119,7 +119,13 @@ struct MiniPlayerBar: View {
                         .frame(width: 64, height: 36)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(video?.displayTitle ?? "Playing").font(.callout.weight(.semibold)).lineLimit(1)
-                        Text(video?.displayChannel ?? "").font(.caption).foregroundStyle(p.secondary).lineLimit(1)
+                        // from a playlist: which one and where you are in it
+                        if let c = playback.context, let id = playback.currentVideoID {
+                            Text([model.store.episode(id, in: c.id).map { "\($0) of \(c.count)" }, c.name].compactMap { $0 }.joined(separator: " • "))
+                                .font(.caption).foregroundStyle(p.secondary).lineLimit(1)
+                        } else {
+                            Text(video?.displayChannel ?? "").font(.caption).foregroundStyle(p.secondary).lineLimit(1)
+                        }
                     }
                 }
                 .frame(width: 250, alignment: .leading)
@@ -188,6 +194,7 @@ struct UpNextList: View {
         let items = model.playback.upNext
         VStack(alignment: .leading, spacing: 8) {
             Text("Up Next").font(.headline)
+            if let c = model.playback.context { Text(c.name).font(.callout).foregroundStyle(p.secondary).lineLimit(2) }
             if items.isEmpty {
                 Text("Nothing queued to play. Use Play All in one of My Playlists.").font(.callout).foregroundStyle(p.secondary)
             } else {
