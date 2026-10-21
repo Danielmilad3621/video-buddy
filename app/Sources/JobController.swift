@@ -204,8 +204,8 @@ final class JobController {
         let kind = job.action.kind
         steps = kind == .summary
             ? [JobStep(id: 0, label: "Download audio"), JobStep(id: 1, label: "Transcribe on-device"),
-               JobStep(id: 2, label: "Generate AI summary"), JobStep(id: 3, label: "Save to history")]
-            : [JobStep(id: 0, label: kind == .audio ? "Download audio" : "Download video"), JobStep(id: 1, label: "Save to history")]
+               JobStep(id: 2, label: "Generate AI summary"), JobStep(id: 3, label: "Save to library")]
+            : [JobStep(id: 0, label: kind == .audio ? "Download audio" : "Download video"), JobStep(id: 1, label: "Save to library")]
         steps[0].state = .running
         banner = .running(kind == .summary ? "Summarizing \(video.displayTitle)…" : "Downloading \(video.displayTitle)…")
         let retry = RetryInfo(action: job.action, videoID: video.id)
@@ -316,7 +316,7 @@ final class JobController {
 
     /// On-device transcript of a local file. Needs no internet.
     private func runTranscribe(_ job: Job, _ video: Video) async {
-        steps = [JobStep(id: 0, label: "Transcribe on this Mac", state: .running), JobStep(id: 1, label: "Save to history")]
+        steps = [JobStep(id: 0, label: "Transcribe on this Mac", state: .running), JobStep(id: 1, label: "Save to library")]
         banner = .running("Transcribing \(video.displayTitle) on this Mac…")
         let ids = (video: video.id, job: job.id)
         let media = job.filePath ?? store.mediaFiles(for: video.id).first(where: \.exists)?.path
@@ -363,7 +363,7 @@ final class JobController {
         let format = SummaryFormat(rawValue: job.summaryFormat ?? "") ?? AppSettings.format
         let language = SummaryLanguage(rawValue: job.summaryLanguage ?? "") ?? AppSettings.language
         steps = [JobStep(id: 0, label: "Generate AI summary (\(format.rawValue), \(language.rawValue))", state: .running),
-                 JobStep(id: 1, label: "Save to history")]
+                 JobStep(id: 1, label: "Save to library")]
         banner = .running("Summarizing the saved transcript of \(video.displayTitle)…")
         let ids = (video: video.id, job: job.id)
         let retry = RetryInfo(action: .resummarize, videoID: video.id)

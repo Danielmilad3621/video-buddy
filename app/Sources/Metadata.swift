@@ -108,11 +108,13 @@ private struct YTDLPInfo: Decodable {
     let upload_date: String?
     let thumbnail: String?
     let extractor_key: String?
+    let description: String?
+    let tags: [String]?
 
     var info: VideoInfo {
         let platform = extractor_key.map { ["Youtube": "YouTube", "Soundcloud": "SoundCloud", "Twitter": "X"][$0] ?? $0 }
         return VideoInfo(title: title, channel: channel ?? uploader, followers: channel_follower_count, thumbnail: thumbnail,
-                         duration: duration, uploadDate: upload_date, platform: platform)
+                         duration: duration, uploadDate: upload_date, platform: platform, description: description, tags: tags)
     }
 }
 

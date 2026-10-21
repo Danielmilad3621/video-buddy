@@ -21,16 +21,13 @@ struct PlaylistListCard: View {
     var body: some View {
         let store = model.store
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "music.note.list").font(.title2)
-                Text("My Playlists").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-                Spacer()
+            SectionHeader(title: "My Playlists", icon: "music.note.list") {
                 Button { model.namePrompt = .new(adding: nil) } label: { Label("New Playlist", systemImage: "plus") }
-                    .buttonStyle(SecondaryButtonStyle(height: 34, font: .callout))
+                    .buttonStyle(SecondaryButtonStyle(height: 32, font: .callout))
             }
             if store.playlists.isEmpty {
                 EmptyState(icon: "music.note.list", title: "No playlists yet",
-                           message: "Paste a YouTube playlist link above, or use ⋮ → Add to Playlist on any video in your history.")
+                           message: "Paste a YouTube playlist link above, or use ⋮ → Add to Playlist on any video in your library.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -47,18 +44,15 @@ struct PlaylistListCard: View {
                 }
             }
         }
-        .cardStyle()
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func row(_ playlist: PlaylistSummary) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: playlist.sourceURL != nil ? "play.rectangle.on.rectangle" : "music.note.list")
-                .font(.title3).foregroundStyle(p.blue)
-                .frame(width: 44, height: 44)
-                .background(RoundedRectangle(cornerRadius: 11).fill(p.blue.opacity(0.15)))
+            Thumbnail(url: playlist.coverURL, localPath: playlist.coverPath, cornerRadius: 9, icon: "music.note.list")
+                .frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 3) {
-                Text(playlist.name).font(.headline).lineLimit(1)
+                Text(playlist.name).font(.headline).lineLimit(2)
                 Text(([("\(playlist.count) videos")] + [totalTime(playlist.totalDuration)].compactMap { $0 }
                       + (playlist.sourceURL != nil ? ["from YouTube"] : [])).joined(separator: " • "))
                     .font(.callout).foregroundStyle(p.secondary)
@@ -66,8 +60,8 @@ struct PlaylistListCard: View {
             Spacer()
             Image(systemName: "chevron.right").foregroundStyle(p.secondary)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(p.elevated.opacity(0.35)))
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(p.card))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
@@ -85,7 +79,7 @@ struct PlaylistDetailCard: View {
             HStack(spacing: 8) {
                 IconButton(icon: "chevron.left", label: "All playlists", tint: p.text) { store.openPlaylistID = nil }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.name).font(.title2.weight(.semibold)).lineLimit(1).accessibilityAddTraits(.isHeader)
+                    Text(playlist.name).font(.title3.weight(.semibold)).lineLimit(2).accessibilityAddTraits(.isHeader)
                     Text((["\(playlist.count) videos", "\(onMac) on this Mac"] + [totalTime(playlist.totalDuration)].compactMap { $0 })
                         .joined(separator: " • ")).font(.callout).foregroundStyle(p.secondary)
                 }
@@ -101,20 +95,21 @@ struct PlaylistDetailCard: View {
             }
             HStack(spacing: 10) {
                 Button { model.playAll() } label: { Label("Play All", systemImage: "play.fill") }
-                    .buttonStyle(PrimaryButtonStyle(height: 36))
+                    .buttonStyle(PrimaryButtonStyle(height: 34, font: .callout.weight(.semibold)))
                     .disabled(onMac == 0)
                     .help(onMac == 0 ? "Make the videos available offline first" : "Play the videos on this Mac in order")
-                Button { model.askMakeAllAvailableOffline() } label: { Label("Make All Available Offline", systemImage: "arrow.down.circle") }
-                    .buttonStyle(SecondaryButtonStyle(height: 36, font: .callout))
+                Button { model.askMakeAllAvailableOffline() } label: { Label("All Offline", systemImage: "arrow.down.circle") }
+                    .buttonStyle(SecondaryButtonStyle(height: 34, font: .callout))
+                    .help("Make every video in this playlist available offline")
                     .disabled(onMac == playlist.count)
             }
             if store.playlistVideos.isEmpty {
                 EmptyState(icon: "tray", title: "This playlist is empty",
-                           message: "Use ⋮ → Add to Playlist on any video in your history.")
+                           message: "Use ⋮ → Add to Playlist on any video in your library.")
             } else {
                 List {
                     ForEach(store.playlistVideos) { video in
-                        HistoryRow(video: video)
+                        VideoRow(video: video)
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
@@ -126,7 +121,6 @@ struct PlaylistDetailCard: View {
                 Text("Drag videos to reorder.").font(.caption).foregroundStyle(p.secondary)
             }
         }
-        .cardStyle()
         .frame(maxHeight: .infinity, alignment: .top)
     }
 }

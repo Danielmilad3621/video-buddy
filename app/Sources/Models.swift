@@ -67,6 +67,8 @@ struct Video: Identifiable, Hashable {
     var thumbnailPath: String?  // copy saved on this Mac, so the library looks right offline
     var duration: Double?
     var uploadDate: String?     // yyyyMMdd from the platform; nil when unknown
+    var description: String?    // the platform's description (3.0); nil until yt-dlp has been asked
+    var tags: [String] = []
     var favorite: Bool
     var firstProcessed: Date
     var lastProcessed: Date
@@ -142,6 +144,8 @@ struct VideoInfo {
     var duration: Double? = nil
     var uploadDate: String? = nil
     var platform: String? = nil
+    var description: String? = nil
+    var tags: [String]? = nil
 }
 
 struct Segment: Codable, Hashable {
@@ -163,7 +167,7 @@ extension Array where Element == Segment {
 }
 
 enum HistoryFilter: String, CaseIterable, Identifiable {
-    case all = "All", summaries = "Summaries", audio = "Audio", downloads = "Downloads", onMac = "On this Mac", favorites = "Favorites"
+    case all = "All", summaries = "Summaries", audio = "Audio", video = "Video", offline = "Offline", favorites = "Favorites"
     var id: String { rawValue }
 }
 

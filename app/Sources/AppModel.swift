@@ -4,30 +4,27 @@ import Foundation
 import Observation
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home = "Home", history = "History", favorites = "Favorites", playlists = "Playlists", downloads = "Downloads", settings = "Settings"
+    case home = "Home", library = "Library", favorites = "Favorites", playlists = "Playlists", downloads = "Downloads",
+         queue = "Queue", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
-        case .home: "house"
-        case .history: "clock"
-        case .favorites: "star"
-        case .playlists: "music.note.list"
+        case .home: "house.fill"
+        case .library: "rectangle.stack"
+        case .favorites: "heart"
+        case .playlists: "music.note"
         case .downloads: "arrow.down.to.line"
+        case .queue: "slider.horizontal.3"
         case .settings: "gearshape"
         }
     }
 }
 
+/// The AI panel's tabs. `video` (player and details) is a tab only when the window is too narrow for its own column.
 enum DetailTab: String, CaseIterable, Identifiable {
-    case summary = "Summary", transcript = "Transcript", downloads = "Downloads"
+    case video = "Video", summary = "Summary", transcript = "Transcript", downloads = "Downloads"
     var id: String { rawValue }
-    var icon: String {
-        switch self {
-        case .summary: "doc.text"
-        case .transcript: "text.bubble"
-        case .downloads: "arrow.down.circle"
-        }
-    }
+    static let panel: [DetailTab] = [.summary, .transcript, .downloads]
 }
 
 @MainActor @Observable
@@ -41,10 +38,10 @@ final class AppModel {
     let playback: PlaybackController
     let dataDir: URL
 
-    var section = AppSection.history {
+    var section = AppSection.home {
         didSet {
             if section == .favorites { store.filter = .favorites }
-            else if section == .history, oldValue == .favorites { store.filter = .all }
+            else if oldValue == .favorites, store.filter == .favorites { store.filter = .all }
         }
     }
     var detailTab = DetailTab.summary
@@ -64,6 +61,8 @@ final class AppModel {
     var namePrompt: NamePrompt?
     var pendingPlaylistDeletion: PlaylistSummary?
     var pendingOfflineBatch: OfflineBatch?
+    /// Entries whose details (description, tags) are being read from the platform right now.
+    var loadingDetails: Set<Int64> = []
     private var launched = false
 
     private init() {
@@ -346,6 +345,27 @@ final class AppModel {
     func open(_ v: Video, tab: DetailTab) {
         store.select(v.id)
         detailTab = tab
+    }
+
+    func copyLink(_ v: Video) {
+        guard let url = v.url else { return }
+        FileOps.copy(url)
+        notice = "Link copied"
+    }
+
+    /// Reads the description and tags with yt-dlp (metadata only: nothing is downloaded, no AI).
+    func loadDetails(_ v: Video) {
+        guard let url = v.url, !loadingDetails.contains(v.id) else { return }
+        guard network.isOnline else { notice = "Loading details needs internet."; return }
+        loadingDetails.insert(v.id)
+        Task {
+            let info = await MetadataFetcher.fetch(url)
+            loadingDetails.remove(v.id)
+            guard let info else { notice = "Couldn't read this video's details."; return }
+            try? await store.db.applyInfo(v.id, info, override: true)
+            await store.reload()
+            if info.description?.nilIfBlank == nil { notice = "This video has no description." }
+        }
     }
 
     func toggleFavorite(_ v: Video) {

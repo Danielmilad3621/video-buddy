@@ -1,22 +1,29 @@
-// Colors from the design spec. Dark is the default; the light palette keeps the same roles.
+// Video Buddy colors: black and grey surfaces with one red accent, after Apple Music's dark theme.
+// Dark is the default; the light palette keeps the same roles. Green, orange and gold are for status only.
 import SwiftUI
 
 struct Palette {
-    var bg, sidebar, card, elevated: Color
-    var blue, green, purple, orange, gold, red: Color
+    var bg, sidebar, card, elevated, hover: Color
+    var accent, accentDark: Color
+    var green, orange, gold: Color
     var text, secondary, border: Color
 
     static let dark = Palette(
-        bg: Color(hex: 0x0B1220), sidebar: Color(hex: 0x101A2B), card: Color(hex: 0x131F30), elevated: Color(hex: 0x1B2A40),
-        blue: Color(hex: 0x087CFF), green: Color(hex: 0x19C785), purple: Color(hex: 0x8E6CFF), orange: Color(hex: 0xF5A524),
-        gold: Color(hex: 0xFFC53D), red: Color(hex: 0xFF5C6C),
-        text: Color(hex: 0xF5F7FF), secondary: Color(hex: 0xA3B1C6), border: Color(hex: 0x2B3B52))
+        bg: Color(hex: 0x09090B), sidebar: Color(hex: 0x111114), card: Color(hex: 0x191A1E), elevated: Color(hex: 0x222327),
+        hover: Color(hex: 0x2D2E33), accent: Color(hex: 0xFA233B), accentDark: Color(hex: 0xB8132C),
+        green: Color(hex: 0x30D158), orange: Color(hex: 0xFF9F0A), gold: Color(hex: 0xFFC53D),
+        text: Color(hex: 0xF5F5F7), secondary: Color(hex: 0xA0A0A8), border: Color(hex: 0x33343A))
 
     static let light = Palette(
-        bg: Color(hex: 0xF3F6FB), sidebar: Color(hex: 0xE8EEF6), card: Color(hex: 0xFFFFFF), elevated: Color(hex: 0xEEF2F8),
-        blue: Color(hex: 0x0A6CFF), green: Color(hex: 0x0E9F63), purple: Color(hex: 0x6E46E0), orange: Color(hex: 0xD07B00),
-        gold: Color(hex: 0xE0A100), red: Color(hex: 0xD93649),
-        text: Color(hex: 0x0E1726), secondary: Color(hex: 0x56677F), border: Color(hex: 0xD3DCE8))
+        bg: Color(hex: 0xF5F5F7), sidebar: Color(hex: 0xEBEBEF), card: Color(hex: 0xFFFFFF), elevated: Color(hex: 0xF0F0F3),
+        hover: Color(hex: 0xE4E4E9), accent: Color(hex: 0xFA233B), accentDark: Color(hex: 0xC0142D),
+        green: Color(hex: 0x1F9D49), orange: Color(hex: 0xC86A00), gold: Color(hex: 0xD9A100),
+        text: Color(hex: 0x1D1D1F), secondary: Color(hex: 0x6E6E73), border: Color(hex: 0xD2D2D7))
+
+    /// The red tile behind the logo and the primary button.
+    var accentGradient: LinearGradient {
+        LinearGradient(colors: [accent, accentDark], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 }
 
 extension Color {
@@ -49,7 +56,7 @@ struct ThemedRoot<Content: View>: View {
         let content: Content
         var body: some View {
             let p = scheme == .dark ? Palette.dark : Palette.light
-            content.environment(\.palette, p).tint(p.blue).foregroundStyle(p.text)
+            content.environment(\.palette, p).tint(p.accent).foregroundStyle(p.text)
         }
     }
 }

@@ -3,68 +3,159 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A raised surface: cards inside a panel.
 struct CardStyle: ViewModifier {
     @Environment(\.palette) private var p
     var padding: CGFloat = 16
     func body(content: Content) -> some View {
         content
             .padding(padding)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.card))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border.opacity(0.8)))
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.card))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(p.border.opacity(0.7)))
+    }
+}
+
+/// A column of the window (the video column, the AI panel, the mini-player): one step above the background.
+struct PanelStyle: ViewModifier {
+    @Environment(\.palette) private var p
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.sidebar))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border.opacity(0.55)))
     }
 }
 
 extension View {
     func cardStyle(padding: CGFloat = 16) -> some View { modifier(CardStyle(padding: padding)) }
+    func panelStyle() -> some View { modifier(PanelStyle()) }
 }
 
+/// The red action (Summarize, Play).
 struct PrimaryButtonStyle: ButtonStyle {
     var height: CGFloat = 46
-    func makeBody(configuration: Configuration) -> some View { Styled(configuration: configuration, height: height) }
+    var font: Font = .title3.weight(.semibold)
+    var iconOnly = false
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration, height: height, font: font, iconOnly: iconOnly)
+    }
 
     // isEnabled must be read inside a view: a ButtonStyle's own environment is where the style was applied
     private struct Styled: View {
         @Environment(\.palette) private var p
         @Environment(\.isEnabled) private var enabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @State private var hovering = false
         let configuration: Configuration
         let height: CGFloat
+        let font: Font
+        let iconOnly: Bool
         var body: some View {
-            configuration.label
-                .font(.title3.weight(.semibold))
-                .labelStyle(.titleAndIcon)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 26)
-                .frame(height: height)
-                .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(LinearGradient(colors: [p.blue, p.blue.opacity(0.82)], startPoint: .top, endPoint: .bottom)))
-                .shadow(color: p.blue.opacity(enabled ? 0.35 : 0), radius: 8, y: 2)
-                .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
-                .contentShape(Rectangle())
+            Group {
+                if iconOnly { configuration.label.labelStyle(.iconOnly) } else { configuration.label.labelStyle(.titleAndIcon) }
+            }
+            .font(font)
+            .foregroundStyle(.white)
+            .padding(.horizontal, iconOnly ? 14 : (height > 40 ? 24 : 14))
+            .frame(height: height)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(p.accentGradient))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(hovering && enabled ? 0.08 : 0)))
+            .shadow(color: p.accent.opacity(enabled ? 0.35 : 0), radius: 10, y: 2)
+            .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.55)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         }
     }
 }
 
+/// Charcoal buttons (Video, Audio, Show in Finder…).
 struct SecondaryButtonStyle: ButtonStyle {
     var height: CGFloat = 46
     var font: Font = .title3
-    func makeBody(configuration: Configuration) -> some View { Styled(configuration: configuration, height: height, font: font) }
+    var iconOnly = false
+    var hPadding: CGFloat? = nil
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration, height: height, font: font, iconOnly: iconOnly, hPadding: hPadding)
+    }
 
     private struct Styled: View {
         @Environment(\.palette) private var p
         @Environment(\.isEnabled) private var enabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @State private var hovering = false
         let configuration: Configuration
         let height: CGFloat
         let font: Font
+        let iconOnly: Bool
+        let hPadding: CGFloat?
+        var body: some View {
+            Group {
+                if iconOnly { configuration.label.labelStyle(.iconOnly) } else { configuration.label.labelStyle(.titleAndIcon) }
+            }
+            .font(font)
+            .padding(.horizontal, hPadding ?? (iconOnly ? 12 : (height > 40 ? 22 : 12)))
+            .frame(height: height)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(configuration.isPressed ? p.elevated : hovering && enabled ? p.hover : p.elevated))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(p.border))
+            .opacity(enabled ? 1 : 0.5)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+        }
+    }
+}
+
+/// The red-outlined Cancel.
+struct OutlineButtonStyle: ButtonStyle {
+    var height: CGFloat = 36
+    func makeBody(configuration: Configuration) -> some View { Styled(configuration: configuration, height: height) }
+
+    private struct Styled: View {
+        @Environment(\.palette) private var p
+        @State private var hovering = false
+        let configuration: Configuration
+        let height: CGFloat
         var body: some View {
             configuration.label
-                .font(font)
-                .labelStyle(.titleAndIcon)
-                .padding(.horizontal, height > 40 ? 22 : 12)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(p.accent)
+                .padding(.horizontal, 16)
                 .frame(height: height)
-                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(configuration.isPressed ? p.elevated.opacity(0.6) : p.elevated))
-                .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(p.border))
-                .opacity(enabled ? 1 : 0.4)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(p.accent.opacity(hovering ? 0.16 : 0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(p.accent.opacity(0.8)))
+                .opacity(configuration.isPressed ? 0.75 : 1)
                 .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// A checkbox with a red tick, for "+ Transcript". Still a toggle to VoiceOver.
+struct AccentCheckboxStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View { Styled(configuration: configuration) }
+
+    private struct Styled: View {
+        @Environment(\.palette) private var p
+        let configuration: Configuration
+        var body: some View {
+            Button { configuration.isOn.toggle() } label: {
+                HStack(spacing: 9) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(configuration.isOn ? AnyShapeStyle(p.accentGradient) : AnyShapeStyle(Color.clear))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(configuration.isOn ? .clear : p.secondary, lineWidth: 1.5))
+                        .overlay {
+                            if configuration.isOn { Image(systemName: "checkmark").font(.system(size: 12, weight: .heavy)).foregroundStyle(.white) }
+                        }
+                        .frame(width: 22, height: 22)
+                    configuration.label.font(.title3.weight(.medium)).fixedSize()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityRepresentation { Toggle(isOn: configuration.$isOn) { configuration.label } }
         }
     }
 }
@@ -75,13 +166,19 @@ struct IconButton: View {
     let icon: String
     let label: String
     var tint: Color?
+    var size: CGFloat = 30
     let action: () -> Void
+    @State private var hovering = false
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon).font(.body.weight(.medium)).frame(width: 30, height: 28).contentShape(Rectangle())
+            Image(systemName: icon).font(.body.weight(.medium))
+                .frame(width: size, height: size - 2)
+                .background(RoundedRectangle(cornerRadius: 7).fill(hovering ? p.hover.opacity(0.7) : .clear))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(tint ?? p.secondary)
+        .onHover { hovering = $0 }
         .help(label)
         .accessibilityLabel(label)
     }
@@ -91,25 +188,49 @@ struct ChipButton: View {
     @Environment(\.palette) private var p
     let title: String
     var icon: String?
+    var iconOnly = false
+    var compact = false
     let selected: Bool
     let action: () -> Void
+    @State private var hovering = false
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let icon { Image(systemName: icon) }
-                Text(title)
+                if !iconOnly { Text(title) }
             }
-            .font(.callout.weight(.medium))
-            .padding(.horizontal, 16)
-            .frame(height: 32)
-            .foregroundStyle(selected ? .white : p.text)
-            .background(Capsule().fill(selected ? p.blue : p.elevated.opacity(0.6)))
-            .overlay(Capsule().strokeBorder(selected ? .clear : p.border))
+            .font(compact ? .caption.weight(.semibold) : .callout.weight(.medium))
+            .padding(.horizontal, compact ? 9 : 12)
+            .frame(height: compact ? 27 : 30)
+            .foregroundStyle(selected ? .white : p.text.opacity(0.9))
+            .background(Capsule().fill(selected ? AnyShapeStyle(p.accentGradient) : AnyShapeStyle(hovering ? p.hover : p.elevated)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(iconOnly ? title : "")
+        .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
+}
+
+/// A heading for a library column (Queue, Downloads, Playlists) with room for actions on the right.
+struct SectionHeader<Trailing: View>: View {
+    let title: String
+    let icon: String
+    @ViewBuilder var trailing: Trailing
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).font(.title3)
+            Text(title).font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 6)
+            trailing
+        }
+    }
+}
+
+extension SectionHeader where Trailing == EmptyView {
+    init(title: String, icon: String) { self.init(title: title, icon: icon) { EmptyView() } }
 }
 
 struct SearchField: View {
@@ -121,12 +242,12 @@ struct SearchField: View {
             Image(systemName: "magnifyingglass").foregroundStyle(p.secondary)
             TextField(prompt, text: $text).textFieldStyle(.plain)
             if !text.isEmpty {
-                IconButton(icon: "xmark.circle.fill", label: "Clear search") { text = "" }
+                IconButton(icon: "xmark.circle.fill", label: "Clear search", size: 24) { text = "" }
             }
         }
         .padding(.horizontal, 14)
         .frame(height: 40)
-        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(p.bg.opacity(0.55)))
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(p.card))
         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(p.border))
     }
 }
@@ -135,7 +256,7 @@ struct Thumbnail: View {
     @Environment(\.palette) private var p
     let url: String?
     var localPath: String? = nil   // saved copy on this Mac; preferred, so thumbnails show offline
-    let duration: Double?
+    var duration: Double? = nil    // shown as a badge when set
     var cornerRadius: CGFloat = 9
     var badgeFont: Font = .caption.weight(.semibold)
     var icon = "play.rectangle.fill"
@@ -166,50 +287,60 @@ struct Thumbnail: View {
     }
 
     private var placeholder: some View {
-        LinearGradient(colors: [p.elevated, p.blue.opacity(0.25)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        LinearGradient(colors: [p.elevated, p.accentDark.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
             .overlay(Image(systemName: icon).font(.title2).foregroundStyle(p.secondary))
     }
 }
 
+/// One word for where an entry stands. It only claims a file when that file is on this Mac right now.
 struct StatusPill: View {
     @Environment(\.palette) private var p
     let video: Video
+    let onMac: Bool
+    var compact = false     // icon only, for narrow rows (the word stays as the tooltip and for VoiceOver)
     var body: some View {
         let (text, icon, color) = style
-        Label(text, systemImage: icon)
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .foregroundStyle(color)
-            .background(Capsule().fill(color.opacity(0.15)))
-            .overlay(Capsule().strokeBorder(color.opacity(0.45)))
-            .fixedSize()
+        HStack(spacing: 5) {
+            Image(systemName: icon).foregroundStyle(color)
+            if !compact { Text(text).foregroundStyle(p.text.opacity(0.88)) }
+        }
+        .help(text)
+        .accessibilityLabel(text)
+        .font(.caption.weight(.semibold))
+        .lineLimit(1)
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Capsule().fill(p.elevated))
+        .overlay(Capsule().strokeBorder(p.border.opacity(0.8)))
+        .fixedSize()
+        .accessibilityElement(children: .combine)
     }
 
     private var style: (String, String, Color) {
-        if video.latestStatus == .running { return ("Processing", "hourglass", p.blue) }
-        if video.latestStatus == .queued { return ("Queued", "clock", p.secondary) }
-        if video.hasSummary { return ("Summarized", "checkmark.seal.fill", p.green) }
-        if video.hasVideo { return ("Downloaded", "checkmark.seal.fill", p.blue) }
-        if video.hasAudio { return ("Audio", "waveform", p.purple) }
+        if video.latestStatus == .running { return ("Processing", "hourglass", p.accent) }
+        if video.latestStatus == .queued { return ("Queued", "clock.fill", p.accent) }
+        if video.hasSummary { return ("Summarized", "sparkles", p.accent) }
+        if onMac { return ("Available Offline", "arrow.down.circle.fill", p.text) }
+        if video.hasVideo || video.hasAudio { return ("File missing", "questionmark.folder", p.secondary) }
         switch video.latestStatus {
         case .cancelled: return ("Cancelled", "xmark.circle", p.secondary)
         case .interrupted: return ("Interrupted", "exclamationmark.circle", p.orange)
-        default: return ("Failed", "exclamationmark.triangle.fill", p.red)
+        default: return ("Failed", "exclamationmark.triangle.fill", p.accent)
         }
     }
 }
 
+/// The channel's initial: the app never saves channel pictures, so it doesn't pretend to have one.
 struct Avatar: View {
     @Environment(\.palette) private var p
     let name: String?
+    var size: CGFloat = 40
     var body: some View {
-        Text(String((name?.nilIfBlank ?? "?").prefix(1)).lowercased())
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
-            .background(Circle().fill(LinearGradient(colors: [Color(hex: 0x14B8A6), Color(hex: 0x0E7490)],
-                                                     startPoint: .top, endPoint: .bottom)))
+        Text(String((name?.nilIfBlank ?? "?").prefix(1)).uppercased())
+            .font(.system(size: size * 0.42, weight: .semibold))
+            .foregroundStyle(p.text)
+            .frame(width: size, height: size)
+            .background(Circle().fill(LinearGradient(colors: [p.hover, p.elevated], startPoint: .top, endPoint: .bottom)))
+            .overlay(Circle().strokeBorder(p.border))
             .accessibilityHidden(true)
     }
 }
@@ -219,10 +350,11 @@ struct MetaRow: View {
     let icon: String
     let text: String
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).frame(width: 22).foregroundStyle(p.secondary)
+        HStack(spacing: 10) {
+            Image(systemName: icon).frame(width: 18).foregroundStyle(p.secondary)
             Text(text).foregroundStyle(p.text.opacity(0.9)).lineLimit(2)
         }
+        .font(.callout)
         .accessibilityElement(children: .combine)
     }
 }
@@ -234,7 +366,7 @@ struct EmptyState: View {
     let message: String
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 34)).foregroundStyle(p.blue.opacity(0.8))
+            Image(systemName: icon).font(.system(size: 32)).foregroundStyle(p.accent.opacity(0.85))
             Text(title).font(.title3.weight(.semibold))
             Text(message).foregroundStyle(p.secondary).multilineTextAlignment(.center).frame(maxWidth: 340)
         }
@@ -243,7 +375,7 @@ struct EmptyState: View {
     }
 }
 
-/// Wraps children onto new rows when they don't fit (filter chips).
+/// Wraps children onto new rows when they don't fit (filter chips, tags).
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 

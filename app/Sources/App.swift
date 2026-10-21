@@ -14,7 +14,7 @@ struct VideoSummarizerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("Video Summarizer", id: "main") {
+        Window("Video Buddy", id: "main") {
             ThemedRoot { RootView() }
                 .environment(AppModel.shared)
                 .frame(minWidth: 980, minHeight: 660)
@@ -42,8 +42,8 @@ struct AppCommands: Commands {
             Button("Download Video") { AppModel.shared.start(.video) }.keyboardShortcut("d", modifiers: [.command, .shift])
             Button("Cancel Processing") { AppModel.shared.jobs.cancel() }.keyboardShortcut(".")
             Divider()
-            Button("Find in History") {
-                AppModel.shared.section = .history
+            Button("Find in Library") {
+                if ![.home, .library, .favorites].contains(AppModel.shared.section) { AppModel.shared.section = .library }
                 AppModel.shared.focusSearchToken += 1
             }
             .keyboardShortcut("f")

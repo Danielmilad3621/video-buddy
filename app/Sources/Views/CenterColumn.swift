@@ -1,15 +1,15 @@
-// The middle card: History / Favorites browser, Home's recent activity, or the Downloads list.
+// The library column: the video list (Home, Library, Favorites), My Playlists, Downloads or the Queue.
 import SwiftUI
 
-struct CenterColumn: View {
+struct LibraryColumn: View {
     @Environment(AppModel.self) private var model
     var body: some View {
         switch model.section {
-        case .home: RecentCard()
-        case .downloads: DownloadsCard()
+        case .home: LibraryList(continueWatching: true)
+        case .downloads: DownloadsList()
         case .playlists: PlaylistsCard()
-        case .favorites: HistoryCard(title: "Favorites", icon: "star")
-        case .history, .settings: HistoryCard(title: "History", icon: "clock.arrow.circlepath")
+        case .queue: QueueColumn()
+        case .library, .favorites, .settings: LibraryList(continueWatching: false)
         }
     }
 }
@@ -20,11 +20,10 @@ private struct QueryKey: Equatable {
     let search: String
 }
 
-struct HistoryCard: View {
+struct LibraryList: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
-    let title: String
-    let icon: String
+    let continueWatching: Bool
     @State private var confirmClear = false
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
@@ -32,49 +31,50 @@ struct HistoryCard: View {
     var body: some View {
         @Bindable var store = model.store
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: icon).font(.title2)
-                Text(title).font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-                Spacer()
-                Button { confirmClear = true } label: { Label("Clear All", systemImage: "trash") }
-                    .buttonStyle(SecondaryButtonStyle(height: 34, font: .callout))
-                    .disabled(store.videos.isEmpty && store.filter == .all && store.search.isEmpty)
-            }
-            SearchField(text: $store.search, prompt: "Search your history…").focused($searchFocused)
-            FlowLayout(spacing: 8) {
-                ForEach(HistoryFilter.allCases) { f in
-                    ChipButton(title: f.rawValue, icon: f == .favorites ? "star" : f == .onMac ? "laptopcomputer" : nil, selected: store.filter == f) {
-                        store.filter = f
-                        if model.section == .favorites, f != .favorites { model.section = .history }
-                    }
-                }
+            HStack(spacing: 8) {
+                SearchField(text: $store.search, prompt: "Search your library…").focused($searchFocused)
                 Menu {
                     Picker("Sort by", selection: $store.sort) {
                         ForEach(HistorySort.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.inline)
+                    Divider()
+                    Button("Clear All History…", role: .destructive) { confirmClear = true }
+                        .disabled(store.videos.isEmpty && store.filter == .all && store.search.isEmpty)
                 } label: {
-                    Label(store.sort.rawValue, systemImage: "arrow.up.arrow.down").font(.callout)
+                    Image(systemName: "line.3.horizontal.decrease").font(.body.weight(.semibold))
+                        .frame(width: 40, height: 40)
+                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(p.card))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(p.border))
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .frame(height: 32)
-                .help("Sort history")
+                .help("Sort: \(store.sort.rawValue)")
+                .accessibilityLabel("Sort and more")
             }
-            if store.videos.isEmpty {
+            // one line like the reference: Favorites is a heart, and narrow columns get smaller chips
+            ViewThatFits(in: .horizontal) {
+                chips(compact: false)
+                chips(compact: true)
+                FlowLayout(spacing: 6) { chipButtons(compact: true) }
+            }
+            if store.videos.isEmpty && !(continueWatching && !store.continueWatching.isEmpty) {
                 EmptyState(icon: store.search.isEmpty ? "tray" : "magnifyingglass",
                            title: store.search.isEmpty ? "Nothing here yet" : "No matches",
                            message: store.search.isEmpty
-                               ? "Paste a link above and press Summarize. Everything you process is saved here."
+                               ? "Paste a link above and press Video, Audio or Summarize. Everything you process is kept here."
                                : "Nothing in titles, channels, links, summaries or transcripts matches “\(store.search)”.")
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(store.videos) { HistoryRow(video: $0) }
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        if continueWatching, store.search.isEmpty, !store.continueWatching.isEmpty { ContinueWatching() }
+                        ForEach(store.videos) { VideoRow(video: $0) }
                     }
                     .padding(2)
                 }
-                .scrollIndicators(.visible)
+                .scrollIndicators(.automatic)
                 .focusable()
                 .focused($listFocused)
                 .focusEffectDisabled()
@@ -82,7 +82,6 @@ struct HistoryCard: View {
                 .onKeyPress(.upArrow) { store.move(-1); return .handled }
             }
         }
-        .cardStyle()
         .frame(maxHeight: .infinity, alignment: .top)
         .task(id: QueryKey(filter: store.filter, sort: store.sort, search: store.search)) {
             do { try await Task.sleep(for: .milliseconds(180)) } catch { return } // debounce typing
@@ -92,60 +91,111 @@ struct HistoryCard: View {
         .confirmationDialog("Clear all history?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear All History", role: .destructive) { model.clearAll() }
         } message: {
-            Text("This removes every history record, including favorites. Downloaded files, summaries and transcripts in your downloads folder are not touched.")
+            Text("This removes every library record, including favorites. Downloaded files, summaries and transcripts in your downloads folder are not touched.")
+        }
+    }
+
+    private func chips(compact: Bool) -> some View {
+        HStack(spacing: compact ? 4 : 6) { chipButtons(compact: compact) }.fixedSize()
+    }
+
+    @ViewBuilder private func chipButtons(compact: Bool) -> some View {
+        let store = model.store
+        ForEach(HistoryFilter.allCases) { f in
+            ChipButton(title: f.rawValue, icon: f == .favorites ? "heart.fill" : nil, iconOnly: f == .favorites,
+                       compact: compact, selected: store.filter == f) {
+                store.filter = f
+                if model.section == .favorites, f != .favorites { model.section = .library }
+            }
         }
     }
 }
 
-struct HistoryRow: View {
+/// Home: what you stopped part-way through, resuming where you left off.
+struct ContinueWatching: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Continue watching").font(.callout.weight(.semibold)).foregroundStyle(p.secondary)
+            ForEach(model.store.continueWatching, id: \.video.id) { item in
+                Button { model.play(item.video) } label: {
+                    HStack(spacing: 10) {
+                        Thumbnail(url: item.video.thumbnailURL, localPath: item.video.thumbnailPath, cornerRadius: 7)
+                            .frame(width: 72, height: 40)
+                            .overlay(Image(systemName: "play.fill").font(.caption).foregroundStyle(.white).shadow(radius: 2))
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.video.displayTitle).font(.callout.weight(.medium)).lineLimit(1)
+                            ProgressView(value: item.progress).tint(p.accent).controlSize(.small)
+                        }
+                    }
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(p.card))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Play from where you stopped")
+                .accessibilityLabel("Continue \(item.video.displayTitle), \(Int(item.progress * 100)) percent watched")
+            }
+            Text("Library").font(.callout.weight(.semibold)).foregroundStyle(p.secondary).padding(.top, 6)
+        }
+        .padding(.bottom, 2)
+    }
+}
+
+struct VideoRow: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     let video: Video
+    @State private var hovering = false
 
     var body: some View {
         let selected = model.store.selectedID == video.id
-        HStack(alignment: .top, spacing: 12) {
-            Thumbnail(url: video.thumbnailURL, localPath: video.thumbnailPath, duration: video.duration,
+        let onMac = model.store.onMacIDs.contains(video.id)
+        HStack(alignment: .center, spacing: 12) {
+            Thumbnail(url: video.thumbnailURL, localPath: video.thumbnailPath,
                       icon: video.hasSummary || video.hasVideo ? "play.rectangle.fill" : "waveform")
-                .frame(width: 128, height: 72)
+                .frame(width: 104, height: 58)
                 .overlay(alignment: .topLeading) {
-                    if model.store.onMacIDs.contains(video.id) {
-                        Image(systemName: "laptopcomputer")
-                            .font(.caption2.weight(.bold)).foregroundStyle(.white)
-                            .padding(4).background(Capsule().fill(p.green.opacity(0.9))).padding(5)
+                    if onMac, video.hasSummary {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.caption.weight(.bold)).foregroundStyle(.white)
+                            .padding(3).background(Circle().fill(.black.opacity(0.65))).padding(4)
                             .help("On this Mac: plays offline")
                             .accessibilityLabel("On this Mac")
                     }
                 }
             VStack(alignment: .leading, spacing: 3) {
-                Text(video.displayTitle).font(.headline).lineLimit(1)
-                Text(video.displayChannel).foregroundStyle(p.secondary).lineLimit(1)
-                Text(Fmt.date(video.lastProcessed)).font(.callout).foregroundStyle(p.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 6) {
-                StatusPill(video: video)
-                Spacer(minLength: 0)
-                HStack(spacing: 2) {
-                    IconButton(icon: video.favorite ? "star.fill" : "star",
-                               label: video.favorite ? "Remove from favorites" : "Add to favorites",
-                               tint: video.favorite ? p.gold : p.secondary) { model.toggleFavorite(video) }
-                    Menu { VideoActions(video: video) } label: {
-                        Image(systemName: "ellipsis").rotationEffect(.degrees(90)).frame(width: 26, height: 28)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("More actions")
-                    .accessibilityLabel("More actions")
+                Text(video.displayTitle).font(.callout.weight(.semibold)).lineLimit(2)
+                Text(video.displayChannel).font(.caption).foregroundStyle(p.secondary).lineLimit(1)
+                ViewThatFits(in: .horizontal) {
+                    bottomLine(onMac: onMac, compact: false)
+                    bottomLine(onMac: onMac, compact: true)
                 }
             }
+            VStack(spacing: 6) {
+                IconButton(icon: video.favorite ? "star.fill" : "star",
+                           label: video.favorite ? "Remove from favorites" : "Add to favorites",
+                           tint: video.favorite ? p.gold : p.secondary, size: 26) { model.toggleFavorite(video) }
+                Menu { VideoActions(video: video) } label: {
+                    Image(systemName: "ellipsis").font(.body.weight(.bold)).foregroundStyle(p.secondary)
+                        .rotationEffect(.degrees(90)).frame(width: 24, height: 26).contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions")
+                .accessibilityLabel("More actions")
+            }
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(selected ? p.blue.opacity(0.10) : p.card))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(selected ? p.blue : .clear, lineWidth: 2))
-        .shadow(color: p.blue.opacity(selected ? 0.25 : 0), radius: 6)
-        .contentShape(RoundedRectangle(cornerRadius: 13))
+        .padding(7)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(selected ? p.accentDark.opacity(0.22) : hovering ? p.card : .clear))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? p.accent : .clear, lineWidth: 1.5))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onHover { hovering = $0 }
         .onTapGesture { model.open(video, tab: model.detailTab) }
         .contextMenu { VideoActions(video: video) }
         .accessibilityElement(children: .contain)
@@ -153,9 +203,17 @@ struct HistoryRow: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.open(video, tab: model.detailTab) }
     }
+
+    private func bottomLine(onMac: Bool, compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(Fmt.duration(video.duration) ?? "—").font(.caption.monospacedDigit()).foregroundStyle(p.secondary).fixedSize()
+            Spacer(minLength: 4)
+            StatusPill(video: video, onMac: onMac, compact: compact)
+        }
+    }
 }
 
-/// Every per-video action; used by the ⋮ menu and the right-click menu.
+/// Every per-video action; used by the ⋮ menu, the ⋯ button and the right-click menu.
 struct VideoActions: View {
     @Environment(AppModel.self) private var model
     let video: Video
@@ -170,6 +228,7 @@ struct VideoActions: View {
         Divider()
         Button("Copy Summary") { model.copySummary(video) }
         Button("Copy Transcript") { model.copyTranscript(video) }
+        Button("Copy Link") { model.copyLink(video) }.disabled(video.url == nil)
         Divider()
         Button("Open Original Link") { FileOps.openLink(video.url) }.disabled(video.url == nil)
         Button("Open Downloaded File") { if let m = media { FileOps.open(m.path) } }.disabled(media == nil)
@@ -189,52 +248,29 @@ struct VideoActions: View {
         Button("Transcribe on This Mac") { model.transcribe(video) }.disabled(media == nil)
         Button("Process Again") { model.processAgain(video) }.disabled(video.url == nil)
         Divider()
-        Button("Remove from History…", role: .destructive) { model.pendingRemoval = video }
+        Button("Remove from Library…", role: .destructive) { model.pendingRemoval = video }
     }
 }
 
-struct RecentCard: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.palette) private var p
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "house").font(.title2)
-                Text("Recent activity").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-                Spacer()
-                Button("See all") { model.section = .history }.buttonStyle(.link)
-            }
-            if model.store.recent.isEmpty {
-                EmptyState(icon: "sparkles", title: "Welcome to your video library",
-                           message: "Paste a YouTube link above and press Summarize. Summaries, transcripts and downloads are kept here for good.")
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) { ForEach(model.store.recent) { HistoryRow(video: $0) } }.padding(2)
-                }
-            }
-        }
-        .cardStyle()
-        .frame(maxHeight: .infinity, alignment: .top)
-    }
-}
-
-struct DownloadsCard: View {
+/// Saved audio and video: storage used, what's missing, and the usual file actions.
+struct DownloadsList: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     @State private var query = ""
+    @State private var show = Show.all
+
+    enum Show: String, CaseIterable { case all = "All", available = "Available", missing = "Missing" }
 
     var body: some View {
-        let items = model.store.files.filter(\.isMedia).filter {
-            query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ($0.videoTitle ?? "").localizedCaseInsensitiveContains(query)
-        }
-        let onDisk = model.store.files.filter { $0.isMedia && $0.exists }
+        let media = model.store.files.filter(\.isMedia)
+        let onDisk = media.filter(\.exists)
         let usedBytes = onDisk.reduce(0) { $0 + (Self.diskSize($1.path) ?? 0) }
+        let items = media.filter {
+            (show == .all || (show == .available) == $0.exists)
+                && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ($0.videoTitle ?? "").localizedCaseInsensitiveContains(query))
+        }
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "arrow.down.to.line").font(.title2)
-                Text("Downloads").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-                Spacer()
-            }
+            SectionHeader(title: "Downloads", icon: "arrow.down.to.line")
             // what your saved audio and video take up, and what's left, for planning a flight
             HStack(spacing: 6) {
                 Image(systemName: "internaldrive").foregroundStyle(p.secondary)
@@ -244,14 +280,21 @@ struct DownloadsCard: View {
             .font(.callout).foregroundStyle(p.secondary)
             .accessibilityElement(children: .combine)
             SearchField(text: $query, prompt: "Search downloads…")
+            HStack(spacing: 7) {
+                ForEach(Show.allCases, id: \.self) { s in
+                    let n = s == .all ? media.count : s == .available ? onDisk.count : media.count - onDisk.count
+                    ChipButton(title: "\(s.rawValue) \(n)", selected: show == s) { show = s }
+                }
+            }
             if items.isEmpty {
-                EmptyState(icon: "arrow.down.circle", title: "No downloads yet",
-                           message: "Audio and video you save appear here with their size and location.")
+                EmptyState(icon: "arrow.down.circle", title: media.isEmpty ? "No downloads yet" : "Nothing here",
+                           message: media.isEmpty ? "Audio and video you save appear here with their size and location."
+                                                  : "No downloads match this filter.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(items) { item in
-                            FileRow(item: item, showVideoTitle: true)
+                            FileRow(item: item, showVideoTitle: true, onDownloadAgain: downloadAgain(item))
                                 .contentShape(Rectangle())
                                 .onTapGesture { model.store.select(item.videoID); model.detailTab = .downloads }
                         }
@@ -260,8 +303,13 @@ struct DownloadsCard: View {
                 }
             }
         }
-        .cardStyle()
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func downloadAgain(_ item: FileItem) -> (() -> Void)? {
+        guard let video = model.store.videos.first(where: { $0.id == item.videoID }) ?? model.store.recent.first(where: { $0.id == item.videoID }),
+              video.url != nil else { return nil }
+        return { model.downloadAgain(video, kind: item.role == .video ? .video : .audio) }
     }
 
     static func diskSize(_ path: String) -> Int? {
@@ -269,9 +317,8 @@ struct DownloadsCard: View {
     }
 }
 
-/// A saved file with its real size, location and whether it's still on disk.
+/// A saved file with its format, real size, location and whether it's still on disk.
 struct FileRow: View {
-    @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
     let item: FileItem
     var showVideoTitle = false
@@ -279,36 +326,40 @@ struct FileRow: View {
 
     var body: some View {
         let exists = item.exists
+        let format = (item.path as NSString).pathExtension.uppercased()
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(exists ? p.blue : p.secondary)
+                .foregroundStyle(exists ? p.accent : p.secondary)
                 .frame(width: 38, height: 38)
                 .background(RoundedRectangle(cornerRadius: 10).fill(p.elevated))
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.name).font(.callout.weight(.semibold)).lineLimit(2)
                 if showVideoTitle, let t = item.videoTitle { Text(t).font(.caption).foregroundStyle(p.secondary).lineLimit(1) }
-                Text("\(item.role.rawValue) • \(Fmt.bytes(item.size ?? (exists ? diskSize : nil))) • \(Fmt.date(item.date))")
+                Text(([item.role.rawValue, format.isEmpty ? nil : format, Fmt.bytes(item.size ?? (exists ? diskSize : nil)), Fmt.date(item.date)] as [String?])
+                    .compactMap { $0 }.joined(separator: " • "))
                     .font(.caption).foregroundStyle(p.secondary)
                 Text(item.path).font(.caption2).foregroundStyle(p.secondary.opacity(0.8)).lineLimit(1).truncationMode(.middle)
                     .help(item.path)
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     Text(exists ? "Available" : "Missing")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .foregroundStyle(exists ? p.green : p.red)
-                        .background(Capsule().fill((exists ? p.green : p.red).opacity(0.15)))
+                        .foregroundStyle(exists ? p.green : p.accent)
+                        .background(Capsule().fill((exists ? p.green : p.accent).opacity(0.15)))
                     Button("Open") { FileOps.open(item.path) }.disabled(!exists).opacity(exists ? 1 : 0.35)
                     Button("Show in Finder") { FileOps.reveal(item.path) }.disabled(!exists).opacity(exists ? 1 : 0.35)
-                    if !exists, let onDownloadAgain { Button("Download Again", action: onDownloadAgain) }
+                    if !exists, item.isMedia, let onDownloadAgain { Button("Download Again", action: onDownloadAgain) }
                 }
                 .buttonStyle(.link)
+                .tint(p.accent)
                 .font(.caption)
             }
             Spacer(minLength: 0)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12).fill(p.elevated.opacity(0.35)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(p.card))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.border.opacity(0.6)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(item.name), \(exists ? "available" : "missing")")
     }

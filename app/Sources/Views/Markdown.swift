@@ -40,15 +40,17 @@ enum Markdown {
         return blocks
     }
 
-    /// Display title and icon for a section heading, matching the mockup's "AI Summary" / "Key Points" sections.
-    static func section(_ title: String) -> (String, String) {
-        let t = title.lowercased()
-        if t.contains("tl;dr") || t.contains("tldr") { return ("AI Summary", "sparkles") }
-        if t.contains("summary") || t.contains("overview") || t.contains("ملخص") { return (title, "sparkles") }
-        if t.contains("key") || t.contains("أهم") || t.contains("نقاط") { return (title, "key.fill") }
-        if t.contains("takeaway") || t.contains("action") || t.contains("next step") || t.hasPrefix("⭐") { return (title, "checkmark.seal.fill") }
-        if t.contains("detail") { return (title, "info.circle.fill") }
-        return (title, "text.alignleft")
+    /// The summary split at its headings, one card each (TL;DR, Key Points, Action Takeaways…). Text before the first
+    /// heading, or a summary without headings (Brief, Bullets), becomes one untitled card. Empty headings are dropped.
+    static func sections(_ blocks: [MDBlock]) -> [MDSection] {
+        var out: [MDSection] = []
+        for b in blocks {
+            if case let .heading(title, _) = b { out.append(MDSection(title: title, blocks: [])); continue }
+            if case .rule = b { continue }
+            if out.isEmpty { out.append(MDSection(title: nil, blocks: [])) }
+            out[out.count - 1].blocks.append(b)
+        }
+        return out.filter { !$0.blocks.isEmpty }
     }
 
     /// True when the first letter is Arabic or Hebrew, so the summary lays out right-to-left.
@@ -62,45 +64,117 @@ enum Markdown {
     }
 }
 
-struct MarkdownView: View {
-    @Environment(\.palette) private var p
-    let text: String
+struct MDSection: Equatable {
+    var title: String?
+    var blocks: [MDBlock]
 
+    enum Kind { case tldr, keyPoints, takeaways, other }
+
+    /// Which card style a section gets, from its heading (English or Arabic) or, untitled, from its content.
+    var kind: Kind {
+        guard let t = title?.lowercased() else {
+            return blocks.allSatisfy { if case .paragraph = $0 { false } else { true } } ? .keyPoints : .tldr
+        }
+        if t.contains("tl;dr") || t.contains("tldr") || t.contains("summary") || t.contains("overview") || t.contains("ملخص") { return .tldr }
+        if t.contains("takeaway") || t.contains("action") || t.contains("next step") || t.hasPrefix("⭐") || t.contains("خلاصة")
+            || t.contains("نصائح") || t.contains("خطوات") { return .takeaways }
+        if t.contains("key") || t.contains("main point") || t.contains("أهم") || t.contains("نقاط") { return .keyPoints }
+        return .other
+    }
+
+    var displayTitle: String {
+        title ?? (kind == .keyPoints ? "Key Points" : "Summary")
+    }
+}
+
+/// A summary as cards: TL;DR, Key Points (numbered), Action Takeaways (ticked), and any other sections.
+struct SummaryCards: View {
+    let text: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(Markdown.parse(text).enumerated()), id: \.offset) { item in
-                block(item.element)
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(Markdown.sections(Markdown.parse(text)).enumerated()), id: \.offset) { SummaryCard(section: $0.element) }
         }
         .textSelection(.enabled)
         .environment(\.layoutDirection, Markdown.isRTL(text) ? .rightToLeft : .leftToRight)
     }
+}
 
-    @ViewBuilder private func block(_ b: MDBlock) -> some View {
-        switch b {
-        case let .heading(title, level):
-            let (shown, icon) = Markdown.section(title)
+struct SummaryCard: View {
+    @Environment(\.palette) private var p
+    let section: MDSection
+
+    var body: some View {
+        let kind = section.kind
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: icon).foregroundStyle(level <= 1 ? p.blue : p.text)
-                Text(Markdown.inline(shown)).font(level <= 1 ? .title2.weight(.bold) : .title3.weight(.semibold))
+                Image(systemName: icon(kind)).font(.title3).foregroundStyle(kind == .takeaways ? p.gold : p.accent)
+                Text(Markdown.inline(section.displayTitle)).font(.title3.weight(.semibold))
             }
-            .padding(.top, 6)
             .accessibilityAddTraits(.isHeader)
-        case let .paragraph(t):
-            Text(Markdown.inline(t)).lineSpacing(4).foregroundStyle(p.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
-        case let .bullet(t, indent):
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("●").font(.system(size: 9)).foregroundStyle(p.blue)
-                Text(Markdown.inline(t)).lineSpacing(3).foregroundStyle(p.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
+            let numbers = bulletNumbers
+            ForEach(Array(section.blocks.enumerated()), id: \.offset) { i, b in
+                block(b, kind: kind, number: numbers[i])
             }
-            .padding(.leading, CGFloat(indent) * 18)
-        case let .numbered(n, t):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(n).").monospacedDigit().foregroundStyle(p.blue)
-                Text(Markdown.inline(t)).lineSpacing(3).foregroundStyle(p.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
-            }
-        case .rule:
-            Divider().overlay(p.border)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardStyle()
+    }
+
+    /// 1, 2, 3… for the top-level bullets and numbered items, in order.
+    private var bulletNumbers: [Int?] {
+        var n = 0
+        return section.blocks.map { b in
+            switch b {
+            case .bullet(_, 0), .numbered: n += 1; return n
+            default: return nil
+            }
+        }
+    }
+
+    private func icon(_ kind: MDSection.Kind) -> String {
+        switch kind {
+        case .tldr: "doc.text.fill"
+        case .keyPoints: "list.bullet.rectangle.fill"
+        case .takeaways: "lightbulb.fill"
+        case .other: "text.alignleft"
+        }
+    }
+
+    @ViewBuilder private func block(_ b: MDBlock, kind: MDSection.Kind, number: Int?) -> some View {
+        switch b {
+        case let .paragraph(t):
+            prose(t).lineSpacing(4)
+        case let .bullet(t, indent) where indent > 0:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Circle().fill(p.secondary).frame(width: 5, height: 5)
+                prose(t)
+            }
+            .padding(.leading, 34 + CGFloat(indent - 1) * 16)
+        case let .bullet(t, _), let .numbered(_, t):
+            HStack(alignment: .top, spacing: 12) {
+                marker(kind, number: number)
+                prose(t).padding(.top, 1)
+            }
+        case .heading, .rule:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private func marker(_ kind: MDSection.Kind, number: Int?) -> some View {
+        switch kind {
+        case .keyPoints:
+            Text("\(number ?? 0)").font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(.white)
+                .frame(width: 22, height: 22).background(Circle().fill(p.accent))
+        case .takeaways:
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 19)).foregroundStyle(.white, p.accent).frame(width: 22, height: 22)
+        case .tldr, .other:
+            Circle().fill(p.accent).frame(width: 7, height: 7).frame(width: 22, height: 18)
+        }
+    }
+
+    private func prose(_ t: String) -> some View {
+        Text(Markdown.inline(t)).font(.body).foregroundStyle(p.text.opacity(0.9))
+            .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

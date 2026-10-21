@@ -14,8 +14,12 @@ final class PlaybackController {
     var rate: Float = 1 { didSet { if isPlaying { player?.rate = rate } } }
     /// Test-only (the `mute` test command), so automated runs don't play sound.
     var muted = false { didSet { player?.isMuted = muted } }
+    /// The mini-player's volume slider (0…1), kept across files.
+    var volume: Float = 1 { didSet { player?.volume = volume } }
     /// Play All: the remaining entries, played in order when the current one ends.
     private(set) var upNext: [(videoID: Int64, path: String)] = []
+    /// What Play All already played, so Previous can go back.
+    private(set) var played: [(videoID: Int64, path: String)] = []
     /// Set when Play All moves on, so the window can follow along.
     var onAdvance: (Int64) -> Void = { _ in }
 
@@ -41,6 +45,7 @@ final class PlaybackController {
         let item = AVPlayerItem(url: URL(fileURLWithPath: path))
         let player = AVPlayer(playerItem: item)
         player.isMuted = muted
+        player.volume = volume
         self.player = player
         currentPath = path
         currentVideoID = videoID
@@ -105,6 +110,7 @@ final class PlaybackController {
         currentVideoID = nil
         isPlaying = false
         upNext = []
+        played = []
     }
 
     /// Saves the position and waits for it to be written (used when quitting).
@@ -126,16 +132,39 @@ final class PlaybackController {
         if Date().timeIntervalSince(lastSaved) > 5, isPlaying { savePosition() }
     }
 
+    var hasPrevious: Bool { !played.isEmpty }
+
+    /// The next Play All item, now.
+    func next() {
+        guard let next = upNext.first else { return }
+        advance(to: next, upNext: Array(upNext.dropFirst()), played: played + current)
+    }
+
+    /// Back to the start of this one, or (in its first 3 seconds) to the item played before it.
+    func previous() {
+        guard currentTime < 3, let back = played.last else { seek(to: 0); return }
+        advance(to: back, upNext: current + upNext, played: Array(played.dropLast()))
+    }
+
+    private var current: [(videoID: Int64, path: String)] {
+        if let currentPath, let currentVideoID { [(currentVideoID, currentPath)] } else { [] }
+    }
+
+    private func advance(to item: (videoID: Int64, path: String), upNext rest: [(videoID: Int64, path: String)],
+                         played history: [(videoID: Int64, path: String)]) {
+        let keepRate = rate
+        stop()
+        rate = keepRate
+        play(path: item.path, videoID: item.videoID, upNext: rest)
+        played = history
+        onAdvance(item.videoID)
+    }
+
     private func finished() {
         // finished: next time this file starts from the beginning
         if let path = currentPath { Task { try? await db.savePosition(path, position: 0, duration: duration) } }
         currentTime = 0
         guard let next = upNext.first else { isPlaying = false; return }
-        let rest = Array(upNext.dropFirst())
-        let keepRate = rate
-        stop()
-        rate = keepRate
-        play(path: next.path, videoID: next.videoID, upNext: rest)
-        onAdvance(next.videoID)
+        advance(to: next, upNext: Array(upNext.dropFirst()), played: played + current)
     }
 }

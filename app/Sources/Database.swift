@@ -64,6 +64,17 @@ actor Database {
                 """)
             }
         }
+        if version < 3 {
+            // a v1 database was just backed up as pre-v2, so only an existing v2 one needs its own copy
+            if version >= 2, let backupDir { try backupBeforeUpgrade(db, to: backupDir, label: "pre-v3") }
+            try db.transaction {
+                try db.exec("""
+                ALTER TABLE videos ADD COLUMN description TEXT;
+                ALTER TABLE videos ADD COLUMN tags TEXT;
+                PRAGMA user_version = 3;
+                """)
+            }
+        }
     }
 
     static func backupBeforeUpgrade(_ db: SQLite, to dir: URL, label: String) throws {
@@ -147,6 +158,16 @@ actor Database {
             """).map { (Database.job($0), $0.string("video_title")) }
     }
 
+    /// Failed or interrupted jobs that nothing newer of the same kind has replaced (a retry, or a later success).
+    func failedJobs(limit: Int = 20) throws -> [(job: Job, title: String?)] {
+        try db.query("""
+            SELECT j.*, v.title AS video_title FROM jobs j JOIN videos v ON v.id = j.video_id
+            WHERE j.status IN ('failed', 'interrupted')
+              AND NOT EXISTS(SELECT 1 FROM jobs k WHERE k.video_id = j.video_id AND k.kind = j.kind AND k.id > j.id)
+            ORDER BY j.id DESC LIMIT ?
+            """, [limit]).map { (Database.job($0), $0.string("video_title")) }
+    }
+
     /// queued → running; false if the job was removed from the queue meanwhile.
     func markRunning(_ id: Int64, at: Date = Date()) throws -> Bool {
         try db.run("UPDATE jobs SET status='running', started=? WHERE id=? AND status='queued'", [at, id]) == 1
@@ -204,12 +225,17 @@ actor Database {
 
     func playlists() throws -> [PlaylistSummary] {
         try db.query("""
-            SELECT c.id, c.name, c.source_url, count(i.video_id) AS n, coalesce(sum(v.duration), 0) AS total
+            SELECT c.id, c.name, c.source_url, count(i.video_id) AS n, coalesce(sum(v.duration), 0) AS total,
+              (SELECT f.thumbnail_path FROM collection_items fi JOIN videos f ON f.id = fi.video_id
+                 WHERE fi.collection_id = c.id ORDER BY fi.position LIMIT 1) AS cover_path,
+              (SELECT f.thumbnail_url FROM collection_items fi JOIN videos f ON f.id = fi.video_id
+                 WHERE fi.collection_id = c.id ORDER BY fi.position LIMIT 1) AS cover_url
             FROM collections c LEFT JOIN collection_items i ON i.collection_id = c.id
             LEFT JOIN videos v ON v.id = i.video_id
             GROUP BY c.id ORDER BY c.created DESC, c.id DESC
             """).map { PlaylistSummary(id: $0.int64("id") ?? 0, name: $0.string("name") ?? "Playlist", sourceURL: $0.string("source_url"),
-                                      count: $0.int("n") ?? 0, totalDuration: $0.double("total") ?? 0) }
+                                      count: $0.int("n") ?? 0, totalDuration: $0.double("total") ?? 0,
+                                      coverPath: $0.string("cover_path"), coverURL: $0.string("cover_url")) }
     }
 
     func playlistIDs(containing videoID: Int64) throws -> Set<Int64> {
@@ -255,6 +281,16 @@ actor Database {
 
     func position(_ path: String) -> Double? {
         (try? db.query("SELECT position FROM playback WHERE file_path=?", [path]))?.first?.double("position")
+    }
+
+    /// Entries with a resume position that isn't "nearly finished" (the player's rule: the last 5%, at most 10 s), latest first.
+    func continueWatching(limit: Int = 3) throws -> [(videoID: Int64, position: Double, duration: Double?)] {
+        try db.query("""
+            SELECT j.video_id, p.position, p.duration, max(p.updated) AS latest FROM playback p
+            JOIN jobs j ON j.file_path = p.file_path AND j.status = 'succeeded'
+            WHERE p.position > 1 AND (p.duration IS NULL OR p.position < p.duration - min(10, p.duration * 0.05))
+            GROUP BY j.video_id ORDER BY latest DESC LIMIT ?
+            """, [limit]).compactMap { r in r.int64("video_id").map { ($0, r.double("position") ?? 0, r.double("duration")) } }
     }
 
     func setThumbnailPath(_ videoID: Int64, _ path: String?) throws {
@@ -313,10 +349,12 @@ actor Database {
     /// `override`: yt-dlp metadata replaces guesses. Otherwise values only fill fields that are still empty.
     func applyInfo(_ videoID: Int64, _ i: VideoInfo, override: Bool) throws {
         let pick = override ? "coalesce(?, %@)" : "coalesce(%@, ?)"
-        let cols = ["title", "channel", "channel_followers", "thumbnail_url", "duration", "upload_date", "platform"]
+        let cols = ["title", "channel", "channel_followers", "thumbnail_url", "duration", "upload_date", "platform", "description", "tags"]
         let sets = cols.map { "\($0) = " + String(format: pick, $0) }.joined(separator: ", ")
+        let tags = i.tags.flatMap { $0.isEmpty ? nil : try? JSONEncoder().encode($0) }.flatMap { String(data: $0, encoding: .utf8) }
         try db.run("UPDATE videos SET \(sets) WHERE id=?",
-                   [i.title?.nilIfBlank, i.channel?.nilIfBlank, i.followers, i.thumbnail, i.duration, i.uploadDate, i.platform, videoID])
+                   [i.title?.nilIfBlank, i.channel?.nilIfBlank, i.followers, i.thumbnail, i.duration, i.uploadDate, i.platform,
+                    i.description?.nilIfBlank, tags, videoID])
     }
 
     /// Imported (URL-less) entries for the same video are folded into the real one once title and channel are known.
@@ -382,8 +420,8 @@ actor Database {
         case .all: "1"
         case .summaries: "has_summary"
         case .audio: "has_audio"
-        case .downloads: "has_video"
-        case .onMac: "1"            // file existence is checked by HistoryStore, not SQL
+        case .video: "has_video"
+        case .offline: "1"          // file existence is checked by HistoryStore, not SQL
         case .favorites: "favorite = 1"
         }
         let sortOrder = switch sort {
@@ -565,6 +603,8 @@ actor Database {
         Video(id: r.int64("id") ?? 0, key: r.string("key") ?? "", url: r.string("url"), platform: r.string("platform"),
               title: r.string("title"), channel: r.string("channel"), channelFollowers: r.int("channel_followers"),
               thumbnailURL: r.string("thumbnail_url"), thumbnailPath: r.string("thumbnail_path"), duration: r.double("duration"), uploadDate: r.string("upload_date"),
+              description: r.string("description"),
+              tags: r.string("tags").flatMap { try? JSONDecoder().decode([String].self, from: Data($0.utf8)) } ?? [],
               favorite: r.bool("favorite"), firstProcessed: r.date("first_processed") ?? Date(),
               lastProcessed: r.date("last_processed") ?? Date(), lastOpened: r.date("last_opened"),
               hasSummary: r.bool("has_summary"), hasAudio: r.bool("has_audio"), hasVideo: r.bool("has_video"),

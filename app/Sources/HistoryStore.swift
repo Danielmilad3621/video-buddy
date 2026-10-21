@@ -21,6 +21,10 @@ final class HistoryStore {
     var playlists: [PlaylistSummary] = []
     var openPlaylistID: Int64? { didSet { if openPlaylistID != oldValue { Task { await reloadPlaylists() } } } }
     var playlistVideos: [Video] = []
+    /// Home's "Continue watching": entries you stopped part-way through, with how far you got (0…1).
+    var continueWatching: [(video: Video, progress: Double)] = []
+    /// The Queue's "Failed" list: jobs that failed or were interrupted and haven't been retried or redone.
+    var failed: [FailedItem] = []
     var lastError: String?
 
     init(db: Database) { self.db = db }
@@ -35,11 +39,19 @@ final class HistoryStore {
             let files = try await allFiles
             let onMac = Set(files.filter { $0.isMedia && $0.exists }.map(\.videoID))
             let loaded = try await list
-            videos = filter == .onMac ? loaded.filter { onMac.contains($0.id) } : loaded
+            videos = filter == .offline ? loaded.filter { onMac.contains($0.id) } : loaded
             recent = try await latest
             self.files = files
             onMacIDs = onMac
             stats = try await counts
+            failed = try await db.failedJobs().map { FailedItem(job: $0.job, title: $0.title ?? "Untitled video") }
+            var resume: [(video: Video, progress: Double)] = []
+            for r in try await db.continueWatching() {
+                guard let v = try await db.video(r.videoID), playable(for: v.id) != nil else { continue }
+                let total = r.duration ?? v.duration ?? 0
+                resume.append((v, total > 0 ? min(r.position / total, 1) : 0))
+            }
+            continueWatching = resume
             lastError = nil
         } catch {
             lastError = "Couldn't load history: \(error)"
@@ -102,4 +114,11 @@ final class HistoryStore {
         selectedJobs.filter { $0.kind == .summary && $0.status == .succeeded && $0.summary?.nilIfBlank != nil }
     }
     var transcriptJob: Job? { selectedJobs.first { $0.transcript?.nilIfBlank != nil } }
+}
+
+struct FailedItem: Identifiable, Equatable {
+    let job: Job
+    let title: String
+    var id: Int64 { job.id }
+    var retry: RetryInfo { RetryInfo(action: job.action, videoID: job.videoID, filePath: job.filePath) }
 }

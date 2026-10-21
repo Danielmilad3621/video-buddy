@@ -87,4 +87,6 @@ struct PlaylistSummary: Identifiable, Hashable {
     var sourceURL: String?
     var count: Int
     var totalDuration: Double
+    var coverPath: String? = nil    // the first video's thumbnail, for the sidebar artwork
+    var coverURL: String? = nil
 }

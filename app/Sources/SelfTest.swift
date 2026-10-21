@@ -87,6 +87,29 @@ enum SelfTest {
         check(Markdown.isRTL("ده ملخص") && !Markdown.isRTL("Hello"), "RTL detection")
         check(Fmt.duration(18) == "0:18" && Fmt.duration(8316) == "2:18:36" && Fmt.duration(nil) == nil, "durations")
         check(Fmt.watchTime(44_640) == "12h 24m", "watch time")
+
+        // 3.0: the summary as cards
+        let cards = Markdown.sections(Markdown.parse("""
+        # Video summary
+        ## TL;DR
+        Short.
+
+        ## Key Points
+        - a
+        - b
+          - nested
+        ---
+        ## Actionable Takeaways
+        - do it
+        """))
+        check(cards.map(\.kind) == [.tldr, .keyPoints, .takeaways] && cards[1].blocks.count == 3 && cards[0].displayTitle == "TL;DR",
+              "summary cards: \(cards.map(\.title))")
+        let brief = Markdown.sections(Markdown.parse("One short paragraph."))
+        check(brief.count == 1 && brief[0].kind == .tldr && brief[0].displayTitle == "Summary", "a summary without headings is one card")
+        check(Markdown.sections(Markdown.parse("- a\n- b")).first?.kind == .keyPoints, "a bullets-only summary is Key Points")
+        check(Markdown.sections(Markdown.parse("## ⭐ Key takeaways\n- x\n## أهم النقاط\n- y")).map(\.kind) == [.takeaways, .keyPoints],
+              "ADHD takeaways and Arabic headings")
+        check(HistoryFilter.allCases.map(\.rawValue) == ["All", "Summaries", "Audio", "Video", "Offline", "Favorites"], "library filter chips")
     }
 
     // MARK: database
@@ -114,7 +137,7 @@ enum SelfTest {
         check(try await db.videos(search: "zzzq").isEmpty, "search miss")
         check(try await db.videos(search: "e_e").isEmpty, "search escapes _ (unescaped it would match \"ele\")")
         check(try await db.videos(search: "50%").count == 1, "search literal %")
-        let summarized = try await db.videos(filter: .summaries), downloaded = try await db.videos(filter: .downloads)
+        let summarized = try await db.videos(filter: .summaries), downloaded = try await db.videos(filter: .video)
         check(summarized.count == 1 && downloaded.isEmpty, "filters")
 
         try await db.setFavorite(first.video, true)
@@ -166,6 +189,30 @@ enum SelfTest {
         _ = old
         check(try await db.prune(olderThanDays: 365) == 1, "prunes old non-favorites")
         check(try await db.video(first.video) != nil, "keeps favorites")
+
+        // 3.0: description and tags from yt-dlp; guesses never replace them
+        try await db.applyInfo(first.video, VideoInfo(description: "About elephants.", tags: ["zoo", "elephants"]), override: true)
+        try await db.applyInfo(first.video, VideoInfo(description: "guess", tags: ["x"]), override: false)
+        let described = try await db.video(first.video)
+        check(described?.description == "About elephants." && described?.tags == ["zoo", "elephants"], "description and tags stored")
+
+        // 3.0: failed jobs until something newer of the same kind replaces them
+        let bad = try await db.enqueue(videoID: first.video, action: .transcribe, filePath: "/tmp/missing.mp4")
+        _ = try await db.markRunning(bad)
+        try await db.finishJob(bad, videoID: first.video, NewJob(kind: .transcript, status: .failed, source: .app, error: "no file"))
+        let failedNow = try await db.failedJobs()
+        // (a failed job's file path isn't kept; a retried transcription uses the entry's file that's on this Mac)
+        check(failedNow.contains { $0.job.id == bad && $0.job.action == .transcribe && $0.job.videoID == first.video },
+              "a failed job is listed with what Retry needs")
+        let retried = try await db.enqueue(videoID: first.video, action: .transcribe, filePath: "/tmp/missing.mp4")
+        check(try await !db.failedJobs().contains { $0.job.id == bad }, "a retried job leaves the failed list")
+        try await db.removeQueued(retried)
+
+        // 3.0: continue watching, with the player's "nearly finished" rule
+        try await db.savePosition("/tmp/v.mp4", position: 30, duration: 100)
+        check(try await db.continueWatching().first.map { $0.videoID == first.video && $0.position == 30 } == true, "continue watching")
+        try await db.savePosition("/tmp/v.mp4", position: 97, duration: 100)
+        check(try await db.continueWatching().isEmpty, "nearly finished files aren't offered again")
         check(try await db.quickCheck() == "ok", "integrity")
     }
 
@@ -228,7 +275,7 @@ enum SelfTest {
             try v1.run("INSERT INTO jobs(video_id, kind, status, source, started, file_path) VALUES(1, 'video', 'succeeded', 'app', 2, '/tmp/v.mp4')")
         }
         let db = try Database(directory: dir)
-        check(try await db.schemaVersion() == 2, "upgraded to version 2")
+        check(try await db.schemaVersion() == 3, "upgraded to version 3")
         let v = try await db.video(1)
         check(v?.title == "Me at the zoo" && v?.favorite == true && v?.hasSummary == true && v?.hasVideo == true, "data kept through the upgrade")
         let jobs = try await db.jobs(for: 1)
@@ -239,7 +286,26 @@ enum SelfTest {
         check(try await db.quickCheck() == "ok", "upgraded database healthy")
         _ = try Database(directory: dir)   // opening again must not upgrade or back up twice
         let after = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path)) ?? []
-        check(after.filter { $0.hasPrefix("history-pre-v2-") }.count == 1, "no second upgrade backup")
+        check(after.filter { $0.hasPrefix("history-pre-v2-") }.count == 1 && !after.contains { $0.hasPrefix("history-pre-v3-") },
+              "no second upgrade backup")
+
+        // a 2.1 database (version 2) gets its own verified copy before the 3.0 columns are added
+        let v2dir = dir.appendingPathComponent("v2")
+        do {
+            let fresh = try Database(directory: v2dir)
+            _ = try await fresh.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
+        }
+        do {
+            let raw = try SQLite(path: v2dir.appendingPathComponent("history.sqlite").path)
+            try raw.exec("ALTER TABLE videos DROP COLUMN description; ALTER TABLE videos DROP COLUMN tags; PRAGMA user_version = 2;")
+        }
+        let up = try Database(directory: v2dir)
+        let kept = try await up.videos()
+        check(try await up.schemaVersion() == 3 && kept.count == 1 && kept[0].description == nil && kept[0].tags.isEmpty,
+              "2.1 → 3.0 keeps entries; older ones have no description yet")
+        let pre3 = ((try? FileManager.default.contentsOfDirectory(atPath: v2dir.appendingPathComponent("backups").path)) ?? [])
+            .filter { $0.hasPrefix("history-pre-v3-") }
+        check(pre3.count == 1 && Database.isHealthy(v2dir.appendingPathComponent("backups/\(pre3[0])")), "verified backup before the 3.0 upgrade")
     }
 
     private static func queue(_ dir: URL) async throws {
@@ -320,7 +386,9 @@ enum SelfTest {
         check(try await db.videos(playlist: mine).map(\.id) == [existing.video, third], "reorder")
         try await db.removeFromPlaylist(mine, videoID: existing.video)
         check(try await db.videos(playlist: mine).map(\.id) == [third], "remove from playlist")
+        try await db.setThumbnailPath(third, "/tmp/third.jpg")
         let lists = try await db.playlists()
+        check(lists.first { $0.name == "Mine" }?.coverPath == "/tmp/third.jpg", "playlist artwork is its first video's thumbnail")
         check(lists.map(\.name) == ["Mine", "Trip"] && lists.first { $0.name == "Trip" }?.count == 2 && lists.first { $0.name == "Trip" }?.totalDuration == 80,
               "playlist summaries")
         try await db.deleteVideo(third)

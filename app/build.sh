@@ -1,8 +1,8 @@
 #!/bin/bash
-# builds, self-tests and installs ~/Applications/Video Summarizer.app (re-run after editing Sources/ or the scripts)
+# builds, self-tests and installs ~/Applications/Video Buddy.app (re-run after editing Sources/ or the scripts)
 set -euo pipefail
 cd "$(dirname "$0")"
-app="$HOME/Applications/Video Summarizer.app"
+app="$HOME/Applications/Video Buddy.app"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 bundle="$tmp/VideoSummarizer.app"

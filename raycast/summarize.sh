@@ -5,7 +5,7 @@
 # @raycast.packageName cobalt
 # @raycast.icon 🧠
 # @raycast.argument1 { "type": "text", "placeholder": "URL (blank = clipboard)", "optional": true }
-# Video Summarizer.app runs its own bundled copy of this (rebuild the app after editing); it sets VS_FROM_APP, VS_OUT_DIR and VS_SUMMARY_PROMPT.
+# Video Buddy.app runs its own bundled copy of this (rebuild the app after editing); it sets VS_FROM_APP, VS_OUT_DIR and VS_SUMMARY_PROMPT.
 # the marker lines below (Downloading / Transcribing / Summarizing / 📁) are parsed by the app: keep them stable.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)   # the project folder; works wherever it lives

@@ -28,7 +28,7 @@ enum TestHooks {
         case "search": store.search = arg
         case "filter": store.filter = HistoryFilter(rawValue: arg) ?? .all
         case "sort": store.sort = HistorySort(rawValue: arg) ?? .recent
-        case "section": model.section = AppSection(rawValue: arg) ?? .history
+        case "section": model.section = AppSection(rawValue: arg) ?? .library
         case "tab": model.detailTab = DetailTab(rawValue: arg) ?? .summary
         case "regenerate":
             let f = arg.split(separator: "|").map(String.init)
@@ -79,6 +79,17 @@ enum TestHooks {
         case "makeAllOffline": model.askMakeAllAvailableOffline(); model.confirmOfflineBatch()
         case "deletePlaylist":
             if let pl = store.playlists.first(where: { $0.name == arg }) { model.pendingPlaylistDeletion = pl; model.confirmPlaylistDeletion() }
+        case "next": model.playback.next()
+        case "previous": model.playback.previous()
+        case "volume": model.playback.volume = Float(arg) ?? 1
+        case "loadDetails": if let v = store.selectedVideo { model.loadDetails(v) }
+        case "retryFailed": if let f = store.failed.first { model.retry(f.retry) }
+        case "showSteps":
+            // test-only: a sample of the 4-stage strip, so its look can be checked without a download or an AI call
+            let states: [StepState] = [.done, .running, .pending, .pending]
+            model.jobs.steps = ["Download audio", "Transcribe on-device", "Generate AI summary", "Save to library"].enumerated()
+                .map { JobStep(id: $0.offset, label: $0.element, state: states[$0.offset]) }
+            model.jobs.banner = arg == "off" ? nil : .running("Summarizing (sample)…")
         case "settings": NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
@@ -123,12 +134,18 @@ enum TestHooks {
                                                    "available": $0.preview.available.count,
                                                    "entries": $0.preview.entries.prefix(8).map { "\($0.title) [\(Fmt.duration($0.duration) ?? "?")]" }] as [String: Any] } ?? [:],
             "queuePaused": jobs.paused,
+            "failed": store.failed.map { "\($0.job.action.rawValue): \($0.title)" },
+            "continueWatching": store.continueWatching.map { "\($0.video.displayTitle) \(Int($0.progress * 100))%" },
+            "description": selected?.description ?? "",
+            "tags": selected?.tags ?? [],
+            "queueBadge": jobs.queue.count + (jobs.current == nil ? 0 : 1),
             "current": jobs.current.map { "\($0.action.rawValue): \($0.title)" } ?? "",
             "queue": jobs.queue.map { "\($0.action.rawValue): \($0.title)" },
             "onMac": store.videos.filter { store.onMacIDs.contains($0.id) }.map(\.displayTitle),
             "thumbnailPath": selected?.thumbnailPath ?? "",
             "playback": ["path": model.playback.currentPath ?? "", "time": model.playback.currentTime,
                          "duration": model.playback.duration, "playing": model.playback.isPlaying, "rate": model.playback.rate,
+                         "volume": model.playback.volume, "hasPrevious": model.playback.hasPrevious,
                          "line": (model.playback.currentVideoID == selected?.id ? store.transcriptJob?.segments.index(at: model.playback.currentTime) : nil) ?? -1],
         ]
         if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {
