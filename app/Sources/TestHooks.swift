@@ -178,13 +178,56 @@ enum TestHooks {
             }
         case "clearBrowsingData": Task { await model.browser.clearBrowsingData() }
         case "menuKey":
-            // a ⌘ shortcut handled by the app's menu, as macOS does for a real key press
+            // a shortcut handled by the app's menu, as macOS does for a real key press: "<keys>" with ⌘, or
+            // "<modifiers>:<keys>" (c ⌘, s ⇧, o ⌥, t ⌃; "tab" for the tab key)
+            let f = arg.split(separator: ":", maxSplits: 1).map(String.init)
+            var (mods, chars) = f.count == 2 ? (f[0], f[1] == "tab" ? "\t" : f[1]) : ("c", arg)
+            if mods.contains("s") { chars = chars.uppercased() }      // ⇧ with a letter types the capital, as a keyboard does
+            var flags: NSEvent.ModifierFlags = []
+            if mods.contains("c") { flags.insert(.command) }
+            if mods.contains("s") { flags.insert(.shift) }
+            if mods.contains("o") { flags.insert(.option) }
+            if mods.contains("t") { flags.insert(.control) }
             if let w = model.browser.tab?.webView?.window ?? NSApp.windows.first,
-               let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
-                                        windowNumber: w.windowNumber, context: nil, characters: arg, charactersIgnoringModifiers: arg,
-                                        isARepeat: false, keyCode: 0) {
-                webRead = "menu handled ⌘\(arg): \(NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false)"
+               let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                                        isARepeat: false, keyCode: chars == "\t" ? 48 : 0) {
+                webRead = "menu handled \(mods):\(arg): \(NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false)"
             }
+        case "windowKey":
+            // a key press sent through the window (the page or a field gets it first, then the menu), "<modifiers>:<keys>"
+            let f = arg.split(separator: ":", maxSplits: 1).map(String.init)
+            let chars = f.count == 2 ? (f[1] == "tab" ? "\t" : f[1]) : arg
+            var flags: NSEvent.ModifierFlags = []
+            if f.count == 2, f[0].contains("c") { flags.insert(.command) }
+            if f.count == 2, f[0].contains("s") { flags.insert(.shift) }
+            if f.count == 2, f[0].contains("t") { flags.insert(.control) }
+            if let w = model.browser.tab?.webView?.window ?? NSApp.keyWindow {
+                for type in [NSEvent.EventType.keyDown, .keyUp] {
+                    if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                                                isARepeat: false, keyCode: chars == "\t" ? 48 : 0) { NSApp.sendEvent(e) }
+                }
+            }
+        // 4.0 Phase 2: tabs (numbers are the tab strip's, from 1)
+        case "tabNew": model.section = .youtube; model.browser.open(URL(string: arg) ?? BrowserPolicy.home)
+        case "tabNewBehind": model.browser.open(URL(string: arg) ?? BrowserPolicy.home, background: true, from: model.browser.tab)
+        case "tabSelect": if let t = tab(arg) { model.browser.select(t) }
+        case "tabClose": if let t = tab(arg) { model.browser.close(t) }
+        case "tabMove":
+            let f = arg.split(separator: "|").compactMap { Int($0) }
+            if f.count == 2, let t = tab(String(f[0])) { model.browser.move(t, to: f[1] - 1) }
+        case "tabDuplicate": if let t = model.browser.tab { model.browser.duplicate(t) }
+        case "tabReopen": model.reopenTab()
+        case "pasteText": model.paste(arg)      // what ⌘⇧V does with this text (the real clipboard is left alone)
+        case "tabNext": model.browser.selectTab(offset: 1)
+        case "tabPrevious": model.browser.selectTab(offset: -1)
+        case "captureClick":
+            // remembers what a bar button on screen now carries (the tab and its video), for a click delivered later
+            captured = model.browser.tab.flatMap { t in t.page.videoID.map { (t.id, $0) } }
+            webRead = captured.map { "captured \($0.1)" } ?? "nothing to capture"
+        case "deliverClick":
+            if let c = captured { model.requestFromBrowser(BarSlot(rawValue: arg) ?? .video, videoID: c.1, tabID: c.0) }
         // 4.0 Phase 1b: the native action bar
         case "nativeClick":
             if let v = TestProbes.view(arg), let w = v.window {
@@ -219,7 +262,7 @@ enum TestHooks {
                 }
             }
         case "ownChannels": model.setOwnChannels(arg)
-        case "requestVideo": model.requestFromBrowser(.video, videoID: arg)      // a click carrying this id (stale-click test)
+        case "requestVideo": model.requestFromBrowser(.video, videoID: arg, tabID: model.browser.tab?.id)      // a click carrying this id (stale-click test)
         case "declareOnly":
             // "<youtube id>|<reference>": record a written-permission declaration without queueing anything
             let f = arg.split(separator: "|", maxSplits: 1).map(String.init)
@@ -247,6 +290,13 @@ enum TestHooks {
     }
 
     private static var webRead = ""
+    private static var captured: (UUID, String)?
+
+    /// A tab by its number in the strip (from 1).
+    private static func tab(_ n: String) -> BrowserTab? {
+        let tabs = AppModel.shared.browser.tabs
+        return Int(n).flatMap { tabs.indices.contains($0 - 1) ? tabs[$0 - 1] : nil }
+    }
 
     /// "<sample dir>|<download dir>": library records for real public YouTube ids, with synthetic media (a 14 s clip made
     /// with `say` + ffmpeg), covering every state the action bar has. Only ever used on a throwaway database.
@@ -399,6 +449,15 @@ enum TestHooks {
                         "declaration": model.declaration.map { "\($0.slot.rawValue) for \($0.videoID)" } ?? "",
                         "probes": TestProbes.visible] as [String: Any]
             }(),
+            "tabs": model.browser.tabs.enumerated().map { i, t in
+                ["n": i + 1, "url": t.url?.absoluteString ?? "", "title": t.title, "page": t.page.label, "videoID": t.page.videoID ?? "",
+                 "active": t.id == model.browser.activeID, "asleep": t.isAsleep,
+                 "opener": t.openerID.flatMap { id in model.browser.tabs.firstIndex { $0.id == id }.map { $0 + 1 } } ?? 0] as [String: Any]
+            },
+            "closedTabs": model.browser.closed.count,
+            "liveTabs": model.browser.tabs.filter { !$0.isAsleep }.count,
+            "declarationTitle": model.declaration?.title ?? "",
+            "playlistSheet": model.playlistImport.map { ["linkOnly": $0.linkOnly, "entries": $0.preview.entries.count] as [String: Any] } ?? [:],
             "browser": { () -> [String: Any] in
                 let b = model.browser
                 guard let t = b.tab else { return ["tab": "none", "storeID": b.existingStoreID ?? "", "clearReport": b.clearReport ?? ""] }
@@ -442,6 +501,8 @@ enum TestHooks {
             "queueBadge": jobs.queue.count + (jobs.current == nil ? 0 : 1),
             "current": jobs.current.map { "\($0.action.rawValue): \($0.title)" } ?? "",
             "queue": jobs.queue.map { "\($0.action.rawValue): \($0.title)" },
+            // which videos are queued, by their YouTube id (the wrong-tab checks compare these exactly)
+            "queueKeys": jobs.queue.map { q in "\(q.action.rawValue) \(store.video(q.videoID)?.key ?? "?")" },
             "onMac": store.videos.filter { store.onMacIDs.contains($0.id) }.map(\.displayTitle),
             "thumbnailPath": selected?.thumbnailPath ?? "",
             "playback": ["path": model.playback.currentPath ?? "", "time": model.playback.currentTime,

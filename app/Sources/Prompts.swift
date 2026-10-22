@@ -91,11 +91,13 @@ enum AppSettings {
     static var defaultDownloadDir: String { isPreview ? dataDir.appendingPathComponent("Downloads").path : home + "/Downloads/cobalt" }
     /// Video Buddy 4.0 Preview.app (app/tools/preview.sh sets VBPreview): its own data folder, downloads and AI jobs locked off.
     static let isPreview = Bundle.main.object(forInfoDictionaryKey: "VBPreview") as? Bool == true
+    /// The preview's data folder is named after the app, so its test build ("Video Buddy 4.0 Test") has its own too.
+    static let previewName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Video Buddy 4.0 Preview"
 
     /// VS_DATA_DIR lets tests use a throwaway history without touching the real one.
     static var dataDir: URL {
         if let dir = ProcessInfo.processInfo.environment["VS_DATA_DIR"]?.nilIfBlank { return URL(fileURLWithPath: dir) }
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(isPreview ? "Video Buddy 4.0 Preview" : "Video Summarizer")
+            .appendingPathComponent(isPreview ? previewName : "Video Summarizer")
     }
 }

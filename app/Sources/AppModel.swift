@@ -121,6 +121,7 @@ final class AppModel {
         authorizations = (try? await db.allAuthorizations()) ?? [:]
         ownChannels = await db.ownChannels()
         browser.onPageChange = { [weak self] _ in self?.updateBrowserCheck() }
+        browser.onNotice = { [weak self] in self?.notice = $0 }
         // the preview exists to try the YouTube browser (test runs pick their own section, so --remove can clear the store)
         if AppSettings.isPreview, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" { section = .youtube }
         ingestor.start()
@@ -162,6 +163,8 @@ final class AppModel {
     // MARK: processing
 
     func start(_ kind: JobKind) {
+        // the YouTube section hides the link field: its shortcuts act for the active tab's video, through the bar's checks
+        if section == .youtube { startFromBrowser(kind); return }
         guard let link = link.nilIfBlank else { focusLinkToken += 1; return }
         if let playlist = PlaylistLink.parse(link) {
             if playlist.videoID != nil { playlistChoice = (playlist, kind) } else { readPlaylist(playlist, kind: kind) }
@@ -206,19 +209,54 @@ final class AppModel {
         browser.checker.show(id, needed: needed)
     }
 
-    /// Every bar button comes here with the video id it showed. Nothing is queued unless that is still the tab's
-    /// video, the technical checks passed and a declaration is on record; then the usual queue (with its duplicate guard).
-    func requestFromBrowser(_ slot: BarSlot, videoID clicked: String, anotherCopy: Bool = false) {
-        let outcome = BrowserActionOutcome.decide(clicked: clicked, current: browser.currentVideoID, slot: slotState(slot, clicked),
+    /// Every bar button comes here with the tab and the video id it showed. Nothing is queued unless that tab is still
+    /// the active one and that is still its video, the technical checks passed and a declaration is on record; then the
+    /// usual queue (with its duplicate guard).
+    func requestFromBrowser(_ slot: BarSlot, videoID clicked: String, tabID: UUID?, anotherCopy: Bool = false) {
+        let current = browser.active.flatMap { $0.id == tabID ? $0.page.videoID : nil }
+        let outcome = BrowserActionOutcome.decide(clicked: clicked, current: current, slot: slotState(slot, clicked),
                                                   anotherCopy: anotherCopy)
         switch outcome {
         case let .queue(id): queueFromBrowser(slot, id)
         case .pageChanged: notice = "The page changed before your click, so nothing was queued. Try again."
-        case let .declare(id): declaration = DeclarationRequest(videoID: id, slot: slot)
+        case let .declare(id): declaration = DeclarationRequest(videoID: id, slot: slot, title: browserTitle(id))
         case let .explain(reason): notice = reason
         case .alreadyHave: notice = slot == .summary ? "This video already has a summary." : "You already have this on this Mac."
         case .alreadyQueued: notice = "Already in the queue."
         }
+    }
+
+    /// ⌘⇧D, ⌘⇧A and ⌘↩ in the YouTube section: the same as the bar's button for the active tab's video.
+    private func startFromBrowser(_ kind: JobKind) {
+        guard let t = browser.active, let id = t.page.videoID else {
+            notice = "Open a video in this tab first: these shortcuts act for the video on screen."
+            return
+        }
+        requestFromBrowser(kind == .video ? .video : kind == .audio ? .audio : .summary, videoID: id, tabID: t.id)
+    }
+
+    /// The title to show for a YouTube video: the active tab's, if it's that video's page, else the library's.
+    func browserTitle(_ id: String) -> String? {
+        let t = browser.active
+        let page = t.flatMap { $0.page.videoID == id && $0.titleURL == $0.url ? $0.title.replacingOccurrences(of: " - YouTube", with: "").nilIfBlank : nil }
+        return page ?? store.all.first { $0.key == "youtube:\(id)" }?.title
+    }
+
+    /// ⌘T, and the menu's New Tab from any section: YouTube Home in a new tab, its address field ready to type in.
+    func newBrowserTab() {
+        section = .youtube
+        browser.open()
+        // the new tab's toolbar is a new view: focus it once it's there
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.focusLinkToken += 1 }
+    }
+
+    /// The Tab menu's commands act only while the YouTube section is shown.
+    func inBrowser(_ act: (BrowserController) -> Void) { if section == .youtube { act(browser) } }
+
+    func reopenTab() {
+        guard !browser.closed.isEmpty else { return }
+        section = .youtube
+        browser.reopenClosed()
     }
 
     private func queueFromBrowser(_ slot: BarSlot, _ id: String) {
@@ -271,7 +309,9 @@ final class AppModel {
 
     /// Lists the playlist's videos (a few seconds, nothing downloaded) and opens the preview sheet. `checking`: opened
     /// from Check Against YouTube on that playlist, so nothing is ticked and saving only links library videos.
-    func readPlaylist(_ playlist: PlaylistLink, kind: JobKind, checking: Int64? = nil) {
+    /// `linkOnly` (from the YouTube section): the sheet can only link library videos, never queue downloads, since
+    /// downloads from there go through the bar's checks one video at a time.
+    func readPlaylist(_ playlist: PlaylistLink, kind: JobKind, checking: Int64? = nil, linkOnly: Bool = false) {
         guard network.isOnline else { notice = "Reading a playlist needs internet."; return }
         readingPlaylist = true
         notice = "Reading the playlist…"
@@ -281,7 +321,7 @@ final class AppModel {
             switch result {
             case let .success(preview):
                 notice = nil
-                playlistImport = PlaylistImportState(preview: preview, action: downloadAction(kind), checking: checking)
+                playlistImport = PlaylistImportState(preview: preview, action: downloadAction(kind), checking: checking, linkOnly: linkOnly)
             case let .failure(error):
                 notice = "Couldn't read the playlist: \(error.message)"
             }
@@ -303,6 +343,7 @@ final class AppModel {
     /// Queues the chosen videos (one at a time, oldest first) and, with a target, saves the playlist: library videos
     /// that are in the YouTube playlist join it by video id even when not chosen. Nothing is downloaded that isn't chosen.
     func importPlaylist(_ entries: [PlaylistEntry], all: [PlaylistEntry], action: JobAction, into target: PlaylistTarget?, sourceURL: String) {
+        let entries = playlistImport?.linkOnly == true ? [] : entries
         playlistImport = nil
         guard !entries.isEmpty || target != nil else { return }
         let (format, language) = action == .summarize ? (AppSettings.format.rawValue, AppSettings.language.rawValue) : (nil, nil)
@@ -442,7 +483,18 @@ final class AppModel {
     }
 
     func pasteLink() {
-        if let text = NSPasteboard.general.string(forType: .string)?.nilIfBlank { link = text }
+        if let text = NSPasteboard.general.string(forType: .string)?.nilIfBlank { paste(text) }
+    }
+
+    func paste(_ text: String) {
+        // the YouTube section has no link field: a copied YouTube link opens in a new tab instead
+        guard section == .youtube else { link = text; return }
+        if let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), BrowserPolicy.decide(url, mainFrame: true) == .allow,
+           url.host.map({ BrowserPolicy.isInApp(host: $0) }) == true {
+            browser.open(url)
+        } else {
+            notice = "Not a YouTube link."
+        }
     }
 
     func retry(_ r: RetryInfo) { jobs.retry(r) }
@@ -650,6 +702,8 @@ struct DeclarationRequest: Identifiable {
     let id = UUID()
     let videoID: String
     let slot: BarSlot
+    /// Shown in the sheet, so you always see which video the declaration is for.
+    let title: String?
 }
 
 struct PlaylistImportState: Identifiable {
@@ -657,6 +711,7 @@ struct PlaylistImportState: Identifiable {
     let preview: PlaylistPreview
     let action: JobAction
     var checking: Int64? = nil
+    var linkOnly = false
 }
 
 enum NamePrompt: Identifiable {

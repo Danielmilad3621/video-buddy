@@ -1,5 +1,5 @@
 // 4.0 Phase 1: the YouTube section. Native toolbar, the Video Buddy bar (outside the page), the page itself, and
-// native offline / error screens instead of a broken page.
+// native offline / error screens instead of a broken page. Phase 2: the tab strip above them.
 import AppKit
 import SwiftUI
 import WebKit
@@ -11,30 +11,160 @@ struct BrowserView: View {
     var body: some View {
         let browser = model.browser
         VStack(spacing: 10) {
+            TabStrip()
             if let tab = browser.tab {
-                BrowserToolbar(tab: tab)
-                ActionBar(tab: tab)
-                ZStack {
-                    WebViewHost(tab: tab)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(p.border.opacity(0.6)))
-                    if !model.network.isOnline {
-                        OfflineBrowserScreen()
-                    } else if let error = tab.loadError {
-                        EmptyState(icon: "exclamationmark.triangle", title: "This page didn't load", message: error)
-                            .overlay(alignment: .bottom) {
-                                Button("Try Again") { tab.reload() }.buttonStyle(PrimaryButtonStyle(height: 34, font: .callout.weight(.semibold)))
-                                    .padding(.bottom, 40)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(p.bg.opacity(0.96))
+                // one identity per tab: nothing (address text, a dialog, the page container and its late re-attach)
+                // carries over to another tab's page
+                VStack(spacing: 10) {
+                    BrowserToolbar(tab: tab)
+                    ActionBar(tab: tab)
+                    ZStack {
+                        WebViewHost(tab: tab)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(p.border.opacity(0.6)))
+                        if !model.network.isOnline {
+                            OfflineBrowserScreen()
+                        } else if let error = tab.loadError {
+                            EmptyState(icon: "exclamationmark.triangle", title: "This page didn't load", message: error)
+                                .overlay(alignment: .bottom) {
+                                    Button("Try Again") { tab.reload() }.buttonStyle(PrimaryButtonStyle(height: 34, font: .callout.weight(.semibold)))
+                                        .padding(.bottom, 40)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(p.bg.opacity(0.96))
+                        }
                     }
                 }
+                .id(tab.id)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxHeight: .infinity)
+    }
+}
+
+/// Phase 2: the tabs, Safari-style. Each shows its page kind (or the video's thumbnail), its title and what this Mac
+/// has for its video (local only, never a network check). Drag to reorder; right-click for more.
+private struct TabStrip: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+
+    var body: some View {
+        let b = model.browser
+        HStack(spacing: 6) {
+            GeometryReader { g in
+                // tabs share the row down to a minimum width, then the row scrolls
+                let n = CGFloat(max(b.tabs.count, 1))
+                let width = min(220, max(120, (g.size.width - (n - 1) * 4) / n))
+                ScrollViewReader { scroller in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(Array(b.tabs.enumerated()), id: \.element.id) { i, t in
+                                TabChip(tab: t, index: i, active: t.id == b.activeID).frame(width: width).id(t.id)
+                            }
+                        }
+                    }
+                    .onChange(of: b.activeID) { if let id = b.activeID { withAnimation { scroller.scrollTo(id) } } }
+                }
+            }
+            .frame(height: 30)
+            IconButton(icon: "plus", label: "New Tab", tint: p.text) { model.newBrowserTab() }
+                .help("New Tab (⌘T)")
+                .testProbe("newTab")
+        }
+    }
+}
+
+private struct TabChip: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    let tab: BrowserTab
+    let index: Int
+    let active: Bool
+    @State private var hover = false
+
+    var body: some View {
+        let b = model.browser
+        let id = tab.page.videoID
+        let name = title(id)
+        HStack(spacing: 6) {
+            if let id {
+                Thumbnail(url: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg", cornerRadius: 3).frame(width: 26, height: 15)
+            } else {
+                Image(systemName: tab.page.icon).font(.caption).foregroundStyle(p.secondary).frame(width: 16)
+            }
+            Text(name).font(.caption.weight(active ? .semibold : .regular)).lineLimit(1)
+            Spacer(minLength: 0)
+            badge(id)
+            if hover || active {
+                Button { b.close(tab) } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 16, height: 16).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(p.secondary)
+                .help("Close Tab (⌘W)").accessibilityLabel("Close \(name)")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(active ? p.card : p.elevated.opacity(hover ? 1 : 0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(active ? p.accent.opacity(0.6) : p.border.opacity(0.5)))
+        .contentShape(Rectangle())
+        .onTapGesture { b.select(tab) }
+        .onHover { hover = $0 }
+        .help(name)
+        .contextMenu {
+            Button("Duplicate Tab") { b.duplicate(tab) }
+            Button("Move Tab Left") { b.move(tab, to: index - 1) }.disabled(index == 0)
+            Button("Move Tab Right") { b.move(tab, to: index + 1) }.disabled(index == b.tabs.count - 1)
+            Divider()
+            Button("Close Tab") { b.close(tab) }
+        }
+        .draggable(tab.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in
+            guard let dragged = items.first.flatMap(UUID.init(uuidString:)).flatMap({ id in b.tabs.first { $0.id == id } }) else { return false }
+            b.move(dragged, to: index)
+            return true
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Tab \(index + 1) of \(b.tabs.count): \(name)")
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+        .testProbe("tab\(index + 1)")
+    }
+
+    /// The page's title; a tab that hasn't loaded yet (opened behind) shows the library's title or what it is.
+    private func title(_ id: String?) -> String {
+        if let t = tab.title.replacingOccurrences(of: " - YouTube", with: "").nilIfBlank { return t }
+        if let id, let t = model.store.all.first(where: { $0.key == "youtube:\(id)" })?.title { return t }
+        return id != nil ? "YouTube video" : tab.page.label
+    }
+
+    /// What this Mac has for the tab's video: on this Mac (green), or waiting in the queue.
+    @ViewBuilder private func badge(_ id: String?) -> some View {
+        if let id {
+            let a = model.availability(youtubeID: id)
+            if a.videoFile != nil || a.audioFile != nil {
+                Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(p.green)
+                    .help(a.videoFile != nil ? "Video on this Mac" : "Audio on this Mac")
+            } else if [a.video, a.audio, a.summary].contains(where: { $0 == .queued || $0 == .running }) {
+                Image(systemName: "clock").font(.caption2).foregroundStyle(p.accent).help("In the queue")
+            }
+        }
+    }
+}
+
+private extension YouTubePage {
+    var icon: String {
+        switch self {
+        case .home: "house"
+        case .video, .shorts: "play.rectangle"
+        case .playlist: "music.note.list"
+        case .channel: "person.crop.square"
+        case .search: "magnifyingglass"
+        case .signIn: "person.badge.key"
+        case .consent: "checkmark.shield"
+        case .otherYouTube, .other, .blank: "globe"
+        }
     }
 }
 
@@ -126,7 +256,7 @@ private struct VideoActionBar: View {
             VStack(alignment: .leading, spacing: 8) { info(a, g, checking); actions(a, g, .icons) }
         }
         .alert("Download another copy?", isPresented: $confirmCopy) {
-            Button("Download Another Copy") { model.requestFromBrowser(.video, videoID: id, anotherCopy: true) }
+            Button("Download Another Copy") { model.requestFromBrowser(.video, videoID: id, tabID: tab.id, anotherCopy: true) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This video is already on this Mac. Another copy is a second file, at your Video quality setting (\(AppSettings.videoQuality.rawValue)).")
@@ -239,22 +369,22 @@ private struct VideoActionBar: View {
         case .ready:
             let label = slot == .summary ? "Summarize" : "Download \(noun)"
             button(label, short: slot == .summary ? "Summarize" : noun, icon: icon(slot), primary: primary, mode: mode, probe: probe) {
-                model.requestFromBrowser(slot, videoID: id)
+                model.requestFromBrowser(slot, videoID: id, tabID: tab.id)
             }
         case .authorizationRequired:
             let label = slot == .video ? "Authorization Required" : slot == .summary ? "Summarize" : "Download Audio"
             button(label, short: slot == .video ? "Authorize" : noun, icon: slot == .video ? "hand.raised.fill" : icon(slot), primary: primary,
                    mode: mode, probe: probe, help: "Declare that you may download this video first (it isn't verified)") {
-                model.requestFromBrowser(slot, videoID: id)
+                model.requestFromBrowser(slot, videoID: id, tabID: tab.id)
             }
         case .retry:
             button("Retry \(slot == .summary ? "Summary" : "Download")", short: "Retry", icon: "arrow.clockwise", primary: primary, mode: mode, probe: probe) {
-                model.requestFromBrowser(slot, videoID: id)
+                model.requestFromBrowser(slot, videoID: id, tabID: tab.id)
             }
         case .downloadAgain:
             button("Download \(noun) Again", short: "Again", icon: "arrow.down.circle", primary: primary, mode: mode, probe: probe,
                    help: "The file isn't on this Mac any more") {
-                model.requestFromBrowser(slot, videoID: id)
+                model.requestFromBrowser(slot, videoID: id, tabID: tab.id)
             }
         case .queued, .running:
             let label = state == .running ? (slot == .summary ? "Summarizing…" : "Downloading…") : "\(noun) Queued"
@@ -345,10 +475,11 @@ private struct PlaylistBar: View {
             Label("Playlist on YouTube", systemImage: "music.note.list").font(.callout.weight(.semibold))
             Spacer()
             Button("Save to Video Buddy…") {
-                if let link = PlaylistLink.parse("https://www.youtube.com/playlist?list=\(listID)") { model.readPlaylist(link, kind: .video) }
+                if let link = PlaylistLink.parse("https://www.youtube.com/playlist?list=\(listID)") { model.readPlaylist(link, kind: .video, linkOnly: true) }
             }
             .buttonStyle(SecondaryButtonStyle(height: 32, font: .callout))
-            .help("Lists the playlist (no download) so you can link it to your library")
+            .help("Lists the playlist so you can link it to your library. Nothing is downloaded from here: open a video to download it.")
+            .testProbe("savePlaylist")
         }
     }
 }
@@ -367,6 +498,14 @@ struct DeclarationSheet: View {
         let channel: String? = if case let .passed(_, handle, name)? = check { name ?? handle } else { nil }
         VStack(alignment: .leading, spacing: 14) {
             Text("Authorization required").font(.title2.weight(.semibold))
+            HStack(spacing: 10) {
+                Thumbnail(url: "https://i.ytimg.com/vi/\(request.videoID)/mqdefault.jpg", cornerRadius: 6).frame(width: 96, height: 54)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(request.title ?? "YouTube video").font(.headline).lineLimit(2)
+                    Text("youtube.com/watch?v=\(request.videoID)").font(.caption.monospaced()).foregroundStyle(p.secondary).textSelection(.enabled)
+                }
+            }
+            .testProbe("declarationVideo")
             Text("YouTube's Terms allow downloading only where YouTube offers it, or with permission from YouTube and the rights holders. Video Buddy can't check your rights: it records what you declare, labelled as not independently verified.")
                 .fixedSize(horizontal: false, vertical: true)
             if let channel { Label("Channel: \(channel)", systemImage: "person.crop.square").font(.callout).foregroundStyle(p.secondary) }

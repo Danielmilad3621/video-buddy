@@ -42,6 +42,7 @@ enum SelfTest {
         try await grouping(root.appendingPathComponent("grouping"))
         browserPolicy()
         browserBar()
+        browserTabs()
         await checkerRapidNavigation()
         try await migrations(root.appendingPathComponent("migrations"))
         preview()
@@ -50,7 +51,8 @@ enum SelfTest {
     /// Only inside Video Buddy 4.0 Preview.app (preview.sh runs this before installing): it must never share 3.1's data or run jobs.
     private static func preview() {
         guard AppSettings.isPreview else { return }
-        check(AppSettings.dataDir.lastPathComponent == "Video Buddy 4.0 Preview", "preview: its own data folder")
+        check(AppSettings.dataDir.lastPathComponent.hasPrefix("Video Buddy 4.0 ") && AppSettings.dataDir.lastPathComponent != "Video Summarizer",
+              "preview: its own data folder")
         check(AppSettings.defaultDownloadDir.hasPrefix(AppSettings.dataDir.path + "/"), "preview: downloads inside its data folder")
         check(JobController.locked(false), "preview: the queue can't be resumed")
     }
@@ -633,6 +635,29 @@ enum SelfTest {
               && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .authorizationRequired) == .declare(videoID: "A")
               && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .unknown("?")) == .explain("?"),
               "queued, declaration and unknown never queue")
+    }
+
+    /// Phase 2: where tabs go, which one is active after a close, what a tab keeps, and clicks from another tab.
+    private static func browserTabs() {
+        let a = UUID(), b = UUID()
+        // Safari's order: link tabs line up after their opener and the ones it already opened
+        check(BrowserController.insertIndex(opener: 0, openerID: a, openers: [nil, nil]) == 1, "a link tab goes right after its opener")
+        check(BrowserController.insertIndex(opener: 0, openerID: a, openers: [nil, a, a, nil]) == 3, "…after the opener's earlier link tabs")
+        check(BrowserController.insertIndex(opener: 1, openerID: a, openers: [nil, nil, b, a]) == 2, "…but not after another tab's")
+        check(BrowserController.insertIndex(opener: 5, openerID: a, openers: [nil]) == 1, "an opener that's gone: last")
+        check(BrowserController.afterClose(1, count: 3) == 2 && BrowserController.afterClose(2, count: 3) == 1 && BrowserController.afterClose(0, count: 1) == nil,
+              "closing selects the next tab, else the previous; the last tab has none")
+        let home = BrowserPolicy.home, watch = URL(string: BrowserPolicy.watchURL("aqz-KE-bpKQ"))!, state = Data(repeating: 1, count: 100)
+        let kept = BrowserController.keep(page: .video(id: "aqz-KE-bpKQ", playlist: nil), url: watch, state: state)
+        check(kept.url == watch && kept.state == state, "a tab keeps its address and history")
+        let signIn = BrowserController.keep(page: .signIn, url: URL(string: "https://accounts.google.com/x?continue=y")!, state: state)
+        let consent = BrowserController.keep(page: .consent, url: URL(string: "https://consent.youtube.com/m?x")!, state: state)
+        check(signIn.url == home && signIn.state == nil && consent.url == home && consent.state == nil,
+              "sign-in and consent pages are kept as YouTube Home, never their tokens")
+        check(BrowserController.keep(page: .home, url: home, state: Data(count: BrowserController.maxSavedState + 1)).state == nil,
+              "history past the size limit is dropped (the address stays)")
+        // a click from a tab that isn't active any more arrives with no current video: never queued
+        check(BrowserActionOutcome.decide(clicked: "A", current: nil, slot: .ready) == .pageChanged, "a click from another tab does nothing")
     }
 
     /// Rapid navigation: a slow answer for video A must never appear as video B's.

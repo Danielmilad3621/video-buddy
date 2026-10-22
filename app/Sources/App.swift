@@ -34,6 +34,31 @@ struct VideoSummarizerApp: App {
 
 struct AppCommands: Commands {
     var body: some Commands {
+        // ⌘W: in the YouTube section it closes the tab (the window stays, as in Safari with tabs); elsewhere the window
+        CommandGroup(replacing: .saveItem) {
+            Button("Close") {
+                let m = AppModel.shared
+                let w = NSApp.keyWindow
+                if m.section == .youtube, w == nil || w === m.browser.tab?.webView?.window { m.browser.closeActive() } else { w?.performClose(nil) }
+            }
+            .keyboardShortcut("w")
+        }
+        CommandMenu("Tab") {
+            Button("New Tab") { AppModel.shared.newBrowserTab() }.keyboardShortcut("t")
+            Button("Reopen Closed Tab") { AppModel.shared.reopenTab() }.keyboardShortcut("t", modifiers: [.command, .shift])
+            Button("Duplicate Tab") { AppModel.shared.inBrowser { b in if let t = b.tab { b.duplicate(t) } } }
+            Divider()
+            Button("Show Next Tab") { AppModel.shared.inBrowser { $0.selectTab(offset: 1) } }.keyboardShortcut(.tab, modifiers: .control)
+            Button("Show Previous Tab") { AppModel.shared.inBrowser { $0.selectTab(offset: -1) } }
+                .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            Button("Next Tab") { AppModel.shared.inBrowser { $0.selectTab(offset: 1) } }.keyboardShortcut("]", modifiers: [.command, .shift])
+            Button("Previous Tab") { AppModel.shared.inBrowser { $0.selectTab(offset: -1) } }.keyboardShortcut("[", modifiers: [.command, .shift])
+            Divider()
+            ForEach(1..<9) { n in
+                Button("Tab \(n)") { AppModel.shared.inBrowser { $0.selectTab(number: n) } }.keyboardShortcut(KeyEquivalent(Character("\(n)")))
+            }
+            Button("Last Tab") { AppModel.shared.inBrowser { $0.selectTab(number: 9) } }.keyboardShortcut("9")
+        }
         CommandGroup(after: .newItem) {
             // in the YouTube section ⌘L focuses the address field (same token, the browser toolbar listens)
             Button("Focus Link Field") { AppModel.shared.focusLinkToken += 1 }.keyboardShortcut("l")

@@ -252,36 +252,41 @@ struct PlaylistImportSheet: View {
                 Text((["\(preview.entries.count) videos on YouTube", "\(inLibrary.count) in your library", "\(onMac) on this Mac"]
                       + (unavailable > 0 ? ["\(unavailable) private or deleted"] : [])).joined(separator: " • "))
                     .foregroundStyle(.secondary)
-                if state.checking != nil {
+                if state.linkOnly {
+                    Text("Nothing is downloaded from the YouTube section's playlist bar: videos already in your library join the playlist. To download a video, open it and use the bar above the page (it asks for your authorization first).")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } else if state.checking != nil {
                     Text("Nothing is downloaded. Videos already in your library join the playlist by their YouTube ID, and the order you have stays. Tick episodes only if you want to download them.")
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Picker("For ticked videos", selection: $action) {
-                Text("Summarize").tag(JobAction.summarize)
-                Text("Audio").tag(JobAction.audio)
-                Text("Video").tag(JobAction.video)
+            if !state.linkOnly {
+                Picker("For ticked videos", selection: $action) {
+                    Text("Summarize").tag(JobAction.summarize)
+                    Text("Audio").tag(JobAction.audio)
+                    Text("Video").tag(JobAction.video)
+                }
+                .pickerStyle(.segmented)
+                if action != .summarize {
+                    Toggle("+ Transcript: also transcribe each one on this Mac (no summary)", isOn: $transcribe)
+                        .toggleStyle(.checkbox)
+                }
+                HStack {
+                    Button("Select Not in Library") { selected = Set(preview.available.filter { libraryID($0) == nil }.map(\.id)) }
+                    Button("Select None") { selected = [] }
+                    Spacer()
+                    Text("\(chosen.count) ticked" + (totalTime(chosen.compactMap(\.duration).reduce(0, +)).map { " • \($0)" } ?? ""))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.link)
             }
-            .pickerStyle(.segmented)
-            if action != .summarize {
-                Toggle("+ Transcript: also transcribe each one on this Mac (no summary)", isOn: $transcribe)
-                    .toggleStyle(.checkbox)
-            }
-            HStack {
-                Button("Select Not in Library") { selected = Set(preview.available.filter { libraryID($0) == nil }.map(\.id)) }
-                Button("Select None") { selected = [] }
-                Spacer()
-                Text("\(chosen.count) ticked" + (totalTime(chosen.compactMap(\.duration).reduce(0, +)).map { " • \($0)" } ?? ""))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.link)
             List(preview.entries) { entry in
                 let id = libraryID(entry)
                 HStack(spacing: 10) {
                     Toggle("", isOn: Binding(get: { selected.contains(entry.id) },
                                              set: { if $0 { selected.insert(entry.id) } else { selected.remove(entry.id) } }))
                         .toggleStyle(.checkbox).labelsHidden()
-                        .disabled(!entry.available)
+                        .disabled(!entry.available || state.linkOnly)
                     Text("\(entry.index + 1)").font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(entry.title).lineLimit(1)
@@ -331,7 +336,7 @@ struct PlaylistImportSheet: View {
         .background(p.bg)
         .onAppear {
             // Check mode ticks nothing; a pasted link ticks only what isn't in the library at all
-            selected = state.checking != nil ? [] : Set(preview.available.filter { libraryID($0) == nil }.map(\.id))
+            selected = state.checking != nil || state.linkOnly ? [] : Set(preview.available.filter { libraryID($0) == nil }.map(\.id))
             action = state.action.kind == .audio || state.action.kind == .video ? .from(kind: state.action.kind) : .summarize
             name = preview.title
             target = state.checking ?? model.playlist(forSource: preview.url)?.id ?? 0

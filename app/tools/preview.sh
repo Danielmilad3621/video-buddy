@@ -4,6 +4,8 @@
 # ~/Applications/Video Buddy.app (3.1) and its data are never touched.
 #   app/tools/preview.sh           build, self-test and install (quits a running preview first); then open it from Finder
 #   app/tools/preview.sh --remove  delete the preview: its YouTube data (cookies, sign-in), its library and the app
+#   app/tools/preview.sh --test DIR  a test build in DIR: the same app as "Video Buddy 4.0 Test", its own identity
+#                                    (settings, WebKit data, process name), so tests never touch the installed preview
 set -euo pipefail
 cd "$(dirname "$0")/.."
 id=local.video-summarizer.preview
@@ -11,6 +13,16 @@ exe=VideoBuddyPreview
 name="Video Buddy 4.0 Preview"
 app="$HOME/Applications/$name.app"
 data="$HOME/Library/Application Support/$name"
+test=""
+if [[ ${1:-} == --test ]]; then
+  [[ -d ${2:-} ]] || { echo "usage: preview.sh --test <existing folder>"; exit 1; }
+  id=local.video-summarizer.preview-test
+  exe=VideoBuddyTest
+  name="Video Buddy 4.0 Test"
+  app="$(cd "$2" && pwd)/$name.app"
+  data=""     # test runs always set VS_DATA_DIR (and without it the data folder is "Video Buddy 4.0 Test", not the preview's)
+  test=1
+fi
 
 quit() {
   pgrep -x "$exe" > /dev/null || return 0
@@ -69,9 +81,10 @@ iconutil -c icns "$tmp/AppIcon.iconset" -o "$b/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$b"
 
 quit
-mkdir -p "$HOME/Applications" "$data/Downloads"
 rm -rf "$app"
 mv "$b" "$app"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 defaults write "$id" queuePaused -bool true
+if [[ -n $test ]]; then echo "Test build: $app ($id)"; exit 0; fi
+mkdir -p "$data/Downloads"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "Installed $app ($(git rev-parse --short HEAD)). Open it from Finder → Applications, or Spotlight: \"Video Buddy 4.0\""

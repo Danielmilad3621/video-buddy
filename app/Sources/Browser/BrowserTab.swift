@@ -1,18 +1,18 @@
 // 4.0 Phase 1: one browser tab. It owns its WKWebView (not a SwiftUI view, so switching sections never destroys the
 // page), mirrors the web view's state through KVO, and applies BrowserPolicy to every navigation.
+// Phase 2: a tab can sleep (no web view: only its address, title and WebKit's saved history) and wake where it was.
 import AppKit
 import WebKit
 
 @MainActor @Observable
-final class BrowserTab: NSObject {
+final class BrowserTab: NSObject, Identifiable {
+    let id: UUID
     private(set) var webView: WKWebView?
     private(set) var url: URL?
     private(set) var title = ""
     /// The address the title was read at: during YouTube's in-page navigation the address changes first, so a title
     /// from the previous video is never shown as the new one's.
     private(set) var titleURL: URL?
-    /// Called when the page kind or video changes (the action bar's checks follow it).
-    @ObservationIgnored var onPageChange: (YouTubePage) -> Void = { _ in }
     private(set) var isLoading = false
     private(set) var progress = 0.0
     private(set) var canGoBack = false
@@ -29,12 +29,34 @@ final class BrowserTab: NSObject {
     /// Links sent to the default browser (recorded, not opened, in test runs).
     private(set) var externalOpens: [String] = []
 
-    private let recordExternalOnly: Bool
+    /// The tab whose link opened this one (link tabs line up after it, as in Safari).
+    @ObservationIgnored var openerID: UUID?
+    /// When it was last the active tab: the least recently used live tab sleeps first.
+    @ObservationIgnored var lastActive = Date()
+    @ObservationIgnored weak var browser: BrowserController?
+    /// A sleeping tab's history, scroll position and form data (WebKit's opaque interactionState), to wake with.
+    @ObservationIgnored private var savedState: Data?
+
+    private static let recordExternalOnly = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
     private var observations: [NSKeyValueObservation] = []
 
-    init(configuration: WKWebViewConfiguration, recordExternalOnly: Bool) {
-        self.recordExternalOnly = recordExternalOnly
+    var isAsleep: Bool { webView == nil }
+
+    /// A tab starts asleep: it gets its web view when it's first shown.
+    init(id: UUID = UUID(), url: URL?, title: String = "", state: Data? = nil) {
+        self.id = id
         super.init()
+        self.url = url
+        self.title = title
+        titleURL = url
+        savedState = state
+        page = BrowserPolicy.classify(url)
+    }
+
+    /// Gives the tab a web view again: its saved history comes back (WebKit loads the page it was on), or its address loads.
+    @discardableResult
+    func wake(_ configuration: WKWebViewConfiguration) -> WKWebView {
+        if let webView { return webView }
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.allowsBackForwardNavigationGestures = true
         view.allowsMagnification = true
@@ -42,11 +64,33 @@ final class BrowserTab: NSObject {
         view.uiDelegate = self
         webView = view
         observe(view)
+        if let savedState { view.interactionState = savedState }
+        // nothing saved, or WebKit couldn't read it (its format can change with a macOS update): the address instead
+        if view.backForwardList.currentItem == nil { load(url ?? BrowserPolicy.home) }
+        note(savedState == nil ? "awake: \(url?.absoluteString ?? "-")" : "awake with its history")
+        savedState = nil
+        return view
+    }
+
+    /// What reopening, duplicating or sleeping keeps: the history as it is now (awake) or as saved (asleep).
+    var snapshot: (url: URL?, state: Data?) {
+        BrowserController.keep(page: page, url: url, state: (webView?.interactionState as? Data) ?? savedState)
+    }
+
+    /// Lets the web view go (and with it the tab's web process and its memory), keeping what it needs to come back.
+    func sleep() {
+        guard webView != nil else { return }
+        let kept = snapshot
+        release()
+        savedState = kept.state
+        if kept.url != url { urlChanged(kept.url) }
+        note("asleep")
     }
 
     private func observe(_ v: WKWebView) {
         observations = [
-            v.observe(\.url, options: [.initial, .new]) { [weak self] v, _ in
+            // no .initial: a new web view has no address yet, and a sleeping tab's own stays until the page loads
+            v.observe(\.url, options: [.new]) { [weak self] v, _ in
                 MainActor.assumeIsolated { self?.urlChanged(v.url) }
             },
             v.observe(\.title, options: [.new]) { [weak self] v, _ in
@@ -71,7 +115,7 @@ final class BrowserTab: NSObject {
         url = new
         let old = page
         page = BrowserPolicy.classify(new)
-        if page != old { onPageChange(page) }
+        browser?.tabChanged(self, pageChanged: page != old)
         note("url: \(new?.absoluteString ?? "-") → \(page.label)\(page.videoID.map { " \($0)" } ?? "")")
     }
 
@@ -98,22 +142,31 @@ final class BrowserTab: NSObject {
     func openExternally(_ link: URL) {
         externalOpens.append(link.absoluteString)
         note("outside: \(link.absoluteString)")
-        if !recordExternalOnly { NSWorkspace.shared.open(link) }
+        if !Self.recordExternalOnly { NSWorkspace.shared.open(link) }
     }
 
-    /// Stops everything and lets go of the web view (and its web process). Done before its data store is removed.
-    func close() async {
-        guard let v = webView else { return }
-        v.stopLoading()
-        await v.pauseAllMediaPlayback()
-        await v.closeAllMediaPresentations()
+    /// Lets go of the web view at once (so a wake that comes in meanwhile is never undone), then stops what it was doing.
+    @discardableResult
+    private func release() -> Task<Void, Never>? {
+        guard let v = webView else { return nil }
         observations.forEach { $0.invalidate() }
         observations = []
         v.navigationDelegate = nil
         v.uiDelegate = nil
         v.removeFromSuperview()
         webView = nil
+        isLoading = false
+        progress = 0
+        isFullscreen = false
+        return Task {
+            v.stopLoading()
+            await v.pauseAllMediaPlayback()
+            await v.closeAllMediaPresentations()
+        }
     }
+
+    /// Stops everything and lets go of the web view (and its web process). Done before its data store is removed.
+    func close() async { await release()?.value }
 }
 
 extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
