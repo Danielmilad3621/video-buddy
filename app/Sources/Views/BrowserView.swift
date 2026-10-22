@@ -19,7 +19,8 @@ struct BrowserView: View {
                     BrowserToolbar(tab: tab)
                     ActionBar(tab: tab)
                     ZStack {
-                        WebViewHost(tab: tab)
+                        // hidden while a native screen covers it (and so left out of test snapshots, which paint pages last)
+                        WebViewHost(tab: tab, hidden: !model.network.isOnline || tab.loadError != nil)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(p.border.opacity(0.6)))
                         if !model.network.isOnline {
@@ -96,6 +97,12 @@ private struct TabChip: View {
             }
             Text(name).font(.caption.weight(active ? .semibold : .regular)).lineLimit(1)
             Spacer(minLength: 0)
+            if tab.media == "playing" {
+                Button { b.pause(tab) } label: { Image(systemName: "speaker.wave.2.fill").font(.caption2).frame(width: 16, height: 16) }
+                    .buttonStyle(.plain).foregroundStyle(p.accent)
+                    .help(tab.id == b.audioTabID ? "Playing in the background. Click to pause." : "Playing. Click to pause.")
+                    .accessibilityLabel("Pause \(name)")
+            }
             badge(id)
             if hover || active {
                 Button { b.close(tab) } label: {
@@ -564,6 +571,7 @@ private struct OfflineBrowserScreen: View {
 /// WebKit takes the web view out of this container and puts it back afterwards.
 struct WebViewHost: NSViewRepresentable {
     let tab: BrowserTab
+    var hidden = false
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
@@ -575,6 +583,7 @@ struct WebViewHost: NSViewRepresentable {
     func updateNSView(_ container: NSView, context: Context) {
         // read both every time, so SwiftUI calls this again when full screen starts or ends
         let (fullscreen, _) = (tab.isFullscreen, tab.reattachToken)
+        tab.webView?.isHidden = hidden
         guard !fullscreen else { return }
         attach(to: container)
         // WebKit hands the view back after its exit animation; check again once that's over

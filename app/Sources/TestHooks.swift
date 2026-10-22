@@ -229,6 +229,18 @@ enum TestHooks {
             if f.count == 2, let t = tab(String(f[0])) { model.browser.move(t, to: f[1] - 1) }
         case "tabDuplicate": if let t = model.browser.tab { model.browser.duplicate(t) }
         case "tabReopen": model.reopenTab()
+        case "memoryWarning": model.browser.memoryWarning()
+        case "crashTab":
+            // what WebKit tells a tab when its page's web process ends (a real crash can't be caused through public API)
+            if let t = tab(arg), let web = t.webView { t.webViewWebContentProcessDidTerminate(web) }
+        case "pageMedia":
+            // "play" / "pause": the active tab's video, muted (test runs stay silent), as a click on the player would
+            let js = arg == "play" ? "(() => { const v = document.querySelector('video'); if (!v) return 'no video'; v.muted = true; v.play(); return 'playing'; })()"
+                : "(() => { document.querySelectorAll('video').forEach(v => v.pause()); return 'paused'; })()"
+            model.browser.tab?.webView?.evaluateJavaScript(js, in: nil, in: .world(name: "VBTest")) { r in
+                MainActor.assumeIsolated { webRead = "\((try? r.get()) ?? "error")" }
+            }
+        case "backgroundAudio": UserDefaults.standard.set(arg == "on", forKey: "browserBackgroundAudio")
         case "pasteText": model.paste(arg)      // what ⌘⇧V does with this text (the real clipboard is left alone)
         case "tabNext": model.browser.selectTab(offset: 1)
         case "tabPrevious": model.browser.selectTab(offset: -1)
@@ -488,7 +500,8 @@ enum TestHooks {
             }(),
             "tabs": model.browser.tabs.enumerated().map { i, t in
                 ["n": i + 1, "url": t.url?.absoluteString ?? "", "title": t.title, "page": t.page.label, "videoID": t.page.videoID ?? "",
-                 "active": t.id == model.browser.activeID, "asleep": t.isAsleep,
+                 "active": t.id == model.browser.activeID, "asleep": t.isAsleep, "media": t.media, "audioTab": t.id == model.browser.audioTabID,
+                 "loadError": t.loadError ?? "",
                  "opener": t.openerID.flatMap { id in model.browser.tabs.firstIndex { $0.id == id }.map { $0 + 1 } } ?? 0] as [String: Any]
             },
             "closedTabs": model.browser.closed.count,

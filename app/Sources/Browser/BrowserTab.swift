@@ -38,6 +38,11 @@ final class BrowserTab: NSObject, Identifiable {
     @ObservationIgnored private var savedState: Data?
     /// Opened by the page (target=_blank, window.open in a click): if it only sends its page outside YouTube, it closes.
     @ObservationIgnored var openedByPage = false
+    /// The last media check: "playing", "paused" or "none" (the tab strip shows a speaker while it plays).
+    var media = "none"
+    @ObservationIgnored var mediaCheckPending = false
+    /// When its page's web process ended lately: a second time within a minute, it isn't reloaded again.
+    @ObservationIgnored private var crashes: [Date] = []
 
     private static let recordExternalOnly = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
     private var observations: [NSKeyValueObservation] = []
@@ -162,6 +167,8 @@ final class BrowserTab: NSObject, Identifiable {
         isLoading = false
         progress = 0
         isFullscreen = false
+        media = "none"
+        mediaCheckPending = false
         return Task {
             v.stopLoading()
             await v.pauseAllMediaPlayback()
@@ -221,9 +228,23 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         note("load failed: \(e.domain) \(e.code) \(e.localizedDescription)")
     }
 
+    /// The page's web process ended (it crashed, or macOS reclaimed it). The active tab reloads once; a second time
+    /// within a minute it shows Try Again instead, so a page that keeps crashing can't loop. Another tab just sleeps.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        note("web process ended; reloading")
-        webView.reload()
+        let now = Date()
+        crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
+        guard browser?.activeID == id else {
+            note("web process ended; asleep until selected")
+            sleep()
+            return
+        }
+        if crashes.count > 1 {
+            note("web process ended again within a minute; not reloading")
+            loadError = "This page stopped working twice in a minute, so it wasn't reloaded again."
+        } else {
+            note("web process ended; reloading once")
+            webView.reload()
+        }
     }
 
     /// target=_blank and window.open in a click: a YouTube page opens in a new tab (in front; behind with ⌘), built

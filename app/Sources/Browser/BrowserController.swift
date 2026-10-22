@@ -13,6 +13,9 @@ final class BrowserController {
     /// Recently closed tabs, newest last (in memory only), for Reopen Closed Tab.
     private(set) var closed: [ClosedTab] = []
     var active: BrowserTab? { tabs.first { $0.id == activeID } }
+    /// The inactive tab that keeps playing (Settings → background audio), shown with a speaker; nil when none is.
+    private(set) var audioTabID: UUID?
+    var audioTab: BrowserTab? { tabs.first { $0.id == audioTabID && !$0.isAsleep } }
     /// The active tab (Phase 1's name, kept for the menu commands and test hooks).
     var tab: BrowserTab? { active }
     /// The visible tab's media, checked about once a second while the YouTube section is shown: "playing" only when a
@@ -34,6 +37,9 @@ final class BrowserController {
 
     static let maxTabs = 50
     static let maxClosed = 20
+    /// ponytail: a count, not a measure (WebKit gives no per-tab memory figure). Each live tab is a web process of
+    /// roughly 150–400 MB on a YouTube watch page; 4 was calibrated with Activity Monitor (3 would suit an 8 GB Mac).
+    nonisolated static let maxLiveTabs = 4
 
     private let storeFile: URL
     private let testMode = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
@@ -42,9 +48,14 @@ final class BrowserController {
     private var isShown = false
     /// One data store for every tab: one cookie jar, so one sign-in.
     private var dataStore: WKWebsiteDataStore?
+    private let memory = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+    /// Test runs play videos muted (so the Mac stays silent) and count that as playing.
+    private let mutedCounts = ProcessInfo.processInfo.environment["VS_TEST_MUTED_PLAYS"] == "1"
 
     init(dataDir: URL) {
         storeFile = dataDir.appendingPathComponent("browser/website-data-id")
+        memory.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.memoryWarning() } }
+        memory.activate()
     }
 
     /// The id already saved, without making one (for reports).
@@ -69,6 +80,8 @@ final class BrowserController {
         config.preferences.isElementFullscreenEnabled = true
         // only a click opens a tab: on macOS WebKit would otherwise let scripts (ads too) open windows by themselves
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        // tabs out of sight that aren't playing or loading are fully suspended: no scripts, no layout
+        config.preferences.inactiveSchedulingPolicy = .suspend
         // restored or background pages never start playing by themselves; a click on the page does
         config.mediaTypesRequiringUserActionForPlayback = .all
         // honest: WebKit's own user agent plus our name, never another browser's (VS_BROWSER_UA=default leaves it as is)
@@ -98,7 +111,17 @@ final class BrowserController {
     }
 
     /// Every tab's media (the native player is starting, or the section is left without background audio).
-    func pauseAll() { tabs.forEach { $0.webView?.pauseAllMediaPlayback() } }
+    func pauseAll() {
+        tabs.forEach(pause)
+        audioTabID = nil
+    }
+
+    /// The tab strip's speaker.
+    func pause(_ t: BrowserTab) {
+        t.webView?.pauseAllMediaPlayback()
+        if t.media == "playing" { t.media = "paused" }
+        if audioTabID == t.id { audioTabID = nil }
+    }
 
     // MARK: tabs
 
@@ -118,7 +141,7 @@ final class BrowserController {
         t.openedByPage = true
         guard insert(t, at: position(after: opener)) else { return nil }
         let view = t.wake(configuration, adopting: true)
-        if !background { select(t) }
+        if background { enforceLimit() } else { select(t) }
         return view
     }
 
@@ -135,7 +158,8 @@ final class BrowserController {
         previous?.lastActive = Date()
         activeID = t.id
         t.lastActive = Date()
-        previous?.webView?.pauseAllMediaPlayback()
+        if audioTabID == t.id { audioTabID = nil }
+        if let previous { leave(previous) }
         mediaState = "none"
         if isShown { wake(t) }
         onPageChange(t.page)
@@ -154,6 +178,7 @@ final class BrowserController {
         let next = t.id != activeID ? nil : preferred.flatMap { p in tabs.contains { $0 === p } ? p : nil }
             ?? Self.afterClose(i, count: tabs.count).map { tabs[$0] }
         tabs.remove(at: i)
+        if audioTabID == t.id { audioTabID = nil }
         Task { await t.close() }
         if tabs.isEmpty {
             activeID = nil
@@ -228,6 +253,41 @@ final class BrowserController {
     private func wake(_ t: BrowserTab) {
         guard t.isAsleep else { return }
         t.wake(configuration())
+        enforceLimit()
+    }
+
+    /// A tab that stops being active pauses, unless background audio is on and it's playing: then it's the audio tab
+    /// (and the one before it pauses: one thing plays at a time).
+    private func leave(_ t: BrowserTab) {
+        guard !t.isAsleep else { return }
+        if UserDefaults.standard.bool(forKey: "browserBackgroundAudio"), t.media == "playing" {
+            if let old = audioTab, old !== t { pause(old) }
+            audioTabID = t.id
+        } else {
+            pause(t)
+        }
+    }
+
+    // MARK: memory
+
+    /// At most `cap` live web views: the least recently used tabs sleep first, never the active tab, the audio tab or
+    /// one in the middle of signing in.
+    private func enforceLimit(cap: Int = maxLiveTabs) {
+        let live = tabs.filter { !$0.isAsleep }.map { t in
+            (id: t.id, lastActive: t.lastActive, protected: t.id == activeID || t.id == audioTabID || t.page == .signIn || t.page == .consent)
+        }
+        let sleepers = Set(Self.toSleep(live, cap: cap))
+        for t in tabs where sleepers.contains(t.id) { t.sleep() }
+    }
+
+    /// macOS is short of memory: every tab that can sleeps.
+    func memoryWarning() {
+        let before = tabs.filter { !$0.isAsleep }.count
+        enforceLimit(cap: 0)
+        let slept = before - tabs.filter { !$0.isAsleep }.count
+        if slept > 0 {
+            onNotice("Your Mac is short of memory, so \(slept) background \(slept == 1 ? "tab was" : "tabs were") put to sleep. Each reloads when you select it.")
+        }
     }
 
     // MARK: the rules (pure, self-tested)
@@ -244,6 +304,13 @@ final class BrowserController {
     /// The tab that becomes active after closing the one at `index` of `count`: the next, else the previous.
     nonisolated static func afterClose(_ index: Int, count: Int) -> Int? {
         count <= 1 ? nil : index < count - 1 ? index + 1 : index - 1
+    }
+
+    /// Which live tabs sleep so that at most `cap` stay live: the least recently used unprotected ones.
+    nonisolated static func toSleep(_ live: [(id: UUID, lastActive: Date, protected: Bool)], cap: Int) -> [UUID] {
+        let extra = live.count - cap
+        guard extra > 0 else { return [] }
+        return live.filter { !$0.protected }.sorted { $0.lastActive < $1.lastActive }.prefix(extra).map(\.id)
     }
 
     /// Saved history is kept up to this size; past it, a tab keeps only its address.
@@ -278,19 +345,26 @@ final class BrowserController {
 
     /// A read-only look at the page's media elements, in a script world of our own (the page's scripts can't see or
     /// change it). Muted previews don't count; nothing is injected into or changed on the page.
-    private static let audiblePlayback = """
-        [...document.querySelectorAll('video, audio')].some(m => !m.paused && !m.ended && !m.muted && m.volume > 0 && m.readyState > 2) ? 'playing'
-        : (document.querySelector('video, audio') ? 'paused' : 'none')
-        """
+    private static func audiblePlayback(mutedCounts: Bool) -> String {
+        let audible = mutedCounts ? "true" : "!m.muted && m.volume > 0"
+        return """
+            [...document.querySelectorAll('video, audio')].some(m => !m.paused && !m.ended && \(audible) && m.readyState > 2) ? 'playing'
+            : (document.querySelector('video, audio') ? 'paused' : 'none')
+            """
+    }
 
+    /// The active tab and the audio tab only (a suspended tab would answer late, and nothing else can be playing).
     private func checkMedia() {
-        guard let v = active?.webView else { mediaState = "none"; return }
-        v.evaluateJavaScript(Self.audiblePlayback, in: nil, in: .world(name: "VideoBuddy")) { [weak self] result in
-            MainActor.assumeIsolated {
-                let state = (try? result.get()) as? String ?? "none"
-                self?.mediaState = state
-                if state == "playing" { self?.onWebPlaying() }
-            }
+        guard let a = active, let v = a.webView else { mediaState = "none"; return }
+        check(a) { [weak self] state in
+            self?.mediaState = state
+            guard state == "playing", let self else { return }
+            self.onWebPlaying()
+            // the active tab started: the one playing in the background stops
+            if let old = self.audioTab, old !== a { self.pause(old) }
+        }
+        if let au = audioTab {
+            check(au) { [weak self] state in if state != "playing", self?.audioTabID == au.id { self?.audioTabID = nil } }
         }
         v.requestMediaPlaybackState { [weak self] state in
             self?.webkitMediaState = switch state {
@@ -298,6 +372,20 @@ final class BrowserController {
             case .paused: "paused"
             case .suspended: "suspended"
             default: "none"
+            }
+        }
+    }
+
+    private func check(_ t: BrowserTab, then: @escaping (String) -> Void) {
+        guard let v = t.webView, !t.mediaCheckPending else { return }
+        t.mediaCheckPending = true
+        v.evaluateJavaScript(Self.audiblePlayback(mutedCounts: mutedCounts), in: nil, in: .world(name: "VideoBuddy")) { [weak t] result in
+            MainActor.assumeIsolated {
+                guard let t else { return }
+                t.mediaCheckPending = false
+                let state = (try? result.get()) as? String ?? "none"
+                t.media = state
+                then(state)
             }
         }
     }
@@ -315,6 +403,7 @@ final class BrowserController {
         let all = tabs
         tabs = []
         activeID = nil
+        audioTabID = nil
         closed = []
         for t in all { await t.close() }
         dataStore = nil

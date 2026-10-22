@@ -662,6 +662,16 @@ enum SelfTest {
         check(BrowserPolicy.newTab(command: true, shift: true, button: 1) == .foreground, "⌘⇧-click opens it in front")
         check(BrowserPolicy.newTab(command: false, shift: false, button: 1) == nil && BrowserPolicy.newTab(command: false, shift: true, button: 1) == nil
               && BrowserPolicy.newTab(command: false, shift: false, button: 2) == nil, "plain, ⇧, ⌥ and right clicks stay in the tab")
+        // memory: the least recently used tabs sleep first, never a protected one (active, background audio, signing in)
+        let (t1, t2, t3, t4, t5) = (UUID(), UUID(), UUID(), UUID(), UUID())
+        let at = { (s: Double) in Date(timeIntervalSince1970: s) }
+        let live = [(id: t1, lastActive: at(1), protected: false), (id: t2, lastActive: at(5), protected: true), (id: t3, lastActive: at(2), protected: false),
+                    (id: t4, lastActive: at(4), protected: false), (id: t5, lastActive: at(3), protected: false)]
+        check(BrowserController.toSleep(Array(live.prefix(4)), cap: 4).isEmpty, "4 live tabs: none sleeps")
+        check(BrowserController.toSleep(live, cap: 4) == [t1], "a fifth: the least recently used sleeps")
+        check(Set(BrowserController.toSleep(live, cap: 0)) == [t1, t3, t4, t5], "memory pressure: every unprotected tab sleeps")
+        check(BrowserController.toSleep([(id: t1, lastActive: at(1), protected: true), (id: t2, lastActive: at(2), protected: true)], cap: 1).isEmpty,
+              "protected tabs never sleep, even over the limit")
         // a click from a tab that isn't active any more arrives with no current video: never queued
         check(BrowserActionOutcome.decide(clicked: "A", current: nil, slot: .ready) == .pageChanged, "a click from another tab does nothing")
     }

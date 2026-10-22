@@ -36,6 +36,7 @@ struct SettingsContent: View {
     @AppStorage("retentionDays") private var retention = 0
     @AppStorage("appearance") private var appearance = Appearance.dark.rawValue
     @State private var channels = ""
+    @AppStorage("browserBackgroundAudio") private var backgroundAudio = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -96,6 +97,10 @@ struct SettingsContent: View {
                         .onSubmit { model.setOwnChannels(channels) }
                 }
                 note("Used only to offer “This is my own channel” when you declare that you may download a video. A matching channel is a consistency check, not proof of ownership; declarations are stored as not independently verified.")
+                row("Background audio") {
+                    Toggle("Keep YouTube audio playing in background tabs and other sections", isOn: $backgroundAudio).toggleStyle(.checkbox)
+                }
+                note("Off: a tab pauses when you switch away from it, and YouTube pauses when you leave the YouTube section. Either way only one thing plays at a time.")
             }
             .onAppear { channels = model.ownChannels.joined(separator: ", ") }
             card("Appearance", "circle.lefthalf.filled") {
