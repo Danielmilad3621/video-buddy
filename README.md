@@ -120,6 +120,24 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
   - Deleting a playlist never touches its videos, summaries, history or files. Any video's ⋮ menu has *Add to Playlist ▸* and, inside a playlist, *Remove from This Playlist*.
 - **Keyboard (unchanged in 3.0):** ⌘L focus the link field · ⇧⌘V paste link · ⌘↩ Summarize (and Return in the link field) · ⇧⌘A Audio · ⇧⌘D Video · ⌘. Cancel · ⌘F search the library · ↑/↓ move through the list · **⌘K play/pause · ⌘[ back 10 s · ⌘] forward 10 s** (Playback menu; ⌘[ and ⌘] were chosen over ⌘←/⌘→ so the link field keeps its normal cursor keys).
 
+### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branch `feature/4.0-phase1-browser` only)
+A separate app for trying the YouTube browser before it reaches the real one.
+- **Open it:** Finder → Applications, or Spotlight "Video Buddy 4.0". It opens straight into the **YouTube** section. Quit and reopen it like any app.
+- **Telling the two apart:**
+  - the icon has an amber **PREVIEW** band;
+  - the menu bar and window title say *Video Buddy 4.0 Preview*;
+  - the sidebar says **"4.0 Preview · downloads off"**;
+  - 3.1 has no YouTube section.
+- **Isolated:**
+  - bundle ID `local.video-summarizer.preview`, process `VideoBuddyPreview`;
+  - library and downloads in `~/Library/Application Support/Video Buddy 4.0 Preview/`;
+  - its own settings domain and its own WebKit data (cookies, sign-in) under that bundle ID;
+  - it never reads 3.1's library, downloads folder or Raycast inbox.
+- **Locked queue:** nothing it queues ever runs. No downloads, transcripts or AI summaries, and Resume is hidden; this is checked by self-tests inside the bundle before it installs.
+- **Samples:** its library holds 7 labelled samples (`[fixture: …]`) so the bar's "already here" states can be tried, e.g. *Me at the zoo* → Play Offline. *Clear All History* in the preview removes them.
+- **Rebuild:** `app/tools/preview.sh` (on the branch).
+- **Remove:** `app/tools/preview.sh --remove` (its WebKit store through WebKit on a fresh launch, then its data folder and the app).
+
 ### Before a flight (2-minute checklist)
 1. Online: for each video you want, press **Video** (or *Make Available Offline*, or *Make All Available Offline* on a playlist). Tick **+ Transcript** first if you'll want to search what was said. Use **Summarize** too if you want to read the summary. Settings → Video quality → **720p** fits about twice as much.
 2. Check **Downloads**: the files are there, and the free space is enough.
@@ -306,7 +324,7 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen) |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
-Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`), `tests/vsctl.swift`.
+Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`; `preview` adds the amber PREVIEW band), `tests/vsctl.swift`, `tools/preview.sh` (4.0 branch: builds and installs the isolated *Video Buddy 4.0 Preview.app*; `--remove` deletes it and its data).
 
 ### 5.2 Video identity: one entry per video
 `VideoRef.parse` turns a link into a **key**:
@@ -684,6 +702,10 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **ID safety:** an ID-keyed checker, and click-time ID matching, so rapid navigation can't queue the wrong video.
   - **Migrations:** an ordered additive list (v4 = `authorizations`; Watch Later = v5).
   - 219 self-tests; the report adds a Phase 1b section.
+- **The 4.0 Preview app (same day).**
+  - **Why:** the try-out only lived in `~/Library/Caches`, started from a script, and had 3.1's bundle ID, so it couldn't be found.
+  - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
+  - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
 ---
 
@@ -945,7 +967,16 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - settings were identical (the window position was restored);
   - the production library was unchanged.
 
+- **4.0 Preview app (10-22):**
+  - **Self-tests:** 222 inside the preview bundle (219 + 3: own data folder, downloads inside it, queue locked).
+  - **Offline run:** a Resume request left the queue paused, with nothing running.
+  - **Isolation:** the preview never opened a file in 3.1's folders (`lsof`).
+  - **The states:** opened normally (no test hooks), it was the front app, in the YouTube section with youtube.com loaded. The bar showed Play Offline (sample), Authorization Required → Download Video (red) with Play Audio / Summarize / + Transcript, and Video Queued.
+  - **Unchanged afterwards:** the 3.1 app, the production DB (`user_version` 3, counts, modified time), `~/Downloads/cobalt` and 3.1's settings.
+  - **Screenshots:** `design/screenshots/4.0-preview-*`.
+
 ### Not verified
+- **4.0 Preview app:** `preview.sh --remove` (written, not run, so your preview stays).
 - **4.0 Phase 1:**
   - Picture in Picture, ads, page downloads (rules unit-tested only), long sessions, multiple tabs, sound output;
   - sign-in lasting across relaunches;
