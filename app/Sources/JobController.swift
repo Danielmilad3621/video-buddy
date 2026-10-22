@@ -39,7 +39,7 @@ final class JobController {
     var banner: Banner?
     /// True while the queue runner is working through jobs.
     private(set) var isRunning = false
-    private(set) var paused = UserDefaults.standard.bool(forKey: "queuePaused")
+    private(set) var paused = locked(UserDefaults.standard.bool(forKey: "queuePaused"))
     private(set) var queue: [QueueItem] = []
     private(set) var current: QueueItem?
     var onNotice: (String) -> Void = { _ in }
@@ -103,7 +103,9 @@ final class JobController {
 
     private func queued(_ action: JobAction) async {
         await refreshQueue()
-        if paused {
+        if AppSettings.isPreview {
+            onNotice("Added to the queue. Downloads and AI jobs don't run in Video Buddy 4.0 Preview.")
+        } else if paused {
             onNotice("Added to the queue. The queue is paused; press Resume to continue.")
         } else if action.needsNetwork, !network.isOnline {
             onNotice("Added to the queue. It starts by itself when you're back online.")
@@ -179,8 +181,11 @@ final class JobController {
         }
     }
 
+    /// The preview never runs jobs (downloads, transcripts, AI summaries): its queue stays paused whatever is pressed.
+    nonisolated static func locked(_ paused: Bool) -> Bool { paused || AppSettings.isPreview }
+
     private func setPaused(_ on: Bool) {
-        paused = on
+        paused = Self.locked(on)
         UserDefaults.standard.set(on, forKey: "queuePaused")
     }
 

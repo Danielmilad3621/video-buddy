@@ -179,7 +179,8 @@ struct Sidebar: View {
                 if !compact {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Video Buddy").font(.title2.weight(.bold))
-                        Text("Watch smarter. Learn faster.").font(.caption).foregroundStyle(p.secondary)
+                        Text(AppSettings.isPreview ? "4.0 Preview · downloads off" : "Watch smarter. Learn faster.").font(.caption)
+                            .foregroundStyle(AppSettings.isPreview ? Color.orange : p.secondary)
                     }
                 }
             }

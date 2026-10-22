@@ -121,6 +121,8 @@ final class AppModel {
         authorizations = (try? await db.allAuthorizations()) ?? [:]
         ownChannels = await db.ownChannels()
         browser.onPageChange = { [weak self] _ in self?.updateBrowserCheck() }
+        // the preview exists to try the YouTube browser (test runs pick their own section, so --remove can clear the store)
+        if AppSettings.isPreview, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" { section = .youtube }
         ingestor.start()
         await jobs.refreshQueue()
         jobs.pump()

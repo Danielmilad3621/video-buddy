@@ -44,6 +44,15 @@ enum SelfTest {
         browserBar()
         await checkerRapidNavigation()
         try await migrations(root.appendingPathComponent("migrations"))
+        preview()
+    }
+
+    /// Only inside Video Buddy 4.0 Preview.app (preview.sh runs this before installing): it must never share 3.1's data or run jobs.
+    private static func preview() {
+        guard AppSettings.isPreview else { return }
+        check(AppSettings.dataDir.lastPathComponent == "Video Buddy 4.0 Preview", "preview: its own data folder")
+        check(AppSettings.defaultDownloadDir.hasPrefix(AppSettings.dataDir.path + "/"), "preview: downloads inside its data folder")
+        check(JobController.locked(false), "preview: the queue can't be resumed")
     }
 
     // MARK: pure parsing

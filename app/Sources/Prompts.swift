@@ -87,12 +87,15 @@ enum AppSettings {
     static var videoQuality: VideoQuality { VideoQuality(rawValue: defaults.string(forKey: "videoQuality") ?? "") ?? .standard }
     /// the "+ Transcript" checkbox: Audio and Video downloads also get an on-device transcript
     static var transcribeDownloads: Bool { defaults.bool(forKey: "transcribeDownloads") }
-    static let defaultDownloadDir = home + "/Downloads/cobalt"
+    /// the preview keeps its downloads inside its own data folder, away from 3.1's
+    static var defaultDownloadDir: String { isPreview ? dataDir.appendingPathComponent("Downloads").path : home + "/Downloads/cobalt" }
+    /// Video Buddy 4.0 Preview.app (app/tools/preview.sh sets VBPreview): its own data folder, downloads and AI jobs locked off.
+    static let isPreview = Bundle.main.object(forInfoDictionaryKey: "VBPreview") as? Bool == true
 
     /// VS_DATA_DIR lets tests use a throwaway history without touching the real one.
     static var dataDir: URL {
         if let dir = ProcessInfo.processInfo.environment["VS_DATA_DIR"]?.nilIfBlank { return URL(fileURLWithPath: dir) }
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Video Summarizer")
+            .appendingPathComponent(isPreview ? "Video Buddy 4.0 Preview" : "Video Summarizer")
     }
 }

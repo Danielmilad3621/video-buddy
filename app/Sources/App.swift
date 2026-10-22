@@ -15,7 +15,7 @@ struct VideoSummarizerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("Video Buddy", id: "main") {
+        Window(AppSettings.isPreview ? "Video Buddy 4.0 Preview" : "Video Buddy", id: "main") {
             ThemedRoot { RootView() }
                 .environment(AppModel.shared)
                 .frame(minWidth: 980, minHeight: 660)

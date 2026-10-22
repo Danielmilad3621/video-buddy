@@ -223,7 +223,8 @@ struct WaitingStrip: View {
         let jobs = model.jobs
         let n = jobs.queue.count
         let (icon, title, detail): (String, String, String) = jobs.paused
-            ? ("pause.circle.fill", "Queue paused • \(n) waiting", "Press Resume to continue with the next job.")
+            ? ("pause.circle.fill", "Queue paused • \(n) waiting",
+               AppSettings.isPreview ? "Downloads and AI jobs don't run in Video Buddy 4.0 Preview." : "Press Resume to continue with the next job.")
             : !model.network.isOnline
             ? ("wifi.slash", "Waiting for internet • \(n) in the queue", "They start by themselves when you're back online.")
             : ("hourglass", "\(n) waiting", "Starting…")
@@ -234,7 +235,7 @@ struct WaitingStrip: View {
                 Text(detail).font(.callout).foregroundStyle(p.secondary)
             }
             Spacer()
-            if jobs.paused {
+            if jobs.paused, !AppSettings.isPreview {
                 Button { jobs.resumeQueue() } label: { Label("Resume", systemImage: "play.fill") }
                     .buttonStyle(PrimaryButtonStyle(height: 34, font: .callout.weight(.semibold)))
             }
@@ -256,7 +257,9 @@ struct QueueColumn: View {
         let failed = model.store.failed
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "Queue", icon: "slider.horizontal.3") {
-                if jobs.paused {
+                if AppSettings.isPreview {
+                    Label("Preview: downloads off", systemImage: "lock.fill").font(.callout).foregroundStyle(p.secondary)
+                } else if jobs.paused {
                     Button { jobs.resumeQueue() } label: { Label("Resume", systemImage: "play.fill") }
                         .buttonStyle(PrimaryButtonStyle(height: 30, font: .callout.weight(.semibold)))
                 } else {
@@ -270,7 +273,8 @@ struct QueueColumn: View {
                     .help("Remove everything waiting (nothing already saved is touched)")
             }
             if jobs.paused || !model.network.isOnline {
-                Label(jobs.paused ? "Paused: nothing new starts until you press Resume."
+                Label(jobs.paused ? (AppSettings.isPreview ? "Video Buddy 4.0 Preview never runs jobs: nothing is downloaded or summarized."
+                                                           : "Paused: nothing new starts until you press Resume.")
                                   : "Offline: jobs that need the internet wait; transcribing on this Mac still runs.",
                       systemImage: jobs.paused ? "pause.circle" : "wifi.slash")
                     .font(.callout).foregroundStyle(p.secondary)
