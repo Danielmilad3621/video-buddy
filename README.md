@@ -1013,7 +1013,8 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - **Restore:** after quitting, 4 tabs came back asleep with no web process until YouTube was shown; Back worked in a restored tab; the guest cookie names were identical.
   - **Clear Browsing Data** with 3 tabs: every tab released, website data and saved tabs removed; WebKit then removed the store only on a fresh launch (as in Phase 1).
   - **Afterwards:** the test build's WebKit store, caches, settings and app were removed and checked gone. Compared with a baseline taken before testing, identical: the 3.1 app, the production DB (counted from a copy: 0 videos, 0 jobs, 0 playlists; main and log modified times), `~/Downloads/cobalt`, 3.1's settings, and your Preview's data folder, store id, WebKit store and settings.
-  - **Screenshots:** `design/screenshots/4.0-p2-*`.
+  - **Installed:** the Preview was rebuilt at `66076e4` (241 self-tests inside its bundle), quit gracefully first, and opened normally in front in the YouTube section with 4 starter tabs (the labelled samples); it had no 3.1 file open. Its data folder, samples and WebKit store were kept; its own `queuePaused` setting was set back to on.
+  - **Screenshots:** `design/screenshots/4.0-p2-*` (`03` is the installed Preview).
 
 ### Not verified
 - **4.0 Phase 2:**
