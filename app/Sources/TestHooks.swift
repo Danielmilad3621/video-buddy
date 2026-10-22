@@ -2,7 +2,39 @@
 // It calls the same AppModel methods the buttons call, and dumps state as JSON for the end-to-end checks.
 import AppKit
 import Foundation
+import SwiftUI
 import WebKit
+
+/// Test builds only (VS_TEST_HOOKS=1): remembers where a native control is, so `nativeClick <name>` can click it with a
+/// real mouse event through its window, the way a person would. Invisible to clicks itself.
+struct TestProbe: NSViewRepresentable {
+    let name: String
+    final class ProbeView: NSView { override func hitTest(_ point: NSPoint) -> NSView? { nil } }
+    func makeNSView(context: Context) -> NSView { let v = ProbeView(); TestProbes.add(name, v); return v }
+    func updateNSView(_ v: NSView, context: Context) { TestProbes.add(name, v) }
+}
+
+@MainActor enum TestProbes {
+    static let enabled = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
+    private final class Weak { weak var view: NSView?; init(_ v: NSView) { view = v } }
+    private static var views: [String: [Weak]] = [:]
+    static func add(_ name: String, _ v: NSView) {
+        var list = (views[name] ?? []).filter { $0.view != nil && $0.view !== v }
+        list.append(Weak(v))
+        views[name] = list
+    }
+    /// The on-screen one (ViewThatFits keeps layouts it didn't pick out of the window).
+    static func view(_ name: String) -> NSView? {
+        views[name]?.compactMap(\.view).last { $0.window != nil && $0.bounds.width > 0 && !$0.isHiddenOrHasHiddenAncestor }
+    }
+    static var visible: [String] { views.keys.filter { view($0) != nil }.sorted() }
+}
+
+extension View {
+    @ViewBuilder func testProbe(_ name: String) -> some View {
+        if TestProbes.enabled { background(TestProbe(name: name)) } else { self }
+    }
+}
 
 @MainActor
 enum TestHooks {
@@ -153,6 +185,57 @@ enum TestHooks {
                                         isARepeat: false, keyCode: 0) {
                 webRead = "menu handled ⌘\(arg): \(NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false)"
             }
+        // 4.0 Phase 1b: the native action bar
+        case "nativeClick":
+            if let v = TestProbes.view(arg), let w = v.window {
+                // a person clicking a window makes it key first; do the same, then click once it is
+                w.makeKeyAndOrderFront(nil)
+                let wasKey = w.isKeyWindow
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    let loc = v.convert(NSPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
+                    let t = ProcessInfo.processInfo.systemUptime
+                    for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, 0)] {
+                        if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [], timestamp: t, windowNumber: w.windowNumber,
+                                                      context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) { w.sendEvent(e) }
+                    }
+                    webRead = "native click on \(arg) at \(Int(loc.x)),\(Int(loc.y)); window key before \(wasKey), at click \(w.isKeyWindow)"
+                }
+            } else {
+                webRead = "no visible control \(arg) (visible: \(TestProbes.visible.joined(separator: ", ")))"
+            }
+        case "nativeType":
+            // "<control>|<text>": keys go to that control's window (a sheet is a window of its own), as typing would
+            let f = arg.split(separator: "|", maxSplits: 1).map(String.init)
+            let target = f.count == 2 ? TestProbes.view(f[0])?.window : NSApp.keyWindow
+            let arg = f.count == 2 ? f[1] : arg
+            if let w = target {
+                w.makeKey()
+                for c in arg.map(String.init) {
+                    for type in [NSEvent.EventType.keyDown, .keyUp] {
+                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                    windowNumber: w.windowNumber, context: nil, characters: c, charactersIgnoringModifiers: c,
+                                                    isARepeat: false, keyCode: 0) { NSApp.sendEvent(e) }
+                    }
+                }
+            }
+        case "ownChannels": model.setOwnChannels(arg)
+        case "requestVideo": model.requestFromBrowser(.video, videoID: arg)      // a click carrying this id (stale-click test)
+        case "declareOnly":
+            // "<youtube id>|<reference>": record a written-permission declaration without queueing anything
+            let f = arg.split(separator: "|", maxSplits: 1).map(String.init)
+            if f.count == 2 {
+                let a = DownloadAuthorization(basis: .writtenPermission, reference: f[1], recorded: Date())
+                Task { try? await store.db.setAuthorization("youtube:\(f[0])", a); model.authorizations["youtube:\(f[0])"] = a }
+            }
+        case "recheck": if let id = model.browser.currentVideoID { model.browser.checker.recheck(id) }
+        case "fakeRunning":
+            // "<youtube id>" pretends that video's download is running; "off" stops pretending
+            if arg == "off" { model.jobs.testSetCurrent(nil) }
+            else if let v = store.all.first(where: { $0.key == "youtube:\(arg)" }) {
+                model.jobs.testSetCurrent(QueueItem(id: -1, videoID: v.id, title: v.displayTitle, action: .video))
+            }
+        case "loadFixtures": Task { await loadFixtures(arg) }
+        case "fixtureComplete": Task { await fixtureComplete(arg) }
         case "focusWindow":
             // brings this test window to the front (only used while nobody is at the keyboard)
             NSApp.activate(ignoringOtherApps: true)
@@ -164,6 +247,60 @@ enum TestHooks {
     }
 
     private static var webRead = ""
+
+    /// "<sample dir>|<download dir>": library records for real public YouTube ids, with synthetic media (a 14 s clip made
+    /// with `say` + ffmpeg), covering every state the action bar has. Only ever used on a throwaway database.
+    private static func loadFixtures(_ arg: String) async {
+        let f = arg.split(separator: "|").map(String.init)
+        guard f.count == 2 else { return }
+        let (samples, dl) = (URL(fileURLWithPath: f[0]), URL(fileURLWithPath: f[1]))
+        let db = AppModel.shared.store.db
+        func copy(_ sample: String, _ name: String) -> String {
+            let to = dl.appendingPathComponent(name)
+            try? FileManager.default.copyItem(at: samples.appendingPathComponent(sample), to: to)
+            return to.path
+        }
+        func record(_ id: String, _ title: String, _ job: NewJob) async {
+            _ = try? await db.recordCompleted(key: "youtube:\(id)", url: BrowserPolicy.watchURL(id), platform: "YouTube",
+                                              info: VideoInfo(title: title, channel: "Fixture", thumbnail: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg"),
+                                              job: job)
+        }
+        let at = Date()
+        await record("jNQXAC9IVRw", "Me at the zoo [fixture: video on this Mac]",
+                     NewJob(kind: .video, status: .succeeded, source: .app, started: at, finished: at, filePath: copy("sample.mp4", "fixture zoo.mp4")))
+        await record("aqz-KE-bpKQ", "Big Buck Bunny [fixture: audio only]",
+                     NewJob(kind: .audio, status: .succeeded, source: .app, started: at, finished: at, filePath: copy("sample.mp3", "fixture bunny.mp3")))
+        await record("Y-rmzh0PI3c", "Cosmos Laundromat [fixture: audio + summary]",
+                     NewJob(kind: .summary, status: .succeeded, source: .app, started: at, finished: at, filePath: copy("sample.mp3", "fixture cosmos.mp3"),
+                            summary: "## TL;DR\nA fixture summary (synthetic, no AI).", summaryLanguage: "English", summaryFormat: "Standard"))
+        await record("QjMwIk6Crbc", "Series episode 3 [fixture: download failed]",
+                     NewJob(kind: .video, status: .failed, source: .app, started: at, finished: at, error: "fixture: failed on purpose"))
+        await record("LfZN2aRupl8", "Series episode 4 [fixture: file missing]",
+                     NewJob(kind: .video, status: .succeeded, source: .app, started: at, finished: at,
+                            filePath: dl.appendingPathComponent("fixture missing.mp4").path))
+        await record("ih7q2SE5M18", "Cat water moments [fixture: Short on this Mac]",
+                     NewJob(kind: .video, status: .succeeded, source: .app, started: at, finished: at, filePath: copy("sample.mp4", "fixture short.mp4")))
+        _ = try? await db.enqueue(VideoRef.parse(BrowserPolicy.watchURL("M7E_tARS0hs"))!, action: .video)   // queued (the queue is paused)
+        _ = try? await db.applyInfo(try await db.videos().first { $0.key == "youtube:M7E_tARS0hs" }?.id ?? 0,
+                                    VideoInfo(title: "Series episode 2 [fixture: queued]"), override: true)
+        await AppModel.shared.store.reload()
+        await AppModel.shared.jobs.refreshQueue()
+        webRead = "fixtures loaded"
+    }
+
+    /// "<youtube id>|<sample dir>|<download dir>": that video's download finished (a sample clip appears), as if the queue ran.
+    private static func fixtureComplete(_ arg: String) async {
+        let f = arg.split(separator: "|").map(String.init)
+        guard f.count == 3 else { return }
+        let to = URL(fileURLWithPath: f[2]).appendingPathComponent("fixture completed \(f[0]).mp4")
+        try? FileManager.default.copyItem(at: URL(fileURLWithPath: f[1]).appendingPathComponent("sample.mp4"), to: to)
+        let now = Date()
+        _ = try? await AppModel.shared.store.db.recordCompleted(key: "youtube:\(f[0])", url: BrowserPolicy.watchURL(f[0]), platform: "YouTube",
+                                                                 info: nil, job: NewJob(kind: .video, status: .succeeded, source: .app,
+                                                                                        started: now, finished: now, filePath: to.path))
+        await AppModel.shared.store.reload()
+        webRead = "completed \(f[0])"
+    }
 
     /// A left click at a point of the page (points, top-left origin), as the window would deliver it.
     private static func click(_ web: WKWebView, at p: CGPoint) {
@@ -251,6 +388,17 @@ enum TestHooks {
             "openPlaylist": store.playlistVideos.map(\.displayTitle),
             "upNext": model.playback.upNext.count,
             "played": model.playback.played.count,
+            "bar": { () -> [String: Any] in
+                guard let id = model.browser.currentVideoID else { return ["video": "none"] }
+                let a = model.availability(youtubeID: id)
+                return ["id": id, "video": "\(model.slotState(.video, id))", "audio": "\(model.slotState(.audio, id))",
+                        "summary": "\(model.slotState(.summary, id))", "gate": model.browserGate(id).map { "\($0)" } ?? "checking",
+                        "check": model.browser.checker.results[id].map { "\($0)" } ?? "none", "checking": model.browser.checker.running ?? "",
+                        "videoFile": a.videoFile ?? "", "audioFile": a.audioFile ?? "", "videoMissing": a.videoMissing,
+                        "jobs": "video \(a.video) audio \(a.audio) summary \(a.summary)", "summarized": a.summarized,
+                        "declaration": model.declaration.map { "\($0.slot.rawValue) for \($0.videoID)" } ?? "",
+                        "probes": TestProbes.visible] as [String: Any]
+            }(),
             "browser": { () -> [String: Any] in
                 let b = model.browser
                 guard let t = b.tab else { return ["tab": "none", "storeID": b.existingStoreID ?? "", "clearReport": b.clearReport ?? ""] }

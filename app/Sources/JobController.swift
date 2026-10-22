@@ -170,6 +170,9 @@ final class JobController {
 
     func dismissBanner() { if current == nil { banner = nil } }
 
+    /// Test hooks only: pretend a job is running (the paused test queue never runs one).
+    func testSetCurrent(_ item: QueueItem?) { current = item }
+
     func refreshQueue() async {
         queue = ((try? await db.queuedJobs()) ?? []).map {
             QueueItem(id: $0.job.id, videoID: $0.job.videoID, title: $0.title ?? "Untitled video", action: $0.job.action)

@@ -10,12 +10,13 @@ enum SelfTest {
     }
 
     static func runBlocking() -> Int32 {
-        let done = DispatchSemaphore(value: 0)
+        // keep the main run loop turning while the checks run, so the ones that need the main actor can
+        nonisolated(unsafe) var done = false
         Task.detached {
             do { try await run() } catch { failures.append("threw: \(error)") }
-            done.signal()
+            done = true
         }
-        done.wait()
+        while !done { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
         if failures.isEmpty {
             print("selftest: \(passed) checks passed")
             return 0
@@ -40,6 +41,9 @@ enum SelfTest {
         try await playlists(root.appendingPathComponent("playlists"))
         try await grouping(root.appendingPathComponent("grouping"))
         browserPolicy()
+        browserBar()
+        await checkerRapidNavigation()
+        try await migrations(root.appendingPathComponent("migrations"))
     }
 
     // MARK: pure parsing
@@ -277,7 +281,7 @@ enum SelfTest {
             try v1.run("INSERT INTO jobs(video_id, kind, status, source, started, file_path) VALUES(1, 'video', 'succeeded', 'app', 2, '/tmp/v.mp4')")
         }
         let db = try Database(directory: dir)
-        check(try await db.schemaVersion() == 3, "upgraded to version 3")
+        check(try await db.schemaVersion() == Database.latestVersion, "upgraded to the latest version")
         let v = try await db.video(1)
         check(v?.title == "Me at the zoo" && v?.favorite == true && v?.hasSummary == true && v?.hasVideo == true, "data kept through the upgrade")
         let jobs = try await db.jobs(for: 1)
@@ -288,8 +292,8 @@ enum SelfTest {
         check(try await db.quickCheck() == "ok", "upgraded database healthy")
         _ = try Database(directory: dir)   // opening again must not upgrade or back up twice
         let after = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path)) ?? []
-        check(after.filter { $0.hasPrefix("history-pre-v2-") }.count == 1 && !after.contains { $0.hasPrefix("history-pre-v3-") },
-              "no second upgrade backup")
+        check(after.filter { $0.hasPrefix("history-pre-v2-") }.count == 1 && !after.contains { $0.hasPrefix("history-pre-v3-") }
+              && !after.contains { $0.hasPrefix("history-pre-v4-") }, "no second upgrade backup")
 
         // a 2.1 database (version 2) gets its own verified copy before the 3.0 columns are added
         let v2dir = dir.appendingPathComponent("v2")
@@ -303,7 +307,7 @@ enum SelfTest {
         }
         let up = try Database(directory: v2dir)
         let kept = try await up.videos()
-        check(try await up.schemaVersion() == 3 && kept.count == 1 && kept[0].description == nil && kept[0].tags.isEmpty,
+        check(try await up.schemaVersion() == Database.latestVersion && kept.count == 1 && kept[0].description == nil && kept[0].tags.isEmpty,
               "2.1 → 3.0 keeps entries; older ones have no description yet")
         let pre3 = ((try? FileManager.default.contentsOfDirectory(atPath: v2dir.appendingPathComponent("backups").path)) ?? [])
             .filter { $0.hasPrefix("history-pre-v3-") }
@@ -534,6 +538,152 @@ enum SelfTest {
         check(BrowserPolicy.address("youtube.com/@x")?.absoluteString == "https://youtube.com/@x"
               && BrowserPolicy.address("swift tutorial")?.absoluteString == "https://www.youtube.com/results?search_query=swift%20tutorial",
               "address field: links and searches")
+    }
+
+    /// 4.0 Phase 1b: what the action bar knows and allows. Pure: no files, no network.
+    private static func browserBar() {
+        // technical checks from yt-dlp's metadata (a restriction check, never proof of download rights)
+        let json = { (extra: String) in Data(#"{"availability":"public","live_status":"not_live","is_live":false,"age_limit":0,"channel_id":"UCabc","uploader_id":"@me","channel":"Me","formats":[{"has_drm":false}]\#(extra)}"#.utf8) }
+        let pc = { (j: Data?, status: Int32, err: String?) in PlatformCheck.from(status: status, json: j, error: err) }
+        check(pc(json(""), 0, nil) == .passed(channelID: "UCabc", handle: "@me", channel: "Me"), "a public video passes the technical check")
+        check(pc(Data(#"{"availability":"public","live_status":"is_live","formats":[]}"#.utf8), 0, nil) != .passed(channelID: nil, handle: nil, channel: nil)
+              && { if case .blocked = pc(Data(#"{"availability":"public","live_status":"is_live","formats":[]}"#.utf8), 0, nil) { true } else { false } }(),
+              "live streams are unavailable")
+        for (avail, what) in [("premium_only", "Premium"), ("subscriber_only", "members-only"), ("needs_auth", "sign-in"), ("private", "private")] {
+            let r = pc(Data(#"{"availability":"\#(avail)","live_status":"not_live","formats":[]}"#.utf8), 0, nil)
+            check({ if case .blocked = r { true } else { false } }(), "\(what) content is unavailable")
+        }
+        check({ if case .blocked = pc(Data(#"{"availability":"public","live_status":"not_live","age_limit":18,"formats":[]}"#.utf8), 0, nil) { true } else { false } }(),
+              "age-restricted videos are unavailable")
+        check({ if case .blocked = pc(Data(#"{"availability":"public","live_status":"not_live","formats":[{"has_drm":true}]}"#.utf8), 0, nil) { true } else { false } }(),
+              "DRM-protected videos are unavailable")
+        check({ if case .unknown = pc(Data(#"{"live_status":"not_live","formats":[]}"#.utf8), 0, nil) { true } else { false } }(),
+              "missing availability is inconclusive, not a pass")
+        check({ if case .unknown = pc(nil, 1, "ERROR: [youtube] x: Some network problem") { true } else { false } }()
+              && { if case .blocked = pc(nil, 1, "ERROR: Sign in to confirm your age") { true } else { false } }()
+              && { if case .unknown = pc(Data("{garbage".utf8), 0, nil) { true } else { false } }(),
+              "failures are unknown (or the restriction they name), never a pass")
+
+        // availability from real-looking records; `usable` stands in for "exists and isn't empty"
+        let item = { (path: String, role: FileItem.Role) in FileItem(path: path, role: role, jobID: 1, videoID: 7, size: 10, date: Date()) }
+        let usable: (FileItem) -> Bool = { !$0.path.contains("gone") && !$0.path.contains("empty") }
+        let q = { (a: JobAction) in QueueItem(id: 1, videoID: 7, title: "t", action: a) }
+        let mk = { (files: [FileItem], queue: [QueueItem], current: QueueItem?, summary: Bool) in
+            VideoAvailability.make(inLibrary: true, files: files, usable: usable, queue: queue, current: current, failed: [], hasSummary: summary)
+        }
+        let here = mk([item("/x/v.mp4", .video)], [], nil, false)
+        check(here.videoFile == "/x/v.mp4" && !here.videoMissing, "a playable video file on disk is offline")
+        let gone = mk([item("/x/gone.mp4", .video)], [], nil, false)
+        check(gone.videoFile == nil && gone.videoMissing, "a recorded file that's gone is missing, not downloaded")
+        check(mk([item("/x/empty.mp4", .video)], [], nil, false).videoFile == nil, "an empty file never counts as downloaded")
+        let copies = mk([item("/x/gone.mp4", .video), item("/x/v (2).mp4", .video)], [], nil, false)
+        check(copies.videoFile == "/x/v (2).mp4" && !copies.videoMissing, "a second copy on disk still counts")
+        let audioOnly = mk([item("/x/a.mp3", .audio)], [], nil, true)
+        check(audioOnly.videoFile == nil && audioOnly.audioFile == "/x/a.mp3" && audioOnly.summarized, "audio + summary without video")
+        check(mk([], [q(.video), q(.audio)], q(.video), false).video == .running && mk([], [q(.video)], nil, false).video == .queued
+              && mk([], [q(.videoTranscript)], nil, false).video == .queued, "running, then queued (+ Transcript downloads count as video)")
+
+        // what each slot shows, one order for all
+        let ok = DownloadGate.Decision.allowed(DownloadAuthorization(basis: .writtenPermission, reference: "r", recorded: Date()))
+        check(SlotState.video(here, nil) == .offline && SlotState.video(here, .blocked("x")) == .offline,
+              "a video on this Mac shows Play Offline, whatever the checks say")
+        check(SlotState.make(have: false, job: .running, missing: false, gate: nil) == .running
+              && SlotState.make(have: false, job: .queued, missing: false, gate: ok) == .queued, "running, then queued")
+        check(SlotState.make(have: false, job: .none, missing: false, gate: nil) == .checking, "checking while the check runs")
+        check(SlotState.make(have: false, job: .none, missing: false, gate: .blocked("live")) == .unavailable("live")
+              && SlotState.make(have: false, job: .failed, missing: false, gate: .unknown("?")) == .unknown("?"),
+              "restrictions and failed checks come before retrying")
+        check(SlotState.make(have: false, job: .failed, missing: false, gate: .needsDeclaration) == .authorizationRequired,
+              "no declaration: authorization required, even to retry")
+        check(SlotState.make(have: false, job: .failed, missing: true, gate: ok) == .retry
+              && SlotState.make(have: false, job: .none, missing: true, gate: ok) == .downloadAgain
+              && SlotState.make(have: false, job: .none, missing: false, gate: ok) == .ready, "retry, download again, download")
+        check(SlotState.summary(audioOnly, nil) == .offline && SlotState.video(audioOnly, ok) == .ready,
+              "summarized: Open Summary; audio only: the video can still be downloaded")
+
+        // the gate: a technical pass and a declaration, both
+        let passed = PlatformCheck.passed(channelID: "UCabc", handle: "@Me", channel: "Me")
+        check(DownloadGate.decide(check: nil, authorization: nil) == nil
+              && DownloadGate.decide(check: passed, authorization: nil) == .needsDeclaration
+              && DownloadGate.decide(check: .blocked("x"), authorization: DownloadAuthorization(basis: .ownChannel, reference: nil, recorded: Date())) == .blocked("x"),
+              "no download without both a passed check and a declaration")
+        check(DownloadGate.channelMatches(passed, ownChannels: ["ucabc"]) && DownloadGate.channelMatches(passed, ownChannels: ["@me"])
+              && !DownloadGate.channelMatches(passed, ownChannels: ["@someoneelse"]) && !DownloadGate.channelMatches(nil, ownChannels: ["@me"]),
+              "own channel only when it matches a channel you entered")
+        check(DownloadAuthorization(basis: .writtenPermission, reference: "x", recorded: Date()).label.contains("not independently verified")
+              && DownloadAuthorization(basis: .ownChannel, reference: nil, recorded: Date()).label.contains("not independently verified"),
+              "declarations are never labelled verified")
+
+        // clicks: always the video the button showed, and only if it's still the tab's video
+        check(BrowserActionOutcome.decide(clicked: "A", current: "B", slot: .ready) == .pageChanged, "a click for a video that's no longer shown does nothing")
+        check(BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .ready) == .queue(videoID: "A"), "a click queues the shown video")
+        check(BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .offline) == .alreadyHave
+              && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .offline, anotherCopy: true) == .queue(videoID: "A"),
+              "already here: no download unless you ask for another copy")
+        check(BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .queued) == .alreadyQueued
+              && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .authorizationRequired) == .declare(videoID: "A")
+              && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .unknown("?")) == .explain("?"),
+              "queued, declaration and unknown never queue")
+    }
+
+    /// Rapid navigation: a slow answer for video A must never appear as video B's.
+    @MainActor private static func checkerRapidNavigation() async {
+        let checker = AvailabilityChecker { id in
+            try? await Task.sleep(for: .milliseconds(id == "A" ? 120 : 250))
+            return .passed(channelID: id, handle: nil, channel: nil)
+        }
+        checker.settle = .milliseconds(10)
+        checker.show("A", needed: true)
+        try? await Task.sleep(for: .milliseconds(60))      // A's lookup is running
+        checker.show("B", needed: true)                     // the user moved on
+        try? await Task.sleep(for: .milliseconds(500))
+        check(checker.current == "B" && checker.results["B"] == .passed(channelID: "B", handle: nil, channel: nil),
+              "after A → B, the shown result is B's own")
+        check(checker.results["A"] == nil || checker.results["A"] == .passed(channelID: "A", handle: nil, channel: nil),
+              "A's answer, if kept, is stored only under A")
+        // and if A's answer lands while B is shown (B already cached), B's is untouched
+        checker.show("A", needed: true)
+        checker.show("B", needed: true)
+        try? await Task.sleep(for: .milliseconds(300))
+        check(checker.results["B"] == .passed(channelID: "B", handle: nil, channel: nil), "a late answer never overwrites the current video's")
+    }
+
+    /// The additive migrations: one order, none skipped, safe to run again, and an existing v3 database keeps its rows.
+    private static func migrations(_ dir: URL) async throws {
+        let versions = Database.additive.map(\.version)
+        check(versions == Array(4..<(4 + versions.count)) && Set(versions).count == versions.count, "migration numbers are contiguous and unique")
+        let fresh = try Database(directory: dir.appendingPathComponent("fresh"))
+        check(try await fresh.schemaVersion() == Database.latestVersion, "a new database starts at the latest version")
+        // a 3.1 (v3) database: build one, then upgrade it
+        let v3 = dir.appendingPathComponent("v3")
+        do {
+            let db = try Database(directory: v3)
+            _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
+        }
+        do {
+            let raw = try SQLite(path: v3.appendingPathComponent("history.sqlite").path)
+            try raw.exec("DROP TABLE authorizations; PRAGMA user_version = 3;")
+        }
+        let up = try Database(directory: v3)
+        let backups = { ((try? FileManager.default.contentsOfDirectory(atPath: v3.appendingPathComponent("backups").path)) ?? []).filter { $0.hasPrefix("history-pre-v4-") } }
+        let (upVersion, upCount) = (try await up.schemaVersion(), try await up.videos().count)
+        check(upVersion == 4 && upCount == 1, "3.1 → v4 keeps its entries")
+        check(backups().count == 1 && Database.isHealthy(v3.appendingPathComponent("backups/\(backups()[0])")), "a verified backup before v4")
+        _ = try Database(directory: v3)
+        check(backups().count == 1, "opening again changes nothing and makes no second backup")
+        do {   // a step that finds its table already there (a half-applied upgrade) still completes
+            let raw = try SQLite(path: v3.appendingPathComponent("history.sqlite").path)
+            try raw.exec("PRAGMA user_version = 3;")
+        }
+        let again = try Database(directory: v3)
+        check(try await again.schemaVersion() == 4, "re-running a step is harmless (CREATE … IF NOT EXISTS)")
+        // declarations and your channels
+        let a = DownloadAuthorization(basis: .writtenPermission, reference: "Email from the rights holder, 2026-10-22", recorded: Date())
+        try await again.setAuthorization("youtube:jNQXAC9IVRw", a)
+        let (stored, count) = (await again.authorization("youtube:jNQXAC9IVRw"), try await again.allAuthorizations().count)
+        check(stored?.reference == a.reference && count == 1, "a declaration is stored by video key")
+        try await again.setOwnChannels(["@me", "UCabc"])
+        check(await again.ownChannels() == ["@me", "UCabc"], "your channels are kept in this profile's database")
     }
 
     private static func importer(_ dir: URL) async throws {

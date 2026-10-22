@@ -78,6 +78,7 @@ struct RootView: View {
         }
         .sheet(item: $model.namePrompt) { NamePromptSheet(prompt: $0).environment(model) }
         .sheet(item: $model.addingVideosTo) { AddVideosSheet(playlist: $0).environment(model) }
+        .sheet(item: $model.declaration) { DeclarationSheet(request: $0).environment(model) }
     }
 }
 

@@ -678,6 +678,12 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **A data store can only be deleted on a fresh launch,** after the session that used it ends.
 - **Fixed:** the page not coming back after full screen; resuming the native player not pausing YouTube; test instances hearing each other (`VS_TEST_CHANNEL`).
 - **Full results, GO/NO-GO and the revised Phases 2–5:** `design/4.0-phase1-report.md`.
+- **Phase 1b (same day): the native action bar.**
+  - **The bar:** it knows what you have from the video's ID and real files: Play Offline / Download Video (red) / Queued / Downloading / Retry / Download Again / Unavailable / Open Summary.
+  - **The authorization gate:** a technical check from yt-dlp metadata, plus a declaration you record, labelled *not independently verified*. Nothing is queued if the check is inconclusive.
+  - **ID safety:** an ID-keyed checker, and click-time ID matching, so rapid navigation can't queue the wrong video.
+  - **Migrations:** an ordered additive list (v4 = `authorizations`; Watch Later = v5).
+  - 219 self-tests; the report adds a Phase 1b section.
 
 ---
 
@@ -836,6 +842,11 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 - **Real input:** `webClick x|y` and `webClickEl <css>` (a real mouse click, at a point or an element's centre), `webKey <k|f|return|escape|…>`, `webType <text>`, `menuKey <[|]|r|l>` (a ⌘ shortcut through the app's menu).
 - **Test-only:** `webRead <js>` (reads in a separate script world), `focusWindow` (only while nobody is at the keyboard), `clearBrowsingData`.
 - **State:** `state` reports `browser` (url, title, page type, video id, full screen, media and WebKit's own media value, navigation log, outside links, data store id, clear report, window focus).
+- **Phase 1b adds:**
+  - `nativeClick <control>` (a real mouse click on a native control; controls are marked with `.testProbe`), `nativeType <control>|<text>`;
+  - `declareOnly <id>|<reference>`, `requestVideo <id>` (a click carrying that ID), `fakeRunning <id>|off`, `ownChannels <list>`, `recheck`;
+  - `loadFixtures <samples>|<downloads>`, `fixtureComplete <id>|<samples>|<downloads>`;
+  - `state` gains `bar` (each slot's state, the gate, the check, files, jobs, visible controls).
 - **Channels:** `VS_TEST_CHANNEL=<name>` (for the app and `vsctl`) keeps two test instances apart.
 
 3.1 adds: `layout Grouped|All Videos`, `expand <playlist name part>|all|none`, `playPlaylist <name part>`, `continuePlaylist <name part>`, `checkPlaylist <name part>` (Check Against YouTube: a metadata read, needs `offline off`), `linkPlaylist` (the sheet's *Link N Library Videos*), `closeSheet`, `downloadMissing <name part>` → `confirmOffline` / `cancelOffline`, `selectEpisode <name part>|<n>`. `state` also reports `groups` (per playlist: members, shown, offline, audioOnly, episodes, resume), `layout`, `watch` (the selected video's state), `videoOnMac`, `offlineBatch`, `previewChecking`, `played` and `context` (playlist name, count, episode).
@@ -926,7 +937,7 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 - **Screenshots:** `design/screenshots/3.1-*.png`: grouped Library, Home, playlist page, playing from a playlist, Downloads, Queue, Favorites, search, and Library / playlist / Downloads / Home-playing at 1280×800 and 1024×700.
 
 **4.0 Phase 1, on the branch (2026-10-22), in throwaway instances** (own data and downloads folders, own WebKit store, queue paused):
-- **Self-tests:** 178 pass (161 + 17 browser rules).
+- **Self-tests:** 178 pass (161 + 17 browser rules). Phase 1b: **219** (+41: technical-check parsing, availability, state precedence, the gate, click outcomes, rapid navigation, the migration order).
 - **The live results** (home, search two ways, watch, playback, `k`, full screen, in-page navigation, channels, playlists, Shorts, ⌘[ ⌘] ⌘R, outside links, sign-in, the one-player rule, memory and CPU, clearing data) are in `design/4.0-phase1-report.md`.
 - **Afterwards:**
   - both WebKit stores were removed and checked;

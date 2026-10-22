@@ -42,6 +42,17 @@ actor Database {
     /// Upgrades the schema step by step. Before changing an existing database it saves a verified copy to
     /// backups/history-pre-v<N>-<ms>.sqlite (a new name every time, never an existing file); if that copy can't be
     /// made, the upgrade doesn't run and the error stops the open, so the data on disk is left as it was.
+    /// Additive steps after v3, numbered in the order they were written: every number used once, none skipped, so a
+    /// database at any version gets exactly the steps it lacks (v4 authorizations; Watch Later will be v5). Each only
+    /// creates what doesn't exist yet, inside a transaction, after a verified backup of an existing database.
+    static let additive: [(version: Int, label: String, sql: String)] = [
+        (4, "authorizations", """
+            CREATE TABLE IF NOT EXISTS authorizations(
+              video_key TEXT PRIMARY KEY, basis TEXT NOT NULL, reference TEXT, recorded REAL NOT NULL);
+            """),
+    ]
+    static var latestVersion: Int { additive.last?.version ?? 3 }
+
     static func migrate(_ db: SQLite, backupDir: URL? = nil) throws {
         let version = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
         if version < 1 { try createV1(db) }
@@ -74,6 +85,13 @@ actor Database {
                 PRAGMA user_version = 3;
                 """)
             }
+        }
+        // an existing v3+ database gets one verified copy before its first additive step (older ones were copied above)
+        var backedUp = version < 3
+        for step in additive where version < step.version {
+            if !backedUp, let backupDir { try backupBeforeUpgrade(db, to: backupDir, label: "pre-v\(step.version)") }
+            backedUp = true
+            try db.transaction { try db.exec(step.sql + "\nPRAGMA user_version = \(step.version);") }
         }
     }
 
@@ -295,6 +313,38 @@ actor Database {
             return PlaylistImportResult(playlist: playlist, jobs: jobs, linked: linked)
         }
     }
+
+    // MARK: download authorizations (4.0)
+
+    /// The declaration you recorded for a video (by its key, so it can exist before a library entry), if any.
+    func authorization(_ key: String) -> DownloadAuthorization? {
+        guard let r = (try? db.query("SELECT basis, reference, recorded FROM authorizations WHERE video_key=?", [key]))?.first,
+              let basis = r.string("basis").flatMap(DownloadAuthorization.Basis.init) else { return nil }
+        return DownloadAuthorization(basis: basis, reference: r.string("reference"), recorded: r.date("recorded") ?? Date())
+    }
+
+    func allAuthorizations() throws -> [String: DownloadAuthorization] {
+        var out: [String: DownloadAuthorization] = [:]
+        for r in try db.query("SELECT video_key, basis, reference, recorded FROM authorizations") {
+            guard let key = r.string("video_key"), let basis = r.string("basis").flatMap(DownloadAuthorization.Basis.init) else { continue }
+            out[key] = DownloadAuthorization(basis: basis, reference: r.string("reference"), recorded: r.date("recorded") ?? Date())
+        }
+        return out
+    }
+
+    func setAuthorization(_ key: String, _ a: DownloadAuthorization) throws {
+        try db.run("""
+            INSERT INTO authorizations(video_key, basis, reference, recorded) VALUES(?, ?, ?, ?)
+            ON CONFLICT(video_key) DO UPDATE SET basis=excluded.basis, reference=excluded.reference, recorded=excluded.recorded
+            """, [key, a.basis.rawValue, a.reference, a.recorded])
+    }
+
+    /// Channels you said are yours (ids like UC…, or @handles), kept in this profile's database.
+    func ownChannels() -> [String] {
+        (meta("own_channels") ?? "").split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " }).map(String.init)
+    }
+
+    func setOwnChannels(_ list: [String]) throws { try setMeta("own_channels", list.joined(separator: ",")) }
 
     // MARK: playback and thumbnails
 

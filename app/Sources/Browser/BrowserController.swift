@@ -15,6 +15,11 @@ final class BrowserController {
     /// The result of the last Clear Browsing Data, for the UI and the tests.
     private(set) var clearReport: String?
     var onWebPlaying: () -> Void = {}
+    /// 4.0 Phase 1b: the technical check for the video on screen (metadata only), results kept per video id.
+    let checker = AvailabilityChecker { id in await MetadataFetcher.platformCheck(BrowserPolicy.watchURL(id)) }
+    @ObservationIgnored var onPageChange: (YouTubePage) -> Void = { _ in }
+    /// The id of the video in the tab right now (what every action is checked against at the moment of a click).
+    var currentVideoID: String? { tab?.page.videoID }
 
     private let storeFile: URL
     private let testMode = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
@@ -53,6 +58,7 @@ final class BrowserController {
     func ensureTab() -> BrowserTab {
         if let tab { return tab }
         let t = BrowserTab(configuration: configuration(), recordExternalOnly: testMode)
+        t.onPageChange = { [weak self] page in self?.onPageChange(page) }
         tab = t
         t.load(BrowserPolicy.home)
         return t

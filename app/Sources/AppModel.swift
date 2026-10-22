@@ -45,7 +45,7 @@ final class AppModel {
         didSet {
             if section == .favorites { store.filter = .favorites }
             else if oldValue == .favorites, store.filter == .favorites { store.filter = .all }
-            if section == .youtube, oldValue != .youtube { browser.shown() }
+            if section == .youtube, oldValue != .youtube { browser.shown(); updateBrowserCheck() }
             if oldValue == .youtube, section != .youtube {
                 browser.hidden(allowBackgroundAudio: UserDefaults.standard.bool(forKey: "browserBackgroundAudio"))
             }
@@ -70,6 +70,10 @@ final class AppModel {
     var pendingOfflineBatch: OfflineBatch?
     /// The Add Videos sheet's playlist.
     var addingVideosTo: PlaylistSummary?
+    /// 4.0 Phase 1b: declarations you recorded (by video key), your own channels, and the declaration sheet.
+    var authorizations: [String: DownloadAuthorization] = [:]
+    var ownChannels: [String] = []
+    var declaration: DeclarationRequest?
     /// Entries whose details (description, tags) are being read from the platform right now.
     var loadingDetails: Set<Int64> = []
     private var launched = false
@@ -114,6 +118,9 @@ final class AppModel {
         do { try await db.backupIfDue() } catch { notice = "Backup skipped: \(error)" }
         await store.reload()
         store.selectFirstIfNeeded()
+        authorizations = (try? await db.allAuthorizations()) ?? [:]
+        ownChannels = await db.ownChannels()
+        browser.onPageChange = { [weak self] _ in self?.updateBrowserCheck() }
         ingestor.start()
         await jobs.refreshQueue()
         jobs.pump()
@@ -162,9 +169,85 @@ final class AppModel {
     }
 
     /// The Video Buddy bar in the YouTube section: the same actions as the toolbar, for the page's video.
-    func startFromBrowser(_ kind: JobKind) {
-        guard let id = browser.tab?.page.videoID else { return }
-        jobs.enqueue(downloadAction(kind), link: BrowserPolicy.watchURL(id))
+    // MARK: the YouTube section's action bar (4.0 Phase 1b)
+
+    /// What the library has for a YouTube video, from its canonical id, real files and the queue.
+    func availability(youtubeID id: String) -> VideoAvailability {
+        guard let v = store.all.first(where: { $0.key == "youtube:\(id)" }) else { return VideoAvailability() }
+        let current = jobs.current?.videoID == v.id ? jobs.current : nil
+        return .make(inLibrary: true, files: store.files(for: v.id),
+                     usable: { FileManager.default.fileExists(atPath: $0.path) && (DownloadsList.diskSize($0.path) ?? 0) > 0 },
+                     queue: jobs.queue.filter { $0.videoID == v.id }, current: current,
+                     failed: store.failed.filter { $0.job.videoID == v.id }, hasSummary: v.hasSummary)
+    }
+
+    /// The technical check plus your declaration for that video; nil while checking.
+    func browserGate(_ id: String) -> DownloadGate.Decision? {
+        DownloadGate.decide(check: browser.checker.results[id], authorization: authorizations["youtube:\(id)"])
+    }
+
+    func slotState(_ slot: BarSlot, _ id: String) -> SlotState {
+        let a = availability(youtubeID: id), g = browserGate(id)
+        return switch slot {
+        case .video: .video(a, g)
+        case .audio: .audio(a, g)
+        case .summary: .summary(a, g)
+        }
+    }
+
+    /// Starts the metadata check for the video on screen, unless there's nothing left it could unlock.
+    func updateBrowserCheck() {
+        let id = section == .youtube ? browser.currentVideoID : nil
+        let needed = id.map { id in [BarSlot.video, .audio, .summary].contains { s in
+            switch slotState(s, id) { case .offline, .queued, .running: false; default: true }
+        } } ?? false
+        browser.checker.show(id, needed: needed)
+    }
+
+    /// Every bar button comes here with the video id it showed. Nothing is queued unless that is still the tab's
+    /// video, the technical checks passed and a declaration is on record; then the usual queue (with its duplicate guard).
+    func requestFromBrowser(_ slot: BarSlot, videoID clicked: String, anotherCopy: Bool = false) {
+        let outcome = BrowserActionOutcome.decide(clicked: clicked, current: browser.currentVideoID, slot: slotState(slot, clicked),
+                                                  anotherCopy: anotherCopy)
+        switch outcome {
+        case let .queue(id): queueFromBrowser(slot, id)
+        case .pageChanged: notice = "The page changed before your click, so nothing was queued. Try again."
+        case let .declare(id): declaration = DeclarationRequest(videoID: id, slot: slot)
+        case let .explain(reason): notice = reason
+        case .alreadyHave: notice = slot == .summary ? "This video already has a summary." : "You already have this on this Mac."
+        case .alreadyQueued: notice = "Already in the queue."
+        }
+    }
+
+    private func queueFromBrowser(_ slot: BarSlot, _ id: String) {
+        let action: JobAction = switch slot {
+        case .video: downloadAction(.video)
+        case .audio: downloadAction(.audio)
+        case .summary: .summarize
+        }
+        jobs.enqueue(action, link: BrowserPolicy.watchURL(id))
+    }
+
+    /// Records your declaration for the video it was made for, then carries on with that video's action (even if the
+    /// tab moved on meanwhile: the request was for this one).
+    func declare(_ request: DeclarationRequest, basis: DownloadAuthorization.Basis, reference: String?) {
+        declaration = nil
+        let key = "youtube:\(request.videoID)"
+        let a = DownloadAuthorization(basis: basis, reference: reference?.nilIfBlank, recorded: Date())
+        Task {
+            do { try await store.db.setAuthorization(key, a) } catch { notice = "Couldn't save the declaration: \(error)"; return }
+            authorizations[key] = a
+            switch slotState(request.slot, request.videoID) {
+            case .ready, .retry, .downloadAgain: queueFromBrowser(request.slot, request.videoID)
+            case let state: notice = "Declaration saved. \(state == .checking ? "Still checking the video; try again in a moment." : "Nothing queued.")"
+            }
+        }
+    }
+
+    func setOwnChannels(_ text: String) {
+        let list = text.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init)
+        ownChannels = list
+        Task { try? await store.db.setOwnChannels(list) }
     }
 
     /// Audio and Video follow the "+ Transcript" checkbox; Summarize always transcribes anyway.
@@ -555,6 +638,16 @@ final class AppModel {
     func revealDatabase() {
         NSWorkspace.shared.activateFileViewerSelecting([dataDir.appendingPathComponent("history.sqlite")])
     }
+}
+
+/// The action bar's three slots, in their fixed order.
+enum BarSlot: String { case video, audio, summary }
+
+/// The declaration sheet, for one video and the action you asked for.
+struct DeclarationRequest: Identifiable {
+    let id = UUID()
+    let videoID: String
+    let slot: BarSlot
 }
 
 struct PlaylistImportState: Identifiable {

@@ -8,6 +8,11 @@ final class BrowserTab: NSObject {
     private(set) var webView: WKWebView?
     private(set) var url: URL?
     private(set) var title = ""
+    /// The address the title was read at: during YouTube's in-page navigation the address changes first, so a title
+    /// from the previous video is never shown as the new one's.
+    private(set) var titleURL: URL?
+    /// Called when the page kind or video changes (the action bar's checks follow it).
+    @ObservationIgnored var onPageChange: (YouTubePage) -> Void = { _ in }
     private(set) var isLoading = false
     private(set) var progress = 0.0
     private(set) var canGoBack = false
@@ -44,7 +49,9 @@ final class BrowserTab: NSObject {
             v.observe(\.url, options: [.initial, .new]) { [weak self] v, _ in
                 MainActor.assumeIsolated { self?.urlChanged(v.url) }
             },
-            v.observe(\.title, options: [.new]) { [weak self] v, _ in MainActor.assumeIsolated { self?.title = v.title ?? "" } },
+            v.observe(\.title, options: [.new]) { [weak self] v, _ in
+                MainActor.assumeIsolated { self?.title = v.title ?? ""; self?.titleURL = v.url }
+            },
             v.observe(\.isLoading, options: [.new]) { [weak self] v, _ in MainActor.assumeIsolated { self?.isLoading = v.isLoading } },
             v.observe(\.estimatedProgress, options: [.new]) { [weak self] v, _ in MainActor.assumeIsolated { self?.progress = v.estimatedProgress } },
             v.observe(\.canGoBack, options: [.new]) { [weak self] v, _ in MainActor.assumeIsolated { self?.canGoBack = v.canGoBack } },
@@ -62,7 +69,9 @@ final class BrowserTab: NSObject {
     private func urlChanged(_ new: URL?) {
         guard new != url else { return }
         url = new
+        let old = page
         page = BrowserPolicy.classify(new)
+        if page != old { onPageChange(page) }
         note("url: \(new?.absoluteString ?? "-") → \(page.label)\(page.videoID.map { " \($0)" } ?? "")")
     }
 

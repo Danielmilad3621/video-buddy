@@ -131,6 +131,19 @@ enum MetadataFetcher {
         return parsed.info
     }
 
+    /// 4.0: the technical restrictions of a video (metadata only, nothing downloaded; no browser cookies). Gives up after
+    /// 30 s, and stops yt-dlp if the caller no longer needs the answer (the page changed).
+    static func platformCheck(_ url: String) async -> PlatformCheck {
+        guard let run = try? RunningScript(["yt-dlp", "-j", "--skip-download", "--no-playlist", "--no-warnings", "--", url]) else {
+            return .unknown("yt-dlp couldn't be started.")
+        }
+        let timeout = Task { try? await Task.sleep(for: .seconds(30)); if !Task.isCancelled { run.cancel() } }
+        defer { timeout.cancel() }
+        let (status, lines) = await withTaskCancellationHandler { await run.collect() } onCancel: { run.cancel() }
+        let json = lines.last { $0.hasPrefix("{") }.map { Data($0.utf8) }
+        return PlatformCheck.from(status: status, json: json, error: lines.last { $0.contains("ERROR") })
+    }
+
     /// Real duration of a local media file.
     static func probeDuration(_ path: String) async -> Double? {
         guard FileManager.default.fileExists(atPath: path),

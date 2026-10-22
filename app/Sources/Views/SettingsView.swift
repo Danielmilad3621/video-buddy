@@ -35,6 +35,7 @@ struct SettingsContent: View {
     @AppStorage("videoQuality") private var videoQuality = VideoQuality.standard.rawValue
     @AppStorage("retentionDays") private var retention = 0
     @AppStorage("appearance") private var appearance = Appearance.dark.rawValue
+    @State private var channels = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -89,6 +90,14 @@ struct SettingsContent: View {
                 .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout))
                 if let status = model.importStatus { note(status) }
             }
+            card("YouTube (4.0 preview)", "play.tv") {
+                row("Your channels") {
+                    TextField("@handle or UC… id", text: $channels).textFieldStyle(.roundedBorder).frame(width: 260)
+                        .onSubmit { model.setOwnChannels(channels) }
+                }
+                note("Used only to offer “This is my own channel” when you declare that you may download a video. A matching channel is a consistency check, not proof of ownership; declarations are stored as not independently verified.")
+            }
+            .onAppear { channels = model.ownChannels.joined(separator: ", ") }
             card("Appearance", "circle.lefthalf.filled") {
                 row("Theme") {
                     Picker("Theme", selection: $appearance) {
