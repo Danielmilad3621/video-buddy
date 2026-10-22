@@ -120,7 +120,7 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
   - Deleting a playlist never touches its videos, summaries, history or files. Any video's ⋮ menu has *Add to Playlist ▸* and, inside a playlist, *Remove from This Playlist*.
 - **Keyboard (unchanged in 3.0):** ⌘L focus the link field · ⇧⌘V paste link · ⌘↩ Summarize (and Return in the link field) · ⇧⌘A Audio · ⇧⌘D Video · ⌘. Cancel · ⌘F search the library · ↑/↓ move through the list · **⌘K play/pause · ⌘[ back 10 s · ⌘] forward 10 s** (Playback menu; ⌘[ and ⌘] were chosen over ⌘←/⌘→ so the link field keeps its normal cursor keys).
 
-### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branch `feature/4.0-phase1-browser` only)
+### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branches `feature/4.0-phase1-browser` → `feature/4.0-phase2-tabs` only)
 A separate app for trying the YouTube browser before it reaches the real one.
 - **Open it:** Finder → Applications, or Spotlight "Video Buddy 4.0". It opens straight into the **YouTube** section. Quit and reopen it like any app.
 - **Telling the two apart:**
@@ -135,7 +135,17 @@ A separate app for trying the YouTube browser before it reaches the real one.
   - it never reads 3.1's library, downloads folder or Raycast inbox.
 - **Locked queue:** nothing it queues ever runs. No downloads, transcripts or AI summaries, and Resume is hidden; this is checked by self-tests inside the bundle before it installs.
 - **Samples:** its library holds 7 labelled samples (`[fixture: …]`) so the bar's "already here" states can be tried, e.g. *Me at the zoo* → Play Offline. *Clear All History* in the preview removes them.
-- **Rebuild:** `app/tools/preview.sh` (on the branch).
+- **Tabs (Phase 2):**
+  - **Open and close:** ⌘T new tab, ⌘W closes the tab (not the window), ⌘⇧T reopens the last closed tab (the last 20, until you quit).
+  - **Switch:** click a tab, ⌃Tab / ⌃⇧Tab or ⌘⇧] / ⌘⇧[, ⌘1–⌘8, ⌘9 for the last tab.
+  - **Arrange:** drag a tab to move it; right-click a tab for Duplicate, Move Left / Right, Close.
+  - **Links:** ⌘-click or middle-click a YouTube link to open it in a tab behind (⌘⇧-click: in front). Links that open a new window open a tab. The page's right-click menu says *Open Link in New Tab* and has no Download items.
+  - **What a tab shows:** the video's thumbnail and title, a green check when the video is on this Mac, a clock when it's queued, a speaker while it plays (click it to pause).
+  - **The bar** above the page is always about the **active** tab's video; a click that arrives after you switched tabs (or after the page moved on) queues nothing and says so.
+  - **Sleeping tabs:** at most 4 tabs keep a web page loaded; the others sleep and reload where they were (history and scroll position) when you select them. Tabs opened behind and restored tabs start asleep. Idle tabs out of sight use no CPU.
+  - **Restart:** your tabs come back after quitting or a crash (`browser/tabs.json` in the preview's data folder: addresses, titles and WebKit's saved history; no cookies). They wake one at a time as you select them.
+  - **Background audio:** Settings → YouTube → *Keep YouTube audio playing in background tabs and other sections* (off by default). Either way only one thing plays at a time.
+- **Rebuild:** `app/tools/preview.sh` (on the branch). `app/tools/preview.sh --test DIR` builds the same app as *Video Buddy 4.0 Test*, under its own identity, for test runs.
 - **Remove:** `app/tools/preview.sh --remove` (its WebKit store through WebKit on a fresh launch, then its data folder and the app).
 
 ### Before a flight (2-minute checklist)
@@ -319,9 +329,9 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Views/QueueView.swift` | The processing strip and its stage track, the waiting strip, the Queue section (running, waiting, failed) |
 | `Views/SettingsView.swift` | Settings, in the window and in the ⌘, window |
 | `Browser/BrowserPolicy.swift` | **4.0 Phase 1 (branch `feature/4.0-phase1-browser`):** what a YouTube address is (home, video, Short, playlist, channel, search, sign-in, consent) from the URL alone, and the navigation rules (YouTube and Google's sign-in/consent pages stay in the app, other sites open in your browser, no downloads or `file://`) |
-| `Browser/BrowserTab.swift` | 4.0 P1: one tab owning its `WKWebView` (survives section switches), its state through KVO (so YouTube's in-page navigation is seen), the delegates, camera/mic refused, and releasing everything before its data is removed |
-| `Browser/BrowserController.swift` | 4.0 P1: the YouTube section's browser: its own WebKit data store per data folder, the one-player rule (a read-only media check in a separate script world, since WebKit's own playback state is wrong on YouTube), Clear Browsing Data |
-| `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen) |
+| `Browser/BrowserTab.swift` | 4.0 P1: one tab owning its `WKWebView` (survives section switches), its state through KVO (so YouTube's in-page navigation is seen), the delegates, camera/mic refused, and releasing everything before its data is removed. **Phase 2 (branch `feature/4.0-phase2-tabs`):** sleep and wake (`interactionState`), ⌘-/middle-click and `_blank` into tabs, `window.close()`, page-crash handling, the right-click menu (`TabWebView`) |
+| `Browser/BrowserController.swift` | 4.0 P1: the YouTube section's browser: its own WebKit data store per data folder, the one-player rule (a read-only media check in a separate script world, since WebKit's own playback state is wrong on YouTube), Clear Browsing Data. **P2:** the tabs (order, active, closed), the pure tab rules, the 4-live-tab limit and memory pressure, background audio, `tabs.json` save/restore (`TabSession`) |
+| `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen). **P2:** the tab strip, one view identity per tab, the declaration sheet names its video |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
 Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`; `preview` adds the amber PREVIEW band), `tests/vsctl.swift`, `tools/preview.sh` (4.0 branch: builds and installs the isolated *Video Buddy 4.0 Preview.app*; `--remove` deletes it and its data).
@@ -707,6 +717,23 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
+### 2026-10-22: Video Buddy 4.0, Phase 2: YouTube tabs (branch only)
+- **Request:** Safari-style tabs in the YouTube section (new, close, reorder, duplicate, reopen; links in background tabs; restore after a restart; sleep inactive tabs; optional background audio), with the action bar correct for the active tab and no way to download from the wrong one. Branch `feature/4.0-phase2-tabs` (from Phase 1b); tested in the Preview's own test build; `main` and 3.1 unchanged.
+- **Built, in four commits:**
+  - **2a, tabs and safety:** the tab model and strip, the Tab menu and ⌘W, clicks checked against the active tab, one view identity per tab.
+  - **2b, links into tabs:** ⌘-/middle-click, `_blank` and `window.open` in a click, `window.close()`, redirect tabs that close themselves, the right-click menu.
+  - **2c, memory and media:** at most 4 live tabs, macOS memory warnings, WebKit's `.suspend` policy, background audio, page-crash handling.
+  - **2d, restore:** `tabs.json`, the damaged-file fallback, Clear Browsing Data covering every tab.
+- **Holes found in Phase 1b and closed (none had queued anything real; the Preview's queue is locked):**
+  - ⌘⇧D / ⌘⇧A / ⌘↩ in the YouTube section queued the *hidden* link field's text without the gate; ⌘⇧V filled that field from the clipboard. They now act for the active tab's video through the gate, and ⌘⇧V opens a copied YouTube link in a new tab.
+  - The playlist bar's *Save to Video Buddy…* sheet could queue downloads without the gate: from the YouTube section it's now link-only.
+  - The web view container's delayed re-attach could show one tab's page under another tab's bar; `BrowserTab.close()` could undo a wake; pages could open windows with no click (WebKit's macOS default); the declaration sheet didn't name its video.
+- **Found:**
+  - WebKit reports mouse buttons as a mask (left 1, right 2, middle 4).
+  - Each live YouTube tab is its own web process: about 250–300 MB each (top), and the total stays flat past 4 tabs.
+  - A synthetic key event matches ⇧ shortcuts only when built like hardware (from the key code), so the test hook now does that.
+- **Correction:** the Preview report's "33 videos" in your library was wrong. It read `history.sqlite` with `immutable=1`, which skips the write-ahead log; the main file still holds the rows from before Fresh Start (Oct 21, 19:39), and the deletions are in the log. Your library has had 0 videos since 14:49 on Oct 22. Production checks now count from a copy of all three files and compare the log's modified time too.
+
 ---
 
 ## 8. Setting it up from scratch
@@ -972,10 +999,30 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - **Offline run:** a Resume request left the queue paused, with nothing running.
   - **Isolation:** the preview never opened a file in 3.1's folders (`lsof`).
   - **The states:** opened normally (no test hooks), it was the front app, in the YouTube section with youtube.com loaded. The bar showed Play Offline (sample), Authorization Required → Download Video (red) with Play Audio / Summarize / + Transcript, and Video Queued.
-  - **Unchanged afterwards:** the 3.1 app, the production DB (`user_version` 3, counts, modified time), `~/Downloads/cobalt` and 3.1's settings.
+  - **Unchanged afterwards:** the 3.1 app, the production DB (`user_version` 3, counts, modified time), `~/Downloads/cobalt` and 3.1's settings. (The counts were read without the write-ahead log, so they showed 33 instead of 0; see the Phase 2 correction in §7.)
   - **Screenshots:** `design/screenshots/4.0-preview-*`.
 
+- **4.0 Phase 2 (10-22), in the test build** (`preview.sh --test`: bundle ID `local.video-summarizer.preview-test`, a temp data folder, its own WebKit store, the queue locked; guest YouTube only, nothing downloaded, no AI):
+  - **Self-tests:** 241 inside the bundle (222 + 19: link-tab order, close neighbour, what a tab keeps, the sleep rule, click modifiers, saved-tabs decoding, a click from another tab).
+  - **Wrong-tab races** (queued video ids compared exactly): a click captured on one tab and delivered after switching → nothing queued; three quick ⌃Tab then a real click → only the tab on screen; in-page navigation then the old click → nothing; ⌘⇧D / ⌘⇧A / ⌘↩ with another link in the hidden field → the active tab's video through the gate (declaration sheet named it), never the hidden link; the playlist bar forced with 3 ticked videos → 0 queued; the bar's video = the active tab's on every switch (6/6).
+  - **Tabs and shortcuts:** new, close, select, move, duplicate, reopen; ⌘T, ⌘W (the window stays), ⌘⇧T, ⌃Tab, ⌃⇧Tab, ⌘⇧] / [, ⌘1, ⌘9 (through the app menu with hardware-built key events).
+  - **Links:** ⌘-click and a real middle-button event → tabs behind, asleep, after their opener in order; `window.open` in a gesture → a tab in front; `window.close()` → closed, opener shown, not in Reopen; a `youtube.com/redirect` tab that left YouTube → recorded as sent outside, closed itself; `window.open` from a timer → blocked; the link's right-click menu had *Open Link in New Tab* and no Download items.
+  - **Memory and CPU:** 10 video tabs → 4 live, new WebKit processes and memory flat after 4 (about 3.1 GB resident with 4, 0.75 GB with 1); a memory warning → only the active tab stayed live (and the background-audio tab when on), with a notice; live idle background tabs 0.0% CPU.
+  - **Background audio** (videos played muted; test runs count that as playing): off → switching tabs paused the video; on → it kept playing, became the audio tab, survived a memory warning, paused when the active tab started; the native player paused every tab.
+  - **Crashes:** a page crash (the delegate call WebKit makes) in an inactive tab → asleep, woke with its history; in the active tab → reloaded once, a second → Try Again. `kill -9` of the app → all tabs, their order and the active one came back. A damaged `tabs.json` → kept as `tabs.corrupt.json`, one Home tab, a notice.
+  - **Restore:** after quitting, 4 tabs came back asleep with no web process until YouTube was shown; Back worked in a restored tab; the guest cookie names were identical.
+  - **Clear Browsing Data** with 3 tabs: every tab released, website data and saved tabs removed; WebKit then removed the store only on a fresh launch (as in Phase 1).
+  - **Afterwards:** the test build's WebKit store, caches, settings and app were removed and checked gone. Compared with a baseline taken before testing, identical: the 3.1 app, the production DB (counted from a copy: 0 videos, 0 jobs, 0 playlists; main and log modified times), `~/Downloads/cobalt`, 3.1's settings, and your Preview's data folder, store id, WebKit store and settings.
+  - **Screenshots:** `design/screenshots/4.0-p2-*`.
+
 ### Not verified
+- **4.0 Phase 2:**
+  - your real keyboard and mouse: ⌃Tab while the page has keyboard focus, drag-to-reorder, a hardware middle click (the test used a real middle-button event and the menu with hardware-built key events);
+  - plain clicks on `target=_blank` links (YouTube's page swallowed the synthetic click; the same path ran through `window.open` in a gesture);
+  - signing in across tabs and a restart (only guest cookies were compared);
+  - a real web-process crash (no public API causes one; the delegate call was made directly);
+  - tab switching blocked during full screen (a one-line guard; full screen would have taken over your screen);
+  - per-tab memory exactly (WebKit gives no per-tab figure; process totals were measured).
 - **4.0 Preview app:** `preview.sh --remove` (written, not run, so your preview stays).
 - **4.0 Phase 1:**
   - Picture in Picture, ads, page downloads (rules unit-tested only), long sessions, multiple tabs, sound output;

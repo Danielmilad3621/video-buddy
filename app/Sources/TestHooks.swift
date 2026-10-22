@@ -186,23 +186,19 @@ enum TestHooks {
             }
         case "clearBrowsingData": Task { await model.browser.clearBrowsingData() }
         case "menuKey":
-            // a shortcut handled by the app's menu, as macOS does for a real key press: "<keys>" with ⌘, or
-            // "<modifiers>:<keys>" (c ⌘, s ⇧, o ⌥, t ⌃; "tab" for the tab key)
+            // a shortcut as the keyboard sends it (built from the key code, like hardware events), handled by the app's
+            // menu: "<keys>" with ⌘, or "<modifiers>:<keys>" (c ⌘, s ⇧, o ⌥, t ⌃; "tab" for the tab key)
             let f = arg.split(separator: ":", maxSplits: 1).map(String.init)
             let (mods, chars) = f.count == 2 ? (f[0], f[1] == "tab" ? "\t" : f[1]) : ("c", arg)
-            let code = keyCode(chars)
-            // as a keyboard sends ⌘⇧T: "t", and "T" ignoring modifiers (⇧ gives the capital or the shifted symbol)
-            let ignoring = mods.contains("s") ? ["]": "}", "[": "{"][chars] ?? chars.uppercased() : chars
-            var flags: NSEvent.ModifierFlags = []
-            if mods.contains("c") { flags.insert(.command) }
-            if mods.contains("s") { flags.insert(.shift) }
-            if mods.contains("o") { flags.insert(.option) }
-            if mods.contains("t") { flags.insert(.control) }
-            if let w = model.browser.tab?.webView?.window ?? NSApp.windows.first,
-               let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                                        windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: ignoring,
-                                        isARepeat: false, keyCode: code) {
-                webRead = "menu handled \(mods):\(arg): \(NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false)"
+            var flags: CGEventFlags = []
+            if mods.contains("c") { flags.insert(.maskCommand) }
+            if mods.contains("s") { flags.insert(.maskShift) }
+            if mods.contains("o") { flags.insert(.maskAlternate) }
+            if mods.contains("t") { flags.insert(.maskControl) }
+            if let cg = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: keyCode(chars), keyDown: true) {
+                cg.flags = flags
+                let e = NSEvent(cgEvent: cg)
+                webRead = "menu handled \(arg) (\(e?.characters ?? "?")/\(e?.charactersIgnoringModifiers ?? "?")): \(e.map { NSApp.mainMenu?.performKeyEquivalent(with: $0) ?? false } ?? false)"
             }
         case "windowKey":
             // a key press sent through the window (the page or a field gets it first, then the menu), "<modifiers>:<keys>"
