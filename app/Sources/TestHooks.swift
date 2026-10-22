@@ -164,6 +164,14 @@ enum TestHooks {
             let f = arg.split(separator: "|").compactMap { Double($0) }
             if f.count == 2, let web = model.browser.tab?.webView { click(web, at: CGPoint(x: f[0], y: f[1])) }
         case "webClickEl": if let web = model.browser.tab?.webView { clickElement(web, selector: arg) }
+        case "webClickElWith":
+            // "<c s o m r>|<selector>": a ⌘ (c), ⇧ (s), ⌥ (o) click, a middle (m) or right (r) click on an element
+            let f = arg.split(separator: "|", maxSplits: 1).map(String.init)
+            if f.count == 2, let web = model.browser.tab?.webView { clickElement(web, selector: f[1], how: f[0]) }
+        case "menuItems":
+            // the app menu's items under one title: "title [key equivalent + modifier mask]"
+            let menu = NSApp.mainMenu?.items.first { $0.title == arg }?.submenu
+            webRead = (menu?.items ?? []).map { "\($0.title) [\($0.keyEquivalent.debugDescription) \($0.keyEquivalentModifierMask.rawValue)]" }.joined(separator: "; ")
         case "webKey": if let web = model.browser.tab?.webView { key(web, arg) }
         case "webType": if let web = model.browser.tab?.webView { for c in arg { key(web, String(c)) } }
         case "webRead":
@@ -181,8 +189,10 @@ enum TestHooks {
             // a shortcut handled by the app's menu, as macOS does for a real key press: "<keys>" with ⌘, or
             // "<modifiers>:<keys>" (c ⌘, s ⇧, o ⌥, t ⌃; "tab" for the tab key)
             let f = arg.split(separator: ":", maxSplits: 1).map(String.init)
-            var (mods, chars) = f.count == 2 ? (f[0], f[1] == "tab" ? "\t" : f[1]) : ("c", arg)
-            if mods.contains("s") { chars = chars.uppercased() }      // ⇧ with a letter types the capital, as a keyboard does
+            let (mods, chars) = f.count == 2 ? (f[0], f[1] == "tab" ? "\t" : f[1]) : ("c", arg)
+            let code = keyCode(chars)
+            // as a keyboard sends ⌘⇧T: "t", and "T" ignoring modifiers (⇧ gives the capital or the shifted symbol)
+            let ignoring = mods.contains("s") ? ["]": "}", "[": "{"][chars] ?? chars.uppercased() : chars
             var flags: NSEvent.ModifierFlags = []
             if mods.contains("c") { flags.insert(.command) }
             if mods.contains("s") { flags.insert(.shift) }
@@ -190,8 +200,8 @@ enum TestHooks {
             if mods.contains("t") { flags.insert(.control) }
             if let w = model.browser.tab?.webView?.window ?? NSApp.windows.first,
                let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                                        windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
-                                        isARepeat: false, keyCode: chars == "\t" ? 48 : 0) {
+                                        windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: ignoring,
+                                        isARepeat: false, keyCode: code) {
                 webRead = "menu handled \(mods):\(arg): \(NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false)"
             }
         case "windowKey":
@@ -206,7 +216,7 @@ enum TestHooks {
                 for type in [NSEvent.EventType.keyDown, .keyUp] {
                     if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                                 windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
-                                                isARepeat: false, keyCode: chars == "\t" ? 48 : 0) { NSApp.sendEvent(e) }
+                                                isARepeat: false, keyCode: keyCode(chars)) { NSApp.sendEvent(e) }
                 }
             }
         // 4.0 Phase 2: tabs (numbers are the tab strip's, from 1)
@@ -292,6 +302,15 @@ enum TestHooks {
     private static var webRead = ""
     private static var captured: (UUID, String)?
 
+    /// The US keyboard's key code for a character (what a real key press carries).
+    private static func keyCode(_ c: String) -> UInt16 {
+        let codes: [String: UInt16] = ["a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
+                                       "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23,
+                                       "9": 25, "7": 26, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32, "[": 33, "i": 34, "p": 35, "\r": 36,
+                                       "l": 37, "j": 38, "k": 40, "n": 45, "m": 46, "\t": 48, " ": 49]
+        return codes[c.lowercased()] ?? 0
+    }
+
     /// A tab by its number in the strip (from 1).
     private static func tab(_ n: String) -> BrowserTab? {
         let tabs = AppModel.shared.browser.tabs
@@ -352,22 +371,40 @@ enum TestHooks {
         webRead = "completed \(f[0])"
     }
 
-    /// A left click at a point of the page (points, top-left origin), as the window would deliver it.
-    private static func click(_ web: WKWebView, at p: CGPoint) {
+    /// A click at a point of the page (points, top-left origin), as the window would deliver it. `how`: "c" ⌘, "s" ⇧,
+    /// "o" ⌥, "m" the middle button, "r" the right button.
+    private static func click(_ web: WKWebView, at p: CGPoint, how: String = "") {
         guard let window = web.window else { return }
         let local = web.isFlipped ? p : CGPoint(x: p.x, y: web.bounds.height - p.y)
         let loc = web.convert(local, to: nil)
         let t = ProcessInfo.processInfo.systemUptime
-        for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, 0)] {
-            if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [], timestamp: t, windowNumber: window.windowNumber,
-                                          context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) {
+        var flags: NSEvent.ModifierFlags = []
+        if how.contains("c") { flags.insert(.command) }
+        if how.contains("s") { flags.insert(.shift) }
+        if how.contains("o") { flags.insert(.option) }
+        let (down, up): (NSEvent.EventType, NSEvent.EventType) = how.contains("m") ? (.otherMouseDown, .otherMouseUp)
+            : how.contains("r") ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
+        for (type, pressure) in [(down, Float(1)), (up, 0)] {
+            if how.contains("m") {
+                // a real middle-button event (NSEvent's own constructor can't set the button)
+                let screen = window.convertPoint(toScreen: loc)
+                let flipped = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
+                if let cg = CGEvent(mouseEventSource: nil, mouseType: type == down ? .otherMouseDown : .otherMouseUp,
+                                    mouseCursorPosition: flipped, mouseButton: .center),
+                   let e = { () -> NSEvent? in
+                       cg.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+                       cg.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+                       return NSEvent(cgEvent: cg)
+                   }() { window.sendEvent(e) }
+            } else if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: flags, timestamp: t, windowNumber: window.windowNumber,
+                                                 context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) {
                 window.sendEvent(e)
             }
         }
     }
 
     /// Finds an element's centre with a test-only read, then clicks there with a real mouse event.
-    private static func clickElement(_ web: WKWebView, selector: String) {
+    private static func clickElement(_ web: WKWebView, selector: String, how: String = "") {
         let literal = (try? String(data: JSONEncoder().encode(selector), encoding: .utf8)) ?? "\"\""
         let js = "(() => { const e = document.querySelector(\(literal)); if (!e) return null; e.scrollIntoView({block: 'center'}); " +
                  "const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"
@@ -378,7 +415,7 @@ enum TestHooks {
                     return
                 }
                 webRead = "clicked \(selector) at \(Int(xy[0])),\(Int(xy[1]))"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { click(web, at: CGPoint(x: xy[0], y: xy[1])) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { click(web, at: CGPoint(x: xy[0], y: xy[1]), how: how) }
             }
         }
     }
@@ -455,6 +492,7 @@ enum TestHooks {
                  "opener": t.openerID.flatMap { id in model.browser.tabs.firstIndex { $0.id == id }.map { $0 + 1 } } ?? 0] as [String: Any]
             },
             "closedTabs": model.browser.closed.count,
+            "contextMenu": TabWebView.lastMenu,
             "liveTabs": model.browser.tabs.filter { !$0.isAsleep }.count,
             "declarationTitle": model.declaration?.title ?? "",
             "playlistSheet": model.playlistImport.map { ["linkOnly": $0.linkOnly, "entries": $0.preview.entries.count] as [String: Any] } ?? [:],

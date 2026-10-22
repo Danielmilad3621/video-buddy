@@ -656,6 +656,12 @@ enum SelfTest {
               "sign-in and consent pages are kept as YouTube Home, never their tokens")
         check(BrowserController.keep(page: .home, url: home, state: Data(count: BrowserController.maxSavedState + 1)).state == nil,
               "history past the size limit is dropped (the address stays)")
+        // ⌘-click / middle click: behind; with ⇧ in front; a plain or ⌥-click follows the link in the tab
+        check(BrowserPolicy.newTab(command: true, shift: false, button: 1) == .background && BrowserPolicy.newTab(command: false, shift: false, button: 4) == .background,
+              "⌘-click and middle click open a tab behind")
+        check(BrowserPolicy.newTab(command: true, shift: true, button: 1) == .foreground, "⌘⇧-click opens it in front")
+        check(BrowserPolicy.newTab(command: false, shift: false, button: 1) == nil && BrowserPolicy.newTab(command: false, shift: true, button: 1) == nil
+              && BrowserPolicy.newTab(command: false, shift: false, button: 2) == nil, "plain, ⇧, ⌥ and right clicks stay in the tab")
         // a click from a tab that isn't active any more arrives with no current video: never queued
         check(BrowserActionOutcome.decide(clicked: "A", current: nil, slot: .ready) == .pageChanged, "a click from another tab does nothing")
     }

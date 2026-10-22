@@ -36,6 +36,8 @@ final class BrowserTab: NSObject, Identifiable {
     @ObservationIgnored weak var browser: BrowserController?
     /// A sleeping tab's history, scroll position and form data (WebKit's opaque interactionState), to wake with.
     @ObservationIgnored private var savedState: Data?
+    /// Opened by the page (target=_blank, window.open in a click): if it only sends its page outside YouTube, it closes.
+    @ObservationIgnored var openedByPage = false
 
     private static let recordExternalOnly = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
     private var observations: [NSKeyValueObservation] = []
@@ -53,17 +55,19 @@ final class BrowserTab: NSObject, Identifiable {
         page = BrowserPolicy.classify(url)
     }
 
-    /// Gives the tab a web view again: its saved history comes back (WebKit loads the page it was on), or its address loads.
+    /// Gives the tab a web view again: its saved history comes back (WebKit loads the page it was on), or its address
+    /// loads. `adopting`: WebKit made this configuration for a page's new window and loads that page itself.
     @discardableResult
-    func wake(_ configuration: WKWebViewConfiguration) -> WKWebView {
+    func wake(_ configuration: WKWebViewConfiguration, adopting: Bool = false) -> WKWebView {
         if let webView { return webView }
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = TabWebView(frame: .zero, configuration: configuration)
         view.allowsBackForwardNavigationGestures = true
         view.allowsMagnification = true
         view.navigationDelegate = self
         view.uiDelegate = self
         webView = view
         observe(view)
+        if adopting { note("opened by the page: \(url?.absoluteString ?? "-")"); return view }
         if let savedState { view.interactionState = savedState }
         // nothing saved, or WebKit couldn't read it (its format can change with a macOS update): the address instead
         if view.backForwardList.currentItem == nil { load(url ?? BrowserPolicy.home) }
@@ -176,8 +180,20 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         let decision = BrowserPolicy.decide(target, mainFrame: main)
         if main { note("navigate \(decision): \(target.absoluteString)") }
         switch decision {
-        case .allow: return .allow
-        case .openExternally: openExternally(target); return .cancel
+        case .allow:
+            if action.navigationType == .linkActivated,
+               let mode = BrowserPolicy.newTab(command: action.modifierFlags.contains(.command), shift: action.modifierFlags.contains(.shift),
+                                               button: action.buttonNumber) {
+                note("new tab, \(mode) (button \(action.buttonNumber)): \(target.absoluteString)")
+                browser?.open(target, background: mode == .background, from: self)
+                return .cancel
+            }
+            return .allow
+        case .openExternally:
+            openExternally(target)
+            // a tab a page opened only to leave YouTube (description links go through youtube.com/redirect) closes again
+            if main, openedByPage, !webView.canGoBack { Task { self.browser?.closeFromPage(self) } }
+            return .cancel
         case .cancel: return .cancel
         }
     }
@@ -210,17 +226,22 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         webView.reload()
     }
 
-    /// target=_blank and window.open: YouTube links stay in this tab (tabs come in Phase 2), others open outside.
+    /// target=_blank and window.open in a click: a YouTube page opens in a new tab (in front; behind with ⌘), built
+    /// from the configuration WebKit passes (it must be), which keeps the page's link to its opener. Others open outside.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard let target = action.request.url else { return nil }
-        if BrowserPolicy.decide(target, mainFrame: true) == .allow {
-            note("new window → this tab: \(target.absoluteString)")
-            load(target)
-        } else {
-            openExternally(target)
-        }
-        return nil
+        guard let target = action.request.url else { note("refused a new window without an address"); return nil }
+        guard BrowserPolicy.decide(target, mainFrame: true) == .allow else { openExternally(target); return nil }
+        let mode = BrowserPolicy.newTab(command: action.modifierFlags.contains(.command), shift: action.modifierFlags.contains(.shift),
+                                        button: action.buttonNumber) ?? .foreground
+        note("new window → \(mode) tab: \(target.absoluteString)")
+        return browser?.adopt(configuration, url: target, background: mode == .background, from: self)
+    }
+
+    /// The page closed its own window (window.close()).
+    func webViewDidClose(_ webView: WKWebView) {
+        note("the page closed its window")
+        browser?.closeFromPage(self)
     }
 
     /// The YouTube section never uses the camera or microphone.
@@ -228,5 +249,28 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
                  type: WKMediaCaptureType) async -> WKPermissionDecision {
         note("refused \(type == .camera ? "camera" : "microphone") for \(origin.host)")
         return .deny
+    }
+}
+
+/// The page's right-click menu, Video Buddy's way: "Open Link in New Window" opens a tab, and WebKit's download items
+/// are gone (the YouTube section never downloads). WebKit's item identifiers aren't public API: items it names
+/// differently are left as they are.
+final class TabWebView: WKWebView {
+    /// Test evidence: the last menu shown, as "identifier: title".
+    static var lastMenu: [String] = []
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        for item in menu.items {
+            let id = item.identifier?.rawValue ?? ""
+            if id.hasPrefix("WKMenuItemIdentifierDownload") { menu.removeItem(item) }
+            else if id == "WKMenuItemIdentifierOpenLinkInNewWindow" { item.title = "Open Link in New Tab" }
+        }
+        Self.lastMenu = menu.items.map { "\($0.identifier?.rawValue ?? "-"): \($0.title)" }
+        // a test run closes it again by itself, as Escape would (nobody is at the mouse)
+        if TestProbes.enabled {
+            let close = Timer(timeInterval: 0.8, repeats: false) { _ in menu.cancelTracking() }
+            RunLoop.main.add(close, forMode: .common)
+        }
     }
 }

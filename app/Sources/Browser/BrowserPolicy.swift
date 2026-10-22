@@ -108,6 +108,15 @@ enum BrowserPolicy {
         return comps.url
     }
 
+    enum NewTab: Equatable { case background, foreground }
+
+    /// Phase 2: ⌘-click or a middle click opens a link in a new tab behind, ⌘⇧-click in front (Safari's rules);
+    /// ⌥-click just follows it (no download). WebKit reports buttons as a mask: left 1, right 2, middle 4 (seen live).
+    static func newTab(command: Bool, shift: Bool, button: Int) -> NewTab? {
+        guard command || button == 4 else { return nil }
+        return shift ? .foreground : .background
+    }
+
     /// The canonical watch link Video Buddy's actions use for a page's video.
     static func watchURL(_ id: String) -> String { "https://www.youtube.com/watch?v=\(id)" }
 }

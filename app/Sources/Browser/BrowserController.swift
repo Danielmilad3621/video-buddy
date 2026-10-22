@@ -111,6 +111,23 @@ final class BrowserController {
         if !background { select(t) }
     }
 
+    /// A page's new window (target=_blank, window.open in a click): WebKit made its configuration and loads it itself.
+    func adopt(_ configuration: WKWebViewConfiguration, url: URL, background: Bool, from opener: BrowserTab) -> WKWebView? {
+        let t = make(url)
+        t.openerID = opener.id
+        t.openedByPage = true
+        guard insert(t, at: position(after: opener)) else { return nil }
+        let view = t.wake(configuration, adopting: true)
+        if !background { select(t) }
+        return view
+    }
+
+    /// A page closed its own window, or a tab only sent its page outside: it goes (not to Reopen Closed Tab), and
+    /// the tab that opened it comes back to the front.
+    func closeFromPage(_ t: BrowserTab) {
+        close(t, remember: false, next: tabs.first { $0.id == t.openerID })
+    }
+
     func select(_ t: BrowserTab) {
         // full screen shows one tab's page outside the window: no switching until it ends
         guard t.id != activeID, tabs.contains(where: { $0 === t }), active?.isFullscreen != true else { return }
@@ -126,12 +143,16 @@ final class BrowserController {
 
     /// Closes a tab (it can be reopened); the next tab to the right becomes active, else the one to the left.
     /// The last tab closed leaves a fresh Home tab.
-    func close(_ t: BrowserTab) {
+    /// `next`: the tab to show instead of the neighbour, if the closed one was active.
+    func close(_ t: BrowserTab, remember: Bool = true, next preferred: BrowserTab? = nil) {
         guard let i = tabs.firstIndex(where: { $0 === t }), !t.isFullscreen else { return }
-        let s = t.snapshot
-        closed.append(ClosedTab(url: s.url, title: t.title, state: s.state, index: i))
-        if closed.count > Self.maxClosed { closed.removeFirst(closed.count - Self.maxClosed) }
-        let next = t.id == activeID ? Self.afterClose(i, count: tabs.count).map { tabs[$0] } : nil
+        if remember {
+            let s = t.snapshot
+            closed.append(ClosedTab(url: s.url, title: t.title, state: s.state, index: i))
+            if closed.count > Self.maxClosed { closed.removeFirst(closed.count - Self.maxClosed) }
+        }
+        let next = t.id != activeID ? nil : preferred.flatMap { p in tabs.contains { $0 === p } ? p : nil }
+            ?? Self.afterClose(i, count: tabs.count).map { tabs[$0] }
         tabs.remove(at: i)
         Task { await t.close() }
         if tabs.isEmpty {
