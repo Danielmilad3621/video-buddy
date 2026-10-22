@@ -300,6 +300,10 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Views/PlayerView.swift` | `AVPlayerView` wrapper, the 16:9 player area, ±10 s / speed, the **mini-player** and Up Next |
 | `Views/QueueView.swift` | The processing strip and its stage track, the waiting strip, the Queue section (running, waiting, failed) |
 | `Views/SettingsView.swift` | Settings, in the window and in the ⌘, window |
+| `Browser/BrowserPolicy.swift` | **4.0 Phase 1 (branch `feature/4.0-phase1-browser`):** what a YouTube address is (home, video, Short, playlist, channel, search, sign-in, consent) from the URL alone, and the navigation rules (YouTube and Google's sign-in/consent pages stay in the app, other sites open in your browser, no downloads or `file://`) |
+| `Browser/BrowserTab.swift` | 4.0 P1: one tab owning its `WKWebView` (survives section switches), its state through KVO (so YouTube's in-page navigation is seen), the delegates, camera/mic refused, and releasing everything before its data is removed |
+| `Browser/BrowserController.swift` | 4.0 P1: the YouTube section's browser: its own WebKit data store per data folder, the one-player rule (a read-only media check in a separate script world, since WebKit's own playback state is wrong on YouTube), Clear Browsing Data |
+| `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen) |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
 Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`), `tests/vsctl.swift`.
@@ -662,6 +666,19 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 - **Your amendments, as built:** Check only links; downloads happen only from *Download Missing* or ticked entries. Video and audio availability are separate (unique videos; mp3-only = "audio only"). Finished is detected from the end of the file, not from position 0. Reconciliation never moves existing members. Nothing on disk is moved, renamed, deleted or downloaded again.
 - **Found while testing:** the watched marks and Continue didn't update until the next full reload, because positions are saved by the player, not through the store; now every save refreshes them. Group and video ids collided in one lazy list (playlist 1 vs video 1), hiding episode 1; group ids are now strings. Sizes in Downloads follow symlinks (only the test copy uses them).
 
+### 2026-10-22: Video Buddy 4.0, Phase 1: YouTube in WKWebView (branch only)
+- **Request:** make Video Buddy the main place to browse YouTube (tabs, Watch Later, an Offline Hub), but first prove the core browser in an isolated prototype and stop for review.
+- **Where:** branch `feature/4.0-phase1-browser` (tag `checkpoint-before-4.0` = 3.1). Not installed; `main` and the installed 3.1 app are unchanged.
+- **Built:** a **YouTube** sidebar section with one tab, the toolbar, the Video Buddy bar, the navigation rules, the one-player rule, ⌘[ / ⌘] / ⌘R / ⌘L in the YouTube section, and test commands that send real mouse and key events. Plus `app/tools/try-browser.sh` (try it in a throwaway folder; `--clean` removes its WebKit data).
+- **Found:**
+  - **Google sign-in worked in WKWebView** (a real account, by hand, with a phone prompt).
+  - Full screen, `k`/`f`, in-page navigation, channels, playlists and Shorts work.
+  - Memory: 0.6–1.4 GB per signed-in page.
+  - **WebKit's playback state is wrong on YouTube.**
+  - **A data store can only be deleted on a fresh launch,** after the session that used it ends.
+- **Fixed:** the page not coming back after full screen; resuming the native player not pausing YouTube; test instances hearing each other (`VS_TEST_CHANNEL`).
+- **Full results, GO/NO-GO and the revised Phases 2–5:** `design/4.0-phase1-report.md`.
+
 ---
 
 ## 8. Setting it up from scratch
@@ -814,6 +831,13 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 
 3.0 adds: `next`, `previous`, `volume <0…1>`, `loadDetails`, `retryFailed`, and `showSteps` / `showSteps off` (test-only: fills the processing strip with a sample of the 4 Summarize stages, so its look can be checked without a download or an AI call). `state` also reports `failed`, `continueWatching`, `description`, `tags`, `queueBadge`, and `playback.volume` / `playback.hasPrevious`.
 
+4.0 Phase 1 (branch) adds:
+- **Navigation:** `browse <link or search>`, `back`, `forward`, `pageReload`.
+- **Real input:** `webClick x|y` and `webClickEl <css>` (a real mouse click, at a point or an element's centre), `webKey <k|f|return|escape|…>`, `webType <text>`, `menuKey <[|]|r|l>` (a ⌘ shortcut through the app's menu).
+- **Test-only:** `webRead <js>` (reads in a separate script world), `focusWindow` (only while nobody is at the keyboard), `clearBrowsingData`.
+- **State:** `state` reports `browser` (url, title, page type, video id, full screen, media and WebKit's own media value, navigation log, outside links, data store id, clear report, window focus).
+- **Channels:** `VS_TEST_CHANNEL=<name>` (for the app and `vsctl`) keeps two test instances apart.
+
 3.1 adds: `layout Grouped|All Videos`, `expand <playlist name part>|all|none`, `playPlaylist <name part>`, `continuePlaylist <name part>`, `checkPlaylist <name part>` (Check Against YouTube: a metadata read, needs `offline off`), `linkPlaylist` (the sheet's *Link N Library Videos*), `closeSheet`, `downloadMissing <name part>` → `confirmOffline` / `cancelOffline`, `selectEpisode <name part>|<n>`. `state` also reports `groups` (per playlist: members, shown, offline, audioOnly, episodes, resume), `layout`, `watch` (the selected video's state), `videoOnMac`, `offlineBatch`, `previewChecking`, `played` and `context` (playlist name, count, episode).
 
 **Testing safely on a copy of your library (as done for 3.0 and 3.1):** copy `history.sqlite` with `sqlite3 … ".backup …"` into `$T/data`; in the copy only, set `queued`/`running` jobs to `cancelled` and rewrite every `file_path`/`summary_path`/`transcript_path` and `playback.file_path` from `~/Downloads/cobalt` to the test folder (then nothing under ~/Downloads is read, so macOS never asks); link those names to a sample made with `say` + `ffmpeg`; launch with `-queuePaused YES` and send `offline on` first so no network job can start. The test instance shares your UserDefaults, so `defaults export local.video-summarizer` before and `defaults import` after.
@@ -901,7 +925,20 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 - **Your real library:** with nothing running or queued, a second verified copy (`history-before-3.1-install-20261021-142338.sqlite`, quick_check ok: 36 videos, 38 jobs, 35 members, 3 positions), then the app was quit normally, 3.1 installed (161 checks) and reopened: still v3 (no migration), the same counts, nothing queued, quick_check ok, `~/Downloads/cobalt` unchanged.
 - **Screenshots:** `design/screenshots/3.1-*.png`: grouped Library, Home, playlist page, playing from a playlist, Downloads, Queue, Favorites, search, and Library / playlist / Downloads / Home-playing at 1280×800 and 1024×700.
 
+**4.0 Phase 1, on the branch (2026-10-22), in throwaway instances** (own data and downloads folders, own WebKit store, queue paused):
+- **Self-tests:** 178 pass (161 + 17 browser rules).
+- **The live results** (home, search two ways, watch, playback, `k`, full screen, in-page navigation, channels, playlists, Shorts, ⌘[ ⌘] ⌘R, outside links, sign-in, the one-player rule, memory and CPU, clearing data) are in `design/4.0-phase1-report.md`.
+- **Afterwards:**
+  - both WebKit stores were removed and checked;
+  - `~/Library/WebKit/local.video-summarizer` was gone again;
+  - settings were identical (the window position was restored);
+  - the production library was unchanged.
+
 ### Not verified
+- **4.0 Phase 1:**
+  - Picture in Picture, ads, page downloads (rules unit-tested only), long sessions, multiple tabs, sound output;
+  - sign-in lasting across relaunches;
+  - click-to-play by hand: automated clicks started playback only 2 of 5 times.
 - **3.1 by hand:** real clicks on album rows, drag-to-reorder with the mouse, the *Add Videos* sheet and *From Folder…* (its folder match is code-checked only), and pasting a playlist link in *import* mode (default ticks = not in library) were not driven end to end; Check mode was. The preview sheet's native controls render blank in snapshots. **Your real library still has 35 members** until you press *Check Against YouTube → Link 1 Library Video* (I didn't run a YouTube check or change it from here).
 - **3.0 by hand:** real hover, clicks and keyboard focus in the new layout (driven through the test hooks instead), the full-screen and PiP buttons themselves, and the native player controls (they render black in snapshots, like the video picture). A real Summarize run through the new strip wasn't done, to avoid an AI call; it uses the same strip as `showSteps` and the transcription run.
 - **Clicking the + Transcript checkbox.** The tests set it with a launch argument (`-transcribeDownloads YES`); the snapshot shows it.

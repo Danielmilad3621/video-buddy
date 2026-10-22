@@ -9,7 +9,7 @@ struct LibraryColumn: View {
         case .downloads: DownloadsList()
         case .playlists: PlaylistsCard()
         case .queue: QueueColumn()
-        case .library, .favorites, .settings: LibraryList(continueWatching: false)
+        case .library, .favorites, .settings, .youtube: LibraryList(continueWatching: false)
         }
     }
 }

@@ -22,6 +22,8 @@ final class PlaybackController {
     private(set) var played: [(videoID: Int64, path: String)] = []
     /// The playlist this is playing from; nil for a standalone video.
     private(set) var context: PlaylistContext?
+    /// Called before a file starts (4.0: pauses YouTube in the browser, so two things never play at once).
+    var onWillPlay: () -> Void = {}
     /// Set when Play All moves on, so the window can follow along.
     var onAdvance: (Int64) -> Void = { _ in }
     /// After a resume position is written (watched marks and Continue follow it).
@@ -41,6 +43,7 @@ final class PlaybackController {
     /// `upNext` and `played` are the episodes after and before it, so Next and Previous stay in the playlist.
     func play(path: String, videoID: Int64, upNext: [(videoID: Int64, path: String)] = [],
               played: [(videoID: Int64, path: String)] = [], context: PlaylistContext? = nil) {
+        onWillPlay()     // also when resuming the same file
         if path == currentPath, let player {
             if context != nil || !upNext.isEmpty { (self.upNext, self.played, self.context) = (upNext, played, context) }
             player.rate = rate
@@ -86,7 +89,7 @@ final class PlaybackController {
 
     func togglePlayPause() {
         guard let player else { return }
-        if player.rate == 0 { player.rate = rate } else { player.pause() }
+        if player.rate == 0 { onWillPlay(); player.rate = rate } else { player.pause() }
     }
 
     func pause() { player?.pause() }

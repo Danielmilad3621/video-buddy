@@ -4,12 +4,13 @@ import Foundation
 import Observation
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home = "Home", library = "Library", favorites = "Favorites", playlists = "Playlists", downloads = "Downloads",
+    case home = "Home", youtube = "YouTube", library = "Library", favorites = "Favorites", playlists = "Playlists", downloads = "Downloads",
          queue = "Queue", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .home: "house.fill"
+        case .youtube: "play.tv"
         case .library: "rectangle.stack"
         case .favorites: "heart"
         case .playlists: "music.note"
@@ -36,12 +37,18 @@ final class AppModel {
     let ingestor: Ingestor
     let network = NetworkMonitor()
     let playback: PlaybackController
+    /// 4.0: the YouTube section (its own WebKit data store in the data folder).
+    let browser: BrowserController
     let dataDir: URL
 
     var section = AppSection.home {
         didSet {
             if section == .favorites { store.filter = .favorites }
             else if oldValue == .favorites, store.filter == .favorites { store.filter = .all }
+            if section == .youtube, oldValue != .youtube { browser.shown() }
+            if oldValue == .youtube, section != .youtube {
+                browser.hidden(allowBackgroundAudio: UserDefaults.standard.bool(forKey: "browserBackgroundAudio"))
+            }
         }
     }
     var detailTab = DetailTab.summary
@@ -82,8 +89,12 @@ final class AppModel {
         jobs = JobController(store: store, network: network)
         ingestor = Ingestor(store: store, inbox: dataDir.appendingPathComponent("inbox.jsonl"))
         playback = PlaybackController(db: db)
+        browser = BrowserController(dataDir: dataDir)
         jobs.onNotice = { [weak self] in self?.notice = $0 }
         playback.onAdvance = { [weak self] in self?.store.select($0) }
+        // only one thing plays: the native player pauses YouTube, and YouTube playing pauses the native player
+        playback.onWillPlay = { [weak self] in self?.browser.pauseAll() }
+        browser.onWebPlaying = { [weak self] in if self?.playback.isPlaying == true { self?.playback.pause() } }
         playback.onSaved = { [weak self] in Task { await self?.store.reloadWatch() } }
     }
 
@@ -148,6 +159,12 @@ final class AppModel {
             return
         }
         jobs.enqueue(downloadAction(kind), link: link)
+    }
+
+    /// The Video Buddy bar in the YouTube section: the same actions as the toolbar, for the page's video.
+    func startFromBrowser(_ kind: JobKind) {
+        guard let id = browser.tab?.page.videoID else { return }
+        jobs.enqueue(downloadAction(kind), link: BrowserPolicy.watchURL(id))
     }
 
     /// Audio and Video follow the "+ Transcript" checkbox; Summarize always transcribes anyway.

@@ -2,13 +2,16 @@
 // It calls the same AppModel methods the buttons call, and dumps state as JSON for the end-to-end checks.
 import AppKit
 import Foundation
+import WebKit
 
 @MainActor
 enum TestHooks {
     static func install() {
         let env = ProcessInfo.processInfo.environment
         guard env["VS_TEST_HOOKS"] == "1", let dir = env["VS_SNAPSHOT_DIR"] else { return }
-        DistributedNotificationCenter.default().addObserver(forName: .init("local.video-summarizer.test"), object: nil, queue: .main) { note in
+        // VS_TEST_CHANNEL keeps two test instances apart (each listens only to its own channel)
+        let channel = env["VS_TEST_CHANNEL"].map { ".\($0)" } ?? ""
+        DistributedNotificationCenter.default().addObserver(forName: .init("local.video-summarizer.test" + channel), object: nil, queue: .main) { note in
             let cmd = note.object as? String ?? ""
             MainActor.assumeIsolated { handle(cmd, dir: dir) }
         }
@@ -119,9 +122,98 @@ enum TestHooks {
                let id = store.members[pl.id].flatMap({ $0.indices.contains(n - 1) ? $0[n - 1] : nil }), let v = store.video(id) {
                 model.open(v, tab: model.detailTab)
             }
+        // 4.0 Phase 1: the YouTube section. Clicks and keys are real NSEvents sent through the window (the same path as a
+        // mouse and keyboard), not JavaScript clicks; webRead runs test-only reads in an isolated script world.
+        case "browse": model.section = .youtube; model.browser.go(arg)
+        case "back": model.browser.tab?.goBack()
+        case "forward": model.browser.tab?.goForward()
+        case "pageReload": model.browser.tab?.reload()
+        case "webClick":
+            let f = arg.split(separator: "|").compactMap { Double($0) }
+            if f.count == 2, let web = model.browser.tab?.webView { click(web, at: CGPoint(x: f[0], y: f[1])) }
+        case "webClickEl": if let web = model.browser.tab?.webView { clickElement(web, selector: arg) }
+        case "webKey": if let web = model.browser.tab?.webView { key(web, arg) }
+        case "webType": if let web = model.browser.tab?.webView { for c in arg { key(web, String(c)) } }
+        case "webRead":
+            webRead = "…"
+            model.browser.tab?.webView?.evaluateJavaScript(arg, in: nil, in: .world(name: "VBTest")) { result in
+                MainActor.assumeIsolated {
+                    switch result {
+                    case let .success(value): webRead = "\(value)"
+                    case let .failure(error): webRead = "error: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case "clearBrowsingData": Task { await model.browser.clearBrowsingData() }
+        case "menuKey":
+            // a ⌘ shortcut handled by the app's menu, as macOS does for a real key press
+            if let w = model.browser.tab?.webView?.window ?? NSApp.windows.first,
+               let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: w.windowNumber, context: nil, characters: arg, charactersIgnoringModifiers: arg,
+                                        isARepeat: false, keyCode: 0) {
+                webRead = "menu handled ⌘\(arg): \(NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false)"
+            }
+        case "focusWindow":
+            // brings this test window to the front (only used while nobody is at the keyboard)
+            NSApp.activate(ignoringOtherApps: true)
+            if let web = model.browser.tab?.webView, let w = web.window { w.makeKeyAndOrderFront(nil); w.makeFirstResponder(web) }
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
         default: break
+        }
+    }
+
+    private static var webRead = ""
+
+    /// A left click at a point of the page (points, top-left origin), as the window would deliver it.
+    private static func click(_ web: WKWebView, at p: CGPoint) {
+        guard let window = web.window else { return }
+        let local = web.isFlipped ? p : CGPoint(x: p.x, y: web.bounds.height - p.y)
+        let loc = web.convert(local, to: nil)
+        let t = ProcessInfo.processInfo.systemUptime
+        for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, 0)] {
+            if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [], timestamp: t, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) {
+                window.sendEvent(e)
+            }
+        }
+    }
+
+    /// Finds an element's centre with a test-only read, then clicks there with a real mouse event.
+    private static func clickElement(_ web: WKWebView, selector: String) {
+        let literal = (try? String(data: JSONEncoder().encode(selector), encoding: .utf8)) ?? "\"\""
+        let js = "(() => { const e = document.querySelector(\(literal)); if (!e) return null; e.scrollIntoView({block: 'center'}); " +
+                 "const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"
+        web.evaluateJavaScript(js, in: nil, in: .world(name: "VBTest")) { result in
+            MainActor.assumeIsolated {
+                guard case let .success(value) = result, let xy = value as? [Double], xy.count == 2 else {
+                    webRead = "no element for \(selector)"
+                    return
+                }
+                webRead = "clicked \(selector) at \(Int(xy[0])),\(Int(xy[1]))"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { click(web, at: CGPoint(x: xy[0], y: xy[1])) }
+            }
+        }
+    }
+
+    /// A key press (a character, or return/tab/escape/space/left/right/up/down) sent to the page.
+    private static func key(_ web: WKWebView, _ name: String) {
+        guard let window = web.window else { return }
+        if window.firstResponder !== web, !(window.firstResponder is NSView && (window.firstResponder as? NSView)?.isDescendant(of: web) == true) {
+            window.makeFirstResponder(web)
+        }
+        let named: [String: (String, UInt16)] = ["return": ("\r", 36), "tab": ("\t", 48), "escape": ("\u{1b}", 53), "space": (" ", 49),
+                                                 "left": ("\u{F702}", 123), "right": ("\u{F703}", 124), "up": ("\u{F700}", 126), "down": ("\u{F701}", 125)]
+        let codes: [Character: UInt16] = ["a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
+                                          "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38,
+                                          "k": 40, "n": 45, "m": 46, " ": 49]
+        let (chars, code) = named[name] ?? (name, name.first.flatMap { codes[Character($0.lowercased())] } ?? 0)
+        let t = ProcessInfo.processInfo.systemUptime
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: t, windowNumber: window.windowNumber,
+                                        context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                window.sendEvent(e)
+            }
         }
     }
 
@@ -159,6 +251,20 @@ enum TestHooks {
             "openPlaylist": store.playlistVideos.map(\.displayTitle),
             "upNext": model.playback.upNext.count,
             "played": model.playback.played.count,
+            "browser": { () -> [String: Any] in
+                let b = model.browser
+                guard let t = b.tab else { return ["tab": "none", "storeID": b.existingStoreID ?? "", "clearReport": b.clearReport ?? ""] }
+                return ["url": t.url?.absoluteString ?? "", "title": t.title, "loading": t.isLoading, "progress": t.progress,
+                        "back": t.canGoBack, "forward": t.canGoForward, "page": t.page.label, "videoID": t.page.videoID ?? "",
+                        "fullscreen": t.isFullscreen, "media": b.mediaState, "webkitMedia": b.webkitMediaState, "loadError": t.loadError ?? "",
+                        "log": Array(t.log.suffix(30)), "external": t.externalOpens, "webRead": webRead,
+                        "storeID": b.existingStoreID ?? "", "clearReport": b.clearReport ?? "",
+                        "webSuperview": t.webView?.superview.map { "\(type(of: $0)) \(Int($0.frame.width))x\(Int($0.frame.height))" } ?? "none",
+                        "webInWindow": t.webView?.window != nil,
+                        "appActive": NSApp.isActive, "windowKey": t.webView?.window?.isKeyWindow ?? false,
+                        "webIsFirstResponder": t.webView.map { w in w.window?.firstResponder === w || (w.window?.firstResponder as? NSView)?.isDescendant(of: w) == true } ?? false
+                       ] as [String: Any]
+            }(),
             "layout": UserDefaults.standard.string(forKey: "libraryLayout") ?? "Grouped",
             "groups": { () -> [[String: Any]] in
                 let g = Grouping.make(store.videos, playlists: store.playlists, members: store.members)

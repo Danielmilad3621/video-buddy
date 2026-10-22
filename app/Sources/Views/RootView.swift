@@ -17,12 +17,15 @@ struct RootView: View {
                 Sidebar(compact: compactSidebar) { sidebarCollapsed.toggle() }
                     .frame(width: sidebarWidth)
                 VStack(alignment: .leading, spacing: 12) {
-                    TopBar()
+                    // the YouTube section has its own bar with the same actions for the page's video
+                    if model.section != .youtube { TopBar() }
                     if let warning = model.startupWarning { WarningStrip(text: warning) { model.startupWarning = nil } }
                     if !model.network.isOnline { OfflineStrip() }
                     ProcessingStatus()
                     if model.section == .settings {
                         SettingsPage()
+                    } else if model.section == .youtube {
+                        BrowserView()
                     } else {
                         Workspace(width: geo.size.width - sidebarWidth - 32)
                     }

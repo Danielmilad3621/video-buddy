@@ -1,6 +1,7 @@
 // Entry point, scenes, menu commands and app lifecycle.
 import AppKit
 import SwiftUI
+import WebKit
 
 @main
 enum Entry {
@@ -34,6 +35,7 @@ struct VideoSummarizerApp: App {
 struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .newItem) {
+            // in the YouTube section ⌘L focuses the address field (same token, the browser toolbar listens)
             Button("Focus Link Field") { AppModel.shared.focusLinkToken += 1 }.keyboardShortcut("l")
             Button("Paste Link") { AppModel.shared.pasteLink() }.keyboardShortcut("v", modifiers: [.command, .shift])
             Divider()
@@ -54,8 +56,19 @@ struct AppCommands: Commands {
                 if m.playback.player != nil { m.playback.togglePlayPause() } else if let v = m.store.selectedVideo { m.play(v) }
             }
             .keyboardShortcut("k")
-            Button("Back 10 Seconds") { AppModel.shared.playback.skip(-10) }.keyboardShortcut("[")
-            Button("Forward 10 Seconds") { AppModel.shared.playback.skip(10) }.keyboardShortcut("]")
+            // 4.0: in the YouTube section ⌘[ / ⌘] are the browser's Back / Forward (as in Safari); elsewhere ±10 s
+            Button("Back 10 Seconds (Back in YouTube)") {
+                let m = AppModel.shared
+                if m.section == .youtube { m.browser.tab?.goBack() } else { m.playback.skip(-10) }
+            }
+            .keyboardShortcut("[")
+            Button("Forward 10 Seconds (Forward in YouTube)") {
+                let m = AppModel.shared
+                if m.section == .youtube { m.browser.tab?.goForward() } else { m.playback.skip(10) }
+            }
+            .keyboardShortcut("]")
+            Button("Reload Page") { if AppModel.shared.section == .youtube { AppModel.shared.browser.tab?.reload() } }
+                .keyboardShortcut("r")
             Divider()
             Button("Close Player") { AppModel.shared.playback.stop() }
         }
@@ -99,7 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated { TestHooks.install() }
         // test hook: with VS_SNAPSHOT_DIR set, a distributed notification saves a picture of the window (no screen-recording permission needed)
         guard let dir = ProcessInfo.processInfo.environment["VS_SNAPSHOT_DIR"] else { return }
-        DistributedNotificationCenter.default().addObserver(forName: .init("local.video-summarizer.snapshot"), object: nil, queue: .main) { _ in
+        let channel = ProcessInfo.processInfo.environment["VS_TEST_CHANNEL"].map { ".\($0)" } ?? ""
+        DistributedNotificationCenter.default().addObserver(forName: .init("local.video-summarizer.snapshot" + channel), object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { Snapshot.save(to: dir) }
         }
     }
@@ -125,11 +139,26 @@ extension AppDelegate {
 
 enum Snapshot {
     @MainActor static func save(to dir: String) {
-        for (i, window) in NSApp.windows.filter({ $0.isVisible && $0.contentView != nil }).enumerated() {
-            guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
-            view.cacheDisplay(in: view.bounds, to: rep)
-            let name = i == 0 ? "window.png" : "window-\(i).png"
-            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+        Task {
+            for (i, window) in NSApp.windows.filter({ $0.isVisible && $0.contentView != nil }).enumerated() {
+                guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                // web pages draw in WebKit's own process, so cacheDisplay leaves them blank: paint each one's own snapshot in
+                for web in webViews(in: view) where web.window != nil && !web.isHidden {
+                    guard let image = try? await web.takeSnapshot(configuration: nil) else { continue }
+                    let rect = web.convert(web.bounds, to: nil)   // window coordinates (origin bottom-left), like the bitmap
+                    NSGraphicsContext.saveGraphicsState()
+                    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                    image.draw(in: rect)
+                    NSGraphicsContext.restoreGraphicsState()
+                }
+                let name = i == 0 ? "window.png" : "window-\(i).png"
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+            }
         }
+    }
+
+    @MainActor private static func webViews(in view: NSView) -> [WKWebView] {
+        (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap(webViews)
     }
 }

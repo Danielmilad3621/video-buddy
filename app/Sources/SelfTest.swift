@@ -39,6 +39,7 @@ enum SelfTest {
         try await queue(root.appendingPathComponent("queue"))
         try await playlists(root.appendingPathComponent("playlists"))
         try await grouping(root.appendingPathComponent("grouping"))
+        browserPolicy()
     }
 
     // MARK: pure parsing
@@ -501,6 +502,38 @@ enum SelfTest {
         try await db.deletePlaylist(series)
         let (videosLeft, jobsLeft) = (try await db.count("videos"), try await db.count("jobs"))
         check(videosLeft == 6 && jobsLeft == jobs, "deleting a playlist keeps its videos and their jobs")
+    }
+
+    /// 4.0: what an address is (from the URL alone) and where each navigation may go.
+    private static func browserPolicy() {
+        let c = { (s: String) in BrowserPolicy.classify(URL(string: s)) }
+        check(c("https://www.youtube.com/") == .home && c("https://m.youtube.com") == .home, "YouTube home")
+        check(c("https://www.youtube.com/watch?v=jNQXAC9IVRw&t=42s") == .video(id: "jNQXAC9IVRw", playlist: nil), "watch page with a time")
+        check(c("https://www.youtube.com/watch?v=jNQXAC9IVRw&list=PLWxXeIVlFzP7-v_wb0uRl4uJLAtUdKVwy&index=3")
+              == .video(id: "jNQXAC9IVRw", playlist: "PLWxXeIVlFzP7-v_wb0uRl4uJLAtUdKVwy"), "watch page inside a playlist")
+        check(c("https://www.youtube.com/shorts/jNQXAC9IVRw") == .shorts(id: "jNQXAC9IVRw"), "Shorts")
+        check(c("https://youtu.be/jNQXAC9IVRw") == .video(id: "jNQXAC9IVRw", playlist: nil), "short link")
+        check(c("https://www.youtube.com/live/jNQXAC9IVRw").videoID == "jNQXAC9IVRw" && c("https://music.youtube.com/watch?v=jNQXAC9IVRw").videoID == "jNQXAC9IVRw",
+              "live and music links")
+        check(c("https://www.youtube.com/playlist?list=PLWxXeIVlFzP7-v_wb0uRl4uJLAtUdKVwy") == .playlist(id: "PLWxXeIVlFzP7-v_wb0uRl4uJLAtUdKVwy"), "playlist page")
+        check(c("https://www.youtube.com/@HashtagClassic/videos") == .channel("@HashtagClassic") && c("https://www.youtube.com/channel/UC123") == .channel("UC123"),
+              "channel pages")
+        check(c("https://www.youtube.com/results?search_query=swift+ui") == .search("swift ui"), "search results")
+        check(c("https://accounts.google.com/ServiceLogin") == .signIn && c("https://consent.youtube.com/m?continue=x") == .consent, "sign-in and consent")
+        check(c("https://www.youtube.com/feed/subscriptions") == .otherYouTube && c("https://example.com/a") == .other(host: "example.com")
+              && c("about:blank") == .blank, "other pages")
+        let d = { (s: String, main: Bool) in BrowserPolicy.decide(URL(string: s)!, mainFrame: main) }
+        check(d("https://www.youtube.com/watch?v=x", true) == .allow && d("https://youtu.be/x", true) == .allow, "YouTube stays in the app")
+        check(d("https://accounts.google.com/v3/signin", true) == .allow && d("https://consent.youtube.com/save", true) == .allow
+              && d("https://www.google.com/sorry/index", true) == .allow, "sign-in, consent and Google's traffic check stay")
+        check(d("https://www.google.com/search?q=x", true) == .openExternally && d("https://example.com", true) == .openExternally,
+              "other sites open in your browser")
+        check(d("https://googleads.g.doubleclick.net/pagead/x", false) == .allow, "frames inside a page are the page's")
+        check(d("file:///etc/hosts", true) == .cancel && d("vbx://x", true) == .cancel && d("mailto:a@b.c", true) == .openExternally,
+              "no file:// or unknown schemes")
+        check(BrowserPolicy.address("youtube.com/@x")?.absoluteString == "https://youtube.com/@x"
+              && BrowserPolicy.address("swift tutorial")?.absoluteString == "https://www.youtube.com/results?search_query=swift%20tutorial",
+              "address field: links and searches")
     }
 
     private static func importer(_ dir: URL) async throws {
