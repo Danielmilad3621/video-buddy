@@ -42,6 +42,10 @@ final class BrowserController {
     nonisolated static let maxLiveTabs = 4
 
     private let storeFile: URL
+    /// The tabs, saved after every change (no cookies: those stay in the data store).
+    private let sessionFile: URL
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var saveFailed = false
     private let testMode = ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
     private var poll: Timer?
     /// The YouTube section is on screen (tabs only get a web view then).
@@ -54,6 +58,7 @@ final class BrowserController {
 
     init(dataDir: URL) {
         storeFile = dataDir.appendingPathComponent("browser/website-data-id")
+        sessionFile = dataDir.appendingPathComponent("browser/tabs.json")
         memory.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.memoryWarning() } }
         memory.activate()
     }
@@ -131,7 +136,7 @@ final class BrowserController {
         let t = make(url)
         t.openerID = opener?.id
         guard insert(t, at: position(after: opener)) else { return }
-        if !background { select(t) }
+        if background { scheduleSave() } else { select(t) }
     }
 
     /// A page's new window (target=_blank, window.open in a click): WebKit made its configuration and loads it itself.
@@ -141,7 +146,7 @@ final class BrowserController {
         t.openedByPage = true
         guard insert(t, at: position(after: opener)) else { return nil }
         let view = t.wake(configuration, adopting: true)
-        if background { enforceLimit() } else { select(t) }
+        if background { enforceLimit(); scheduleSave() } else { select(t) }
         return view
     }
 
@@ -163,6 +168,7 @@ final class BrowserController {
         mediaState = "none"
         if isShown { wake(t) }
         onPageChange(t.page)
+        scheduleSave()
     }
 
     /// Closes a tab (it can be reopened); the next tab to the right becomes active, else the one to the left.
@@ -186,6 +192,7 @@ final class BrowserController {
         } else if let next {
             select(next)
         }
+        scheduleSave()
     }
 
     func closeActive() { if let t = active { close(t) } }
@@ -196,6 +203,7 @@ final class BrowserController {
         guard to != i else { return }
         tabs.remove(at: i)
         tabs.insert(t, at: to)
+        scheduleSave()
     }
 
     /// A copy right after it, with its history, made active.
@@ -227,10 +235,59 @@ final class BrowserController {
     /// A tab's address changed (it calls this itself).
     func tabChanged(_ t: BrowserTab, pageChanged: Bool) {
         if pageChanged, t.id == activeID { onPageChange(t.page) }
+        scheduleSave()
     }
 
-    private func make(_ url: URL?, title: String = "", state: Data? = nil) -> BrowserTab {
-        let t = BrowserTab(url: url, title: title, state: state)
+    // MARK: saving and restoring
+
+    /// At launch: the tabs as they were, all asleep (no web view, no web process) until the YouTube section shows the
+    /// active one, so a page can't crash the launch. A file it can't read is kept aside; YouTube starts with one tab.
+    /// Returns what to tell you, if anything.
+    func restore() -> String? {
+        guard let data = try? Data(contentsOf: sessionFile) else { return nil }
+        guard let s = TabSession.decode(data) else {
+            let aside = sessionFile.deletingLastPathComponent().appendingPathComponent("tabs.corrupt.json")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: sessionFile, to: aside)
+            return "Your YouTube tabs couldn't be restored (their saved list was damaged), so YouTube starts with one tab. The damaged list was kept as tabs.corrupt.json."
+        }
+        tabs = s.tabs.prefix(Self.maxTabs).map { make($0.url, title: $0.title, state: $0.state, id: $0.id) }
+        activeID = tabs.contains { $0.id == s.active } ? s.active : tabs.first?.id
+        return nil
+    }
+
+    /// After a change, at most once a second.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.saveNow()
+        }
+    }
+
+    /// The whole list, written atomically (never half a file). Also called when the app quits.
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard !tabs.isEmpty else { return }
+        let session = TabSession(active: activeID, tabs: tabs.compactMap { t in
+            let kept = t.snapshot
+            return kept.url.map { TabSession.Saved(id: t.id, url: $0, title: t.title, state: kept.state) }
+        })
+        do {
+            try FileManager.default.createDirectory(at: sessionFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(session).write(to: sessionFile, options: .atomic)
+            saveFailed = false
+        } catch {
+            // said once, not every second
+            if !saveFailed { onNotice("Your YouTube tabs couldn't be saved: \(error.localizedDescription)") }
+            saveFailed = true
+        }
+    }
+
+    private func make(_ url: URL?, title: String = "", state: Data? = nil, id: UUID = UUID()) -> BrowserTab {
+        let t = BrowserTab(id: id, url: url, title: title, state: state)
         t.browser = self
         return t
     }
@@ -390,6 +447,12 @@ final class BrowserController {
         }
     }
 
+    /// Test evidence: the names (never the values) of the cookies in the data store.
+    func cookieNames() async -> [String] {
+        guard let store = dataStore else { return [] }
+        return await store.httpCookieStore.allCookies().map { "\($0.domain):\($0.name)" }.sorted()
+    }
+
     // MARK: clearing
 
     /// Releases the web view first, then removes every kind of website data and the data store itself (WebKit refuses
@@ -399,6 +462,9 @@ final class BrowserController {
         let id = storeID
         poll?.invalidate()
         poll = nil
+        // no save after this (it would write the tabs back)
+        saveTask?.cancel()
+        saveTask = nil
         // every tab's web view first: WebKit won't remove a store anything still uses
         let all = tabs
         tabs = []
@@ -423,6 +489,9 @@ final class BrowserController {
             }
         }
         if removed { try? FileManager.default.removeItem(at: storeFile) }
+        // the saved tabs are browsing history too
+        for f in [sessionFile, sessionFile.deletingLastPathComponent().appendingPathComponent("tabs.corrupt.json")] { try? FileManager.default.removeItem(at: f) }
+        report.append(FileManager.default.fileExists(atPath: sessionFile.path) ? "saved tabs still there" : "saved tabs removed")
         let ids = await WKWebsiteDataStore.allDataStoreIdentifiers
         report.append(ids.contains(id) ? "store still listed by WebKit" : "store no longer listed by WebKit")
         clearReport = report.joined(separator: "; ")
@@ -441,4 +510,25 @@ struct ClosedTab {
     let title: String
     let state: Data?
     let index: Int
+}
+
+/// What tabs.json holds: each tab's address, title and WebKit's saved history (its back and forward list, scroll
+/// positions and form data). No cookies or passwords: those stay in the data store.
+struct TabSession: Codable, Equatable {
+    var version = 1
+    var active: UUID?
+    var tabs: [Saved]
+
+    struct Saved: Codable, Equatable {
+        let id: UUID
+        let url: URL
+        let title: String
+        let state: Data?
+    }
+
+    /// nil for a file that isn't a session this version can read (damaged, or written by a later version).
+    static func decode(_ data: Data) -> TabSession? {
+        guard let s = try? JSONDecoder().decode(TabSession.self, from: data), s.version == 1 else { return nil }
+        return s
+    }
 }

@@ -672,6 +672,12 @@ enum SelfTest {
         check(Set(BrowserController.toSleep(live, cap: 0)) == [t1, t3, t4, t5], "memory pressure: every unprotected tab sleeps")
         check(BrowserController.toSleep([(id: t1, lastActive: at(1), protected: true), (id: t2, lastActive: at(2), protected: true)], cap: 1).isEmpty,
               "protected tabs never sleep, even over the limit")
+        // the saved tabs: read back exactly; a damaged file or one from a later version is never half-read
+        let session = TabSession(active: t2, tabs: [.init(id: t1, url: home, title: "Home", state: nil), .init(id: t2, url: watch, title: "Big Buck Bunny", state: state)])
+        check((try? JSONEncoder().encode(session)).flatMap(TabSession.decode) == session, "saved tabs come back as they were")
+        check(TabSession.decode(Data("{\"version\":1,\"tabs\":[{\"id\":".utf8)) == nil && TabSession.decode(Data("garbage".utf8)) == nil,
+              "a damaged tabs file isn't read")
+        check(TabSession.decode(Data(#"{"version":2,"tabs":[]}"#.utf8)) == nil, "a later version's tabs file isn't read")
         // a click from a tab that isn't active any more arrives with no current video: never queued
         check(BrowserActionOutcome.decide(clicked: "A", current: nil, slot: .ready) == .pageChanged, "a click from another tab does nothing")
     }

@@ -230,6 +230,12 @@ enum TestHooks {
         case "tabDuplicate": if let t = model.browser.tab { model.browser.duplicate(t) }
         case "tabReopen": model.reopenTab()
         case "memoryWarning": model.browser.memoryWarning()
+        case "cookieNames":
+            // the YouTube data store's cookie names and count, never their values (sign-in survives a restart)
+            Task {
+                let names = await model.browser.cookieNames()
+                webRead = "\(names.count) cookies: " + names.joined(separator: " ")
+            }
         case "crashTab":
             // what WebKit tells a tab when its page's web process ends (a real crash can't be caused through public API)
             if let t = tab(arg), let web = t.webView { t.webViewWebContentProcessDidTerminate(web) }

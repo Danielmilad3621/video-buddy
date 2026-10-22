@@ -132,6 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The YouTube tabs, as they are now (they're also saved a second after every change).
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AppModel.shared.browser.saveNow() }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         sizeWindowOnce()
         MainActor.assumeIsolated { TestHooks.install() }
