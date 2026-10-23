@@ -1072,6 +1072,7 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - your Preview's database (v4: 7 videos, 8 jobs, 1 declaration, 2 meta) → v5 with identical counts and a healthy pre-v5 backup;
     - your last full 3.1 backup (`history-before-fresh-start-…`, v3: 33 videos, 33 jobs, 3 resume points) → v5 with identical rows (keys, titles, job ids) and a healthy pre-v4 backup. The original backup's modified time was unchanged.
   - **Afterwards:** the test build's leftovers were removed. Compared with a baseline taken before testing, identical: 3.1, production (from a copy), `~/Downloads/cobalt`, 3.1's settings, and your Preview's data folder, database counts, `tabs.json`, store id, WebKit store and settings.
+  - **Installed:** the Preview was rebuilt at `2e0e83a` (260 self-tests inside its bundle), quit gracefully and opened in front on the Watch Later page. Its database went from v4 to v5 after a verified `history-pre-v5-…` backup (v4, 7 videos, 8 jobs, 1 declaration); every count is the same. Its open tab, sign-in store, settings (including the Background audio you turned on) and samples were kept; only `tabs.json` was re-saved on quit (the same tab). The queue is still locked. Screenshot: `design/screenshots/4.0-p3-03-preview-installed.png`.
 
 ### Not verified
 - **4.0 Phase 3:**
