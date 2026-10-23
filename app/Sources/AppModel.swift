@@ -82,6 +82,8 @@ final class AppModel {
     private init() {
         dataDir = AppSettings.dataDir
         Database.queueRule = AppSettings.queueRefusal
+        // 4.0 G1a: the RC claims its live-download window (once) before the queue starts; any other launch locks it
+        if AppSettings.isRC { LiveGrant.claimAtLaunch() }
         let db: Database
         var warning: String?
         do {
@@ -93,6 +95,14 @@ final class AppModel {
         startupWarning = warning
         store = HistoryStore(db: db)
         jobs = JobController(store: store, network: network)
+        // 4.0 G1a: when the RC's live-download window ends while it's open, the lock is written back and the queue pauses
+        if LiveGrant.claimedByThisLaunch, let until = LiveGrant.until {
+            Task { @MainActor [jobs] in
+                try? await Task.sleep(for: .seconds(max(0, until.timeIntervalSinceNow)))
+                LiveGrant.relock()
+                jobs.pauseQueue()
+            }
+        }
         ingestor = Ingestor(store: store, inbox: dataDir.appendingPathComponent("inbox.jsonl"))
         playback = PlaybackController(db: db)
         browser = BrowserController(dataDir: dataDir)
@@ -726,6 +736,11 @@ final class AppModel {
             notice = "Not queued: \(refusal)."
             return
         }
+        // 4.0 G1a: never a second copy without asking (the bar asks the same way)
+        if !r.anotherCopy, let have = existingCopy(r) {
+            pendingCopy = (r, have)
+            return
+        }
         guard r.action.downloadsMedia, let id = r.youtubeID else { enqueueNow(r); return }
         Task {
             var decision = browserGate(id)
@@ -744,6 +759,31 @@ final class AppModel {
             case nil: notice = "Couldn't check this video, so nothing was queued."
             }
         }
+    }
+
+    /// A download asked for while that video's (or audio's) file is already on this Mac, waiting for you to say whether
+    /// you want another copy.
+    var pendingCopy: (request: DownloadRequest, file: FileItem)?
+
+    /// The file of that kind this video already has on this Mac, if any (a video download for a video file, audio for audio).
+    func existingCopy(_ r: DownloadRequest) -> FileItem? {
+        let role: FileItem.Role
+        switch r.action {
+        case .video, .videoTranscript: role = .video
+        case .audio, .audioTranscript: role = .audio
+        default: return nil
+        }
+        let key = r.youtubeID.map { "youtube:\($0)" } ?? r.link.flatMap { VideoRef.parse($0)?.key }
+        guard let v = r.videoID.flatMap({ store.video($0) }) ?? key.flatMap({ store.byKey[$0] }) else { return nil }
+        return store.mediaFiles(for: v.id).first { $0.role == role && $0.exists && (DownloadsList.diskSize($0.path) ?? 0) > 0 }
+    }
+
+    /// Download Another Copy: the request goes on, through every usual check.
+    func confirmCopy() {
+        guard var r = pendingCopy?.request else { return }
+        pendingCopy = nil
+        r.anotherCopy = true
+        requestDownload(r)
     }
 
     private func enqueueNow(_ r: DownloadRequest) {
@@ -1139,6 +1179,8 @@ struct DownloadRequest {
     var videoID: Int64? = nil        // an existing library entry
     var format: SummaryFormat? = nil
     var language: SummaryLanguage? = nil
+    /// You confirmed another copy of a file that's already on this Mac.
+    var anotherCopy = false
 }
 
 /// 4.0 Phase 4: one video in Prepare for Offline, and what you chose for it.

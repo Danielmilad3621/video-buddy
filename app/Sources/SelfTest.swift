@@ -49,6 +49,7 @@ enum SelfTest {
         try await migrations(root.appendingPathComponent("migrations"))
         try await releaseCandidate(root.appendingPathComponent("rc"))
         externalRequests()
+        g1aRules()
         preview()
         rcIdentity()
     }
@@ -143,6 +144,40 @@ enum SelfTest {
         check(accepted.isEmpty, "request: \(refused.count) malformed or unsafe requests refused (accepted: \(accepted))")
     }
 
+    /// 4.0 G1a: the size estimate takes the stream yt-dlp really downloads, and the RC's live-download window is
+    /// good once, for at most 90 minutes.
+    private static func g1aRules() {
+        // the formats of the G1a video at 720p and its audio, as yt-dlp listed them (sizes in bytes, bitrates in kbit/s)
+        let f = MediaFacts(duration: 603, formats: [
+            .init(height: 720, vcodec: "avc1.4D401F", acodec: "none", filesize: 17_921_011, tbr: 237.771),       // 136, DASH
+            .init(height: 720, vcodec: "avc1.4D401F", acodec: "none", tbr: 1153.957),                             // 232, HLS
+            .init(height: 720, vcodec: "av01.0.05M.08", acodec: "none", filesize: 27_616_599, tbr: 366.389),
+            .init(height: 480, vcodec: "avc1.4D401F", acodec: "none", filesize: 11_536_762, tbr: 153.066),
+            .init(height: 1080, vcodec: "avc1.640028", acodec: "none", filesize: 64_894_146, tbr: 860.999),
+            .init(vcodec: "none", acodec: "mp4a.40.2", filesize: 9_760_066, tbr: 129.482),                       // 140
+            .init(vcodec: "none", acodec: "opus", filesize: 9_466_588, tbr: 125.592),                            // 251
+        ])
+        let e = SizeEstimate.video(f, quality: "720")
+        check(e.bytes == 27_681_077 && e.kind == .known && e.height == 720,
+              "estimate: 720p is the sized DASH stream yt-dlp takes, 136 + 140 = 27,681,077 bytes (not the HLS one by bitrate) (got \(e))")
+        check(SizeEstimate.video(f, quality: "1080").bytes == 64_894_146 + 9_760_066, "estimate: 1080p unchanged where only one stream has a size")
+        let noSizes = MediaFacts(duration: 600, formats: [.init(height: 720, vcodec: "avc1", acodec: "mp4a", tbr: 800),
+                                                          .init(height: 720, vcodec: "avc1", acodec: "mp4a", tbr: 400)])
+        check(SizeEstimate.video(noSizes, quality: "720").bytes == Int64(800 * 1000 / 8 * 600) && SizeEstimate.video(noSizes, quality: "720").kind == .approximate,
+              "estimate: with no sizes at all, still the highest bitrate, marked approximate")
+
+        let now = Date()
+        func claim(_ enabled: Bool, _ minutes: Double?, _ claimed: Bool) -> (Bool, Bool) {
+            let r = LiveGrant.claim(enabled: enabled, until: minutes.map { now.addingTimeInterval($0 * 60) }, claimed: claimed, now: now)
+            return (r.claim, r.relock)
+        }
+        check(claim(false, nil, false) == (false, false), "window: none, nothing to do")
+        check(claim(true, 60, false) == (true, false), "window: an unused one ahead is claimed by this launch")
+        check(claim(true, 60, true) == (false, true), "window: already used by an earlier launch (a restart): locked again")
+        check(claim(true, -1, false) == (false, true) && claim(true, nil, false) == (false, true), "window: expired or missing end: locked again")
+        check(claim(true, 120, false) == (false, true), "window: more than 90 minutes ahead isn't accepted")
+    }
+
     /// Only inside Video Buddy 4.0 RC.app (preview.sh --rc runs this before installing): its own folders, never 3.1's,
     /// and its locks as its settings say (both off when installed).
     private static func rcIdentity() {
@@ -150,8 +185,8 @@ enum SelfTest {
         check(AppSettings.dataDir.lastPathComponent == AppSettings.appName && AppSettings.appName.hasPrefix("Video Buddy 4.0 ")
               && AppSettings.dataDir.lastPathComponent != "Video Summarizer", "RC: its own data folder")
         check(AppSettings.defaultDownloadDir == AppSettings.dataDir.appendingPathComponent("Downloads").path, "RC: downloads inside its own data folder")
-        let live = UserDefaults.standard.bool(forKey: "rcLiveDownloads"), ai = UserDefaults.standard.bool(forKey: "rcAISummaries")
-        check(JobController.locked(false) == !live || FakeRunner.enabled, "RC: the queue is locked until live downloads are approved")
+        let ai = UserDefaults.standard.bool(forKey: "rcAISummaries")
+        check(JobController.locked(false) || FakeRunner.enabled, "RC: no live downloads without this launch's window (a self-test never claims one)")
         check((AppSettings.queueRefusal(.summarize, key: "url:example.com/x") != nil) == !ai, "RC: AI summaries locked until approved")
         check(Bundle.main.bundleIdentifier != "local.video-summarizer.rc" || !FakeRunner.enabled, "the RC never runs the fake runner")
     }

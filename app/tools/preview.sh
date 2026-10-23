@@ -104,6 +104,8 @@ if [[ -n $rc ]]; then
   # every install of the RC starts locked; only you approve live downloads or AI summaries (see README §2)
   defaults write "$id" rcLiveDownloads -bool false
   defaults write "$id" rcAISummaries -bool false
+  defaults delete "$id" rcLiveGrantUntil 2> /dev/null || true      # no live-download window survives an install
+  defaults delete "$id" rcLiveGrantClaimed 2> /dev/null || true
   mkdir -p "$data"
   list="$data/live-test-videos.txt"
   [[ -e $list ]] || printf '%s\n' "# YouTube video IDs you approved for the live tests, one per line (# starts a note). Empty until then." > "$list"

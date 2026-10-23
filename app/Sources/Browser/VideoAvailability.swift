@@ -193,12 +193,17 @@ enum SizeEstimate {
 
     /// Video at `quality` ("480"…"1080", "max", nil = 1080): the best video at or below it, H.264 first (as the
     /// download script asks for), plus the best audio unless the format already has it.
+    /// At that height, a stream with a known size comes first, then an approximate one, then the highest bitrate: what
+    /// yt-dlp actually picks. (4.0 G1a: a video had a 720p H.264 HLS stream with no size at 1,154 kbit/s beside the DASH
+    /// one yt-dlp downloads, 17.9 MB at 238 kbit/s; going by bitrate estimated ≈ 97 MB for a 27.7 MB download.)
     static func video(_ f: MediaFacts, quality: String?) -> (bytes: Int64?, kind: SizeKind, height: Int?) {
         let cap = quality == "max" ? Int.max : Int(quality ?? "") ?? 1080
         let fit = f.formats.filter { $0.hasVideo && ($0.height ?? 0) <= cap }
         let h264 = fit.filter { ($0.vcodec ?? "").hasPrefix("avc1") }
         let pool = h264.isEmpty ? fit : h264
-        guard let best = pool.max(by: { (($0.height ?? 0), $0.tbr ?? 0) < (($1.height ?? 0), $1.tbr ?? 0) }) else { return (nil, .unknown, nil) }
+        let sized = { (x: MediaFacts.Format) in x.filesize != nil ? 2 : x.filesizeApprox != nil ? 1 : 0 }
+        guard let best = pool.max(by: { (($0.height ?? 0), sized($0), $0.tbr ?? 0) < (($1.height ?? 0), sized($1), $1.tbr ?? 0) })
+        else { return (nil, .unknown, nil) }
         var total = size(best, duration: f.duration)
         if !best.hasAudio {
             let audio = f.formats.filter { $0.hasAudio && !$0.hasVideo }.max { ($0.tbr ?? 0) < ($1.tbr ?? 0) }

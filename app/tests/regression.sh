@@ -89,6 +89,17 @@ echo "$D fail" >> "$T/control"; vs "declareOnly $D|regression"; vs "link https:/
 check "a failed download is listed with Retry" "any(f.startswith('video') for f in s['failed'])" 30 "s['failed']"
 echo "$D ok" >> "$T/control"; vs "retryFailed"
 check "Retry goes through the checks again and succeeds" "any('fake $D' in m for m in s['media'])" 30
+# G1a change A: something already on this Mac is only downloaded again when you say so
+vs "link https://youtu.be/$A"; vs "start video"
+check "another copy (link field): asked first, nothing queued" "s['pendingCopy'].startswith('video') and s['queueKeys'] == []"
+vs "copyDecision cancel"
+check "…Cancel: nothing queued, nothing running" "s['pendingCopy'] == '' and s['queueKeys'] == [] and s['running'] == ''"
+vs "libraryAction $A|again-video"
+check "another copy (Library's Download Again): asked first too" "s['pendingCopy'].startswith('video') and s['queueKeys'] == []"
+vs "copyDecision cancel"
+ok "…still one file of it" "$([[ $(ls "$T/out" | grep -c "$A") == 1 ]] && echo True || echo False)"
+vs "start video"; vs "copyDecision copy"
+check "Download Another Copy: a second, separate file" "any('fake $A (2)' in m for m in s['media'])" 30 "s['media']"
 echo "$E slow" >> "$T/control"; vs "declareOnly $E|regression"; vs "link https://youtu.be/$E"; vs "start video"
 waitfor "s['running'] == 'youtube:$E'" > /dev/null; vs "cancel"
 check "cancel: stopped, no file left" "s['running'] == '' and not any('$E' in m for m in s['media'])"
@@ -176,6 +187,30 @@ check "Prepare shows an unlisted video as not allowed" "any(r.startswith('$C') a
 vs "nativeClick prepareCancel"
 open -g -a "$app" "$(request video "https://youtu.be/$C")"; waitfor "s['external'] != {}" > /dev/null; vs "nativeClick externalDownload"
 check "a request for an unlisted video: refused after Download" "\"isn't on\" in s['notice'] and s['queueKeys'] == []"
+quit_app
+
+echo "== RC rules: the live-download window (no fake downloader; an empty, paused queue, so nothing can run)"
+G="$T/data-window"; out="$T/out-window"
+grant() { defaults write "$id" rcLiveDownloads -bool true; defaults write "$id" rcLiveGrantUntil -int $(($(date +%s) + $1))
+          defaults write "$id" rcLiveGrantClaimed -bool false; defaults write "$id" queuePaused -bool true; }
+setting() { defaults read "$id" "$1" 2> /dev/null || echo none; }
+grant 25; launch "$G"
+check "a window: this launch claims it and may download" "s['build']['canRun'] and s['queueKeys'] == [] and s['running'] == ''" 10 "s['build']"
+ok "…claimed, so no other launch can use it" "$([[ $(setting rcLiveGrantClaimed) == 1 ]] && echo True || echo False)"
+check "when it ends: locked again, the queue paused" "not s['build']['canRun'] and s['build']['paused']" 40 "s['build']"
+written_back() { local end=$((SECONDS + 10)); while ((SECONDS < end)); do
+  [[ $(setting rcLiveDownloads) == 0 && $(setting queuePaused) == 1 && $(setting rcLiveGrantUntil) == none ]] && { echo True; return; }; sleep 0.5; done; echo False; }
+ok "…and written back: rcLiveDownloads 0, queuePaused 1, no window" "$(written_back)" "rcLiveDownloads $(setting rcLiveDownloads), queuePaused $(setting queuePaused), until $(setting rcLiveGrantUntil)"
+quit_app
+grant 600; launch "$G"
+check "a new window: allowed in this launch" "s['build']['canRun']" 10 "s['build']"
+quit_app; launch "$G"
+check "after a restart: locked again" "not s['build']['canRun'] and s['build']['paused']" 10 "s['build']"
+ok "…and written back" "$([[ $(setting rcLiveDownloads) == 0 && $(setting rcLiveGrantUntil) == none ]] && echo True || echo False)"
+quit_app
+defaults write "$id" rcLiveDownloads -bool true; defaults write "$id" rcLiveGrantUntil -int $(($(date +%s) + 7200)); defaults write "$id" rcLiveGrantClaimed -bool false
+launch "$G"
+check "a window longer than 90 minutes isn't accepted" "not s['build']['canRun']" 10 "s['build']"
 quit_app
 
 echo "regression: $pass passed, $fail failed"

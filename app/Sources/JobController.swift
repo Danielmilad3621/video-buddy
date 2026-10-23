@@ -137,6 +137,13 @@ final class JobController {
         isRunning = true            // claimed before any await, so two calls can't start two runners
         Task {
             while !paused, let job = try? await db.nextQueued(networkAvailable: network.isOnline, downloadsAllowed: downloadsAllowed) {
+                // 4.0 G1a: the build's lock is checked before every job, not only at launch (the RC's live-download
+                // window can end while it's open): locked now, nothing more starts and the queue pauses
+                if !Self.canRun {
+                    if AppSettings.isRC { LiveGrant.relock() }
+                    setPaused(true)
+                    break
+                }
                 // the network looked fine but nothing answers (captive Wi-Fi): now offline, look for on-device work
                 if job.action.needsNetwork, !FakeRunner.enabled, !(await network.verifyInternet()) { continue }
                 await execute(job)

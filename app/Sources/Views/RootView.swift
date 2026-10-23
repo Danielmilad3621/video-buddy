@@ -84,6 +84,13 @@ struct RootView: View {
         }
         .sheet(item: $model.prepare) { PrepareSheet(state: $0).environment(model) }
         .sheet(item: $model.externalRequest) { ExternalRequestSheet(request: $0).environment(model) }
+        // 4.0 G1a: a download of something already on this Mac only makes another copy when you say so
+        .alert("Download another copy?", isPresented: Binding(get: { model.pendingCopy != nil }, set: { if !$0 { model.pendingCopy = nil } })) {
+            Button("Download Another Copy") { model.confirmCopy() }
+            Button("Cancel", role: .cancel) { model.pendingCopy = nil }
+        } message: {
+            Text("“\(model.pendingCopy?.file.name ?? "")” is already on this Mac. Another copy is a second file; the one you have stays as it is.")
+        }
         // Watch Later's Open in Tabs, when some didn't fit (it switches to YouTube, so the window shows it)
         .alert("Not every video was opened", isPresented: Binding(get: { model.openReport != nil }, set: { if !$0 { model.openReport = nil } })) {
             Button("OK") { model.openReport = nil }

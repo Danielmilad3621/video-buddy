@@ -117,14 +117,14 @@ enum AppSettings {
     static var buildBadge: String? {
         if isPreview { return "4.0 Preview · downloads off" }
         guard isRC else { return nil }
-        return "4.0 RC · " + (jobsLockReason == nil ? "live downloads on" : "downloads locked")
+        return "4.0 RC · " + (jobsLockReason == nil ? "live downloads on until \(LiveGrant.until?.formatted(date: .omitted, time: .shortened) ?? "?")" : "downloads locked")
             + (defaults.bool(forKey: "rcAISummaries") ? " · AI on" : " · AI locked")
     }
 
     /// Why this build may not run downloads or AI jobs at all, or nil (then only the Pause button stops the queue).
     static var jobsLockReason: String? {
         if isPreview { return "\(appName) never downloads or runs AI jobs" }
-        if isRC, !defaults.bool(forKey: "rcLiveDownloads") { return "live downloads aren't approved yet in \(appName)" }
+        if isRC, !LiveGrant.active() { return "live downloads aren't approved in \(appName) right now" }
         return nil
     }
 
@@ -135,6 +135,50 @@ enum AppSettings {
         guard isRC else { return nil }
         return LiveTestList.refusal(action, key: key, aiApproved: defaults.bool(forKey: "rcAISummaries"),
                                     listed: LiveTestList.ids(in: dataDir), app: appName)
+    }
+}
+
+/// 4.0 G1a: the RC's live downloads come only in a window you approved: `rcLiveDownloads` plus `rcLiveGrantUntil` (written
+/// by app/tools/rc-live-window.sh, at most 90 minutes ahead), good for one launch. The launch after that (a restart,
+/// expected or not), an expired window or no window at all locks downloads again and pauses the queue.
+enum LiveGrant {
+    static let enabledKey = "rcLiveDownloads", untilKey = "rcLiveGrantUntil", claimedKey = "rcLiveGrantClaimed"
+    /// This launch claimed the window (set once, at launch, by `claimAtLaunch`; never by a self-test).
+    nonisolated(unsafe) private(set) static var claimedByThisLaunch = false
+
+    static var until: Date? {
+        // whole seconds (`defaults write -int`): a float setting loses up to a minute at today's timestamps
+        (AppSettings.defaults.object(forKey: untilKey) as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+    }
+
+    /// At launch: claim the window if there's one nobody has used; otherwise make sure everything is locked.
+    /// Returns whether this launch may download.
+    @discardableResult static func claimAtLaunch(now: Date = Date()) -> Bool {
+        let d = AppSettings.defaults
+        let outcome = claim(enabled: d.bool(forKey: enabledKey), until: until, claimed: d.bool(forKey: claimedKey), now: now)
+        if outcome.claim { d.set(true, forKey: claimedKey); claimedByThisLaunch = true }
+        if outcome.relock { relock() }
+        return outcome.claim
+    }
+
+    static func claim(enabled: Bool, until: Date?, claimed: Bool, now: Date) -> (claim: Bool, relock: Bool) {
+        guard enabled else { return (false, false) }
+        guard let until, until > now, until.timeIntervalSince(now) <= 90 * 60 + 60, !claimed else { return (false, true) }
+        return (true, false)
+    }
+
+    /// Live downloads allowed right now: this launch's window, not yet over.
+    static func active(now: Date = Date()) -> Bool {
+        claimedByThisLaunch && AppSettings.defaults.bool(forKey: enabledKey) && (until.map { $0 > now } ?? false)
+    }
+
+    /// Everything off: no live downloads, the queue paused, the window gone.
+    static func relock() {
+        let d = AppSettings.defaults
+        d.set(false, forKey: enabledKey)
+        d.set(true, forKey: "queuePaused")
+        d.removeObject(forKey: untilKey)
+        d.removeObject(forKey: claimedKey)
     }
 }
 

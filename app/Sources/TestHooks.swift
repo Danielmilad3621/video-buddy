@@ -412,6 +412,8 @@ enum TestHooks {
             if let web = model.browser.tab?.webView, let w = web.window { w.makeKeyAndOrderFront(nil); w.makeFirstResponder(web) }
         // 4.0 Phase 5: a videobuddy:// request, as if another app had sent it (tests also send real ones with `open`)
         case "openURL": if let url = URL(string: arg) { model.receive(url) } else { model.notice = "openURL: not a URL" }
+        // 4.0 G1a: the answer to "Download another copy?" (system alerts can't carry click targets)
+        case "copyDecision": if arg == "copy" { model.confirmCopy() } else { model.pendingCopy = nil }
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
         default: break
@@ -693,6 +695,7 @@ enum TestHooks {
             "queueOptions": jobs.queue.map { q in "\(store.video(q.videoID)?.key ?? "?") \(q.options.map { "\($0.quality ?? "-") \($0.estimatedBytes.map(String.init) ?? "-") \($0.sizeKind.rawValue)" } ?? "none")" },
             "pauseReason": jobs.pauseReason ?? "", "downloadsAllowed": jobs.downloadsAllowed, "unmetered": model.network.isUnmetered,
             "hookResult": webRead,
+            "pendingCopy": model.pendingCopy.map { "\($0.request.action.rawValue) \($0.file.name)" } ?? "",
             // 4.0 Phase 5: which build this is, and what's locked
             "build": ["bundleID": Bundle.main.bundleIdentifier ?? "", "appName": AppSettings.appName, "isRC": AppSettings.isRC,
                       "isPreview": AppSettings.isPreview, "dataDir": AppSettings.dataDir.path, "downloadDir": AppSettings.downloadDir,
