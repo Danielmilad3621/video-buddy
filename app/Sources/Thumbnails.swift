@@ -18,15 +18,7 @@ enum Thumbnails {
             if video.thumbnailPath != dest { try? await db.setThumbnailPath(video.id, dest) }
             return dest
         }
-        var image: NSImage?
-        if online, let s = video.thumbnailURL, let url = URL(string: s) {
-            var request = URLRequest(url: url, timeoutInterval: 15)
-            request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-            if let (data, response) = try? await URLSession.shared.data(for: request),
-               ((response as? HTTPURLResponse)?.statusCode ?? 0) < 400 {
-                image = NSImage(data: data)
-            }
-        }
+        var image = online ? await download(video.thumbnailURL) : nil
         if image == nil, let localVideo, FileItem.mediaRole(localVideo) == .video {
             image = await frame(of: localVideo)
         }
@@ -40,6 +32,45 @@ enum Thumbnails {
             return nil
         }
     }
+
+    /// The image at a link (15 s at most), or nil.
+    static func download(_ link: String?) async -> NSImage? {
+        guard let link, let url = URL(string: link) else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              ((response as? HTTPURLResponse)?.statusCode ?? 0) < 400 else { return nil }
+        return NSImage(data: data)
+    }
+
+    // MARK: Watch Later (4.0 Phase 3): its own folder, since Clear All History removes `directory` whole
+
+    static var watchLaterDirectory: URL { AppSettings.dataDir.appendingPathComponent("watch-later") }
+
+    static func watchLaterPath(_ youtubeID: String) -> String { watchLaterDirectory.appendingPathComponent("\(youtubeID).jpg").path }
+
+    /// A Watch Later item's thumbnail copy: the library entry's saved one if there is one (works offline), else YouTube's.
+    /// It's kept only while the item is still saved: checked again once the file is in place, so a removal meanwhile
+    /// never leaves an orphan.
+    @discardableResult
+    static func saveWatchLater(_ item: WatchLaterItem, libraryCopy: String?, online: Bool, stillSaved: () async -> Bool) async -> Bool {
+        let dest = watchLaterPath(item.youtubeID)
+        var image = libraryCopy.flatMap { FileManager.default.fileExists(atPath: $0) ? NSImage(contentsOfFile: $0) : nil }
+        if image == nil, online { image = await download(item.thumbnailURL) }
+        // test runs can slow this down, to remove an item while its thumbnail is still on its way
+        if let wait = ProcessInfo.processInfo.environment["VS_TEST_SLOW_THUMBS"].flatMap(Double.init) { try? await Task.sleep(for: .seconds(wait)) }
+        guard !Task.isCancelled, let image, let jpeg = jpegData(image, maxWidth: 640), await stillSaved() else { return false }
+        do {
+            try FileManager.default.createDirectory(at: watchLaterDirectory, withIntermediateDirectories: true)
+            try jpeg.write(to: URL(fileURLWithPath: dest), options: .atomic)
+        } catch {
+            return false
+        }
+        guard !Task.isCancelled, await stillSaved() else { removeWatchLater(item.youtubeID); return false }
+        return true
+    }
+
+    static func removeWatchLater(_ youtubeID: String) { try? FileManager.default.removeItem(atPath: watchLaterPath(youtubeID)) }
 
     /// Removes cached thumbnails for entries that left the history (our cache only).
     static func remove(videoIDs: [Int64]) {

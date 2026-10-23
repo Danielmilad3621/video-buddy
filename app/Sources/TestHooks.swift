@@ -225,6 +225,37 @@ enum TestHooks {
             if f.count == 2, let t = tab(String(f[0])) { model.browser.move(t, to: f[1] - 1) }
         case "tabDuplicate": if let t = model.browser.tab { model.browser.duplicate(t) }
         case "tabReopen": model.reopenTab()
+        // 4.0 Phase 3: Watch Later (the same model calls the buttons make)
+        case "wlSave": model.saveToWatchLater(arg, from: model.browser.tabs.first { $0.page.videoID == arg })
+        case "wlSaveTab": if let t = tab(arg), let id = t.page.videoID { model.saveToWatchLater(id, from: t) }
+        case "wlRemove": model.removeFromWatchLater(arg.split(separator: ",").map { "youtube:\($0)" })
+        case "wlOpen":
+            let f = arg.split(separator: "|").map(String.init)
+            if let item = store.watchLater.first(where: { $0.youtubeID == f.first }) { model.openInYouTube(item, background: f.count > 1) }
+        case "wlOpenTabs":
+            // "all", or ids separated by commas, in that order
+            let ids = arg == "all" ? store.watchLater.map(\.youtubeID) : arg.split(separator: ",").map(String.init)
+            model.openInTabs(ids.compactMap { id in store.watchLater.first { $0.youtubeID == id } })
+        case "wlPrimary": if let item = store.watchLater.first(where: { $0.youtubeID == arg }) { model.primaryAction(item) }
+        case "wlShow": model.showWatchLater(select: arg.isEmpty ? nil : "youtube:\(arg)")
+        case "wlCloseReport": model.openReport = nil
+        case "fixtureJob":
+            // "<youtube id>|summary|failed": a finished job for that video, as if the queue ran (test data only)
+            let f = arg.split(separator: "|").map(String.init)
+            if f.count == 2, let v = store.all.first(where: { $0.key == "youtube:\(f[0])" }) {
+                let now = Date()
+                let job = f[1] == "summary"
+                    ? NewJob(kind: .summary, status: .succeeded, source: .app, started: now, finished: now,
+                             summary: "## TL;DR\nA test summary (synthetic, no AI).", summaryLanguage: "English", summaryFormat: "Standard")
+                    : NewJob(kind: .video, status: .failed, source: .app, started: now, finished: now, error: "test: failed on purpose")
+                Task {
+                    if let id = try? await store.db.startJob(videoID: v.id, kind: job.kind, source: .app) {
+                        try? await store.db.finishJob(id, videoID: v.id, job)
+                    }
+                    await store.reload()
+                    webRead = "fixture job \(f[1]) for \(f[0])"
+                }
+            }
         case "memoryWarning": model.browser.memoryWarning()
         case "cookieNames":
             // the YouTube data store's cookie names and count, never their values (sign-in survives a restart)
@@ -250,6 +281,9 @@ enum TestHooks {
             // remembers what a bar button on screen now carries (the tab and its video), for a click delivered later
             captured = model.browser.tab.flatMap { t in t.page.videoID.map { (t.id, $0) } }
             webRead = captured.map { "captured \($0.1)" } ?? "nothing to capture"
+        case "deliverSave":
+            // a Save to Watch Later click captured earlier (captureClick), delivered now, after the tab may have changed
+            if let c = captured { model.saveToWatchLater(c.1, from: model.browser.tabs.first { $0.id == c.0 }) }
         case "deliverClick":
             if let c = captured { model.requestFromBrowser(BarSlot(rawValue: arg) ?? .video, videoID: c.1, tabID: c.0) }
         // 4.0 Phase 1b: the native action bar
@@ -506,6 +540,18 @@ enum TestHooks {
                  "loadError": t.loadError ?? "",
                  "opener": t.openerID.flatMap { id in model.browser.tabs.firstIndex { $0.id == id }.map { $0 + 1 } } ?? 0] as [String: Any]
             },
+            "watchLater": store.watchLater.map { i in
+                let a = model.availability(youtubeID: i.youtubeID)
+                return ["id": i.youtubeID, "title": i.title ?? "", "shown": WatchLater.displayTitle(i, pending: model.lookupPending.contains(i.key) && model.network.isOnline).text,
+                        "channel": i.channel ?? "", "duration": i.duration ?? -1, "url": i.url, "thumbnailURL": i.thumbnailURL ?? "",
+                        "thumbFile": FileManager.default.fileExists(atPath: Thumbnails.watchLaterPath(i.youtubeID)),
+                        "status": a.labels(nothing: "Not downloaded").map(\.text), "primary": "\(WatchLater.primary(a))",
+                        "pending": model.lookupPending.contains(i.key)] as [String: Any]
+            },
+            "watchLaterThumbFiles": ((try? FileManager.default.contentsOfDirectory(atPath: Thumbnails.watchLaterDirectory.path)) ?? []).sorted(),
+            "openReport": model.openReport ?? "",
+            "watchedFolders": store.watchedFolders,
+            "onMacCount": store.onMacIDs.count, "reloads": store.reloads,
             "closedTabs": model.browser.closed.count,
             "contextMenu": TabWebView.lastMenu,
             "liveTabs": model.browser.tabs.filter { !$0.isAsleep }.count,

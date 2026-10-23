@@ -9,6 +9,7 @@ struct LibraryColumn: View {
         case .downloads: DownloadsList()
         case .playlists: PlaylistsCard()
         case .queue: QueueColumn()
+        case .watchLater: WatchLaterList()
         case .library, .favorites, .settings, .youtube: LibraryList(continueWatching: false)
         }
     }
@@ -116,7 +117,7 @@ struct LibraryList: View {
         .confirmationDialog("Clear all history?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear All History", role: .destructive) { model.clearAll() }
         } message: {
-            Text("This removes every library record, including favorites. Downloaded files, summaries and transcripts in your downloads folder are not touched.")
+            Text("This removes every library record, including favorites. Downloaded files, summaries and transcripts in your downloads folder are not touched, and Watch Later is kept.")
         }
     }
 

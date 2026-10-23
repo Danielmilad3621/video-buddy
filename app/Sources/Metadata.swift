@@ -125,8 +125,9 @@ enum MetadataFetcher {
             return nil
         }
         onStart(run)
-        let (status, lines) = await run.collect()
-        guard status == 0, let json = lines.last(where: { $0.hasPrefix("{") }),
+        // a caller that no longer needs the answer (Watch Later: the item was removed) stops yt-dlp
+        let (status, lines) = await withTaskCancellationHandler { await run.collect() } onCancel: { run.cancel() }
+        guard !Task.isCancelled, status == 0, let json = lines.last(where: { $0.hasPrefix("{") }),
               let parsed = try? JSONDecoder().decode(YTDLPInfo.self, from: Data(json.utf8)) else { return nil }
         return parsed.info
     }

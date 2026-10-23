@@ -1,4 +1,5 @@
 // What the views show, loaded from the database. All loading is async; the main thread never waits on SQLite.
+import CoreServices
 import Foundation
 import Observation
 
@@ -42,9 +43,18 @@ final class HistoryStore {
     private(set) var savedKeys: Set<String> = []
     var lastError: String?
 
+    /// 4.0 Phase 3: media files added, moved or deleted (in the downloads folder, its subfolders, or any folder the
+    /// library's files are in) reload the library, so what's on this Mac is always current without a restart.
+    @ObservationIgnored private lazy var watcher = FolderWatcher { [weak self] in Task { await self?.reload() } }
+
     init(db: Database) { self.db = db }
 
+    var watchedFolders: [String] { watcher.folders }
+    /// Test evidence: how many times the library was reloaded (the folder watcher's reloads count too).
+    @ObservationIgnored private(set) var reloads = 0
+
     func reload() async {
+        reloads += 1
         let (filter, sort, search) = (filter, sort, search)
         do {
             async let list = db.videos(filter: filter, sort: sort, search: search)
@@ -59,6 +69,7 @@ final class HistoryStore {
             all = try await everything
             byKey = Dictionary(all.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
             self.files = files
+            watcher.watch([AppSettings.downloadDir] + files.filter(\.isMedia).map { ($0.path as NSString).deletingLastPathComponent })
             onMacIDs = onMac
             videoOnMacIDs = Set(onDisk.filter { $0.role == .video }.map(\.videoID))
             stats = try await counts
@@ -182,4 +193,43 @@ struct FailedItem: Identifiable, Equatable {
     let title: String
     var id: Int64 { job.id }
     var retry: RetryInfo { RetryInfo(action: job.action, videoID: job.videoID, filePath: job.filePath) }
+}
+
+/// FSEvents on a set of folders (recursively: every subfolder too), coalesced over half a second, on the main queue.
+/// Folders inside another watched one are left to it.
+final class FolderWatcher {
+    private var stream: FSEventStreamRef?
+    private(set) var folders: [String] = []
+    private let onChange: () -> Void
+
+    init(onChange: @escaping () -> Void) { self.onChange = onChange }
+
+    func watch(_ paths: [String]) {
+        let existing = Set(paths.map { ($0 as NSString).standardizingPath }).filter { FileManager.default.fileExists(atPath: $0) }
+        let roots = existing.filter { p in !existing.contains { $0 != p && p.hasPrefix($0 + "/") } }.sorted()
+        guard roots != folders else { return }
+        stop()
+        folders = roots
+        guard !roots.isEmpty else { return }
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+            guard let info else { return }
+            Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue().onChange()
+        }
+        guard let s = FSEventStreamCreate(nil, callback, &context, roots as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
+                                          FSEventStreamCreateFlags(kFSEventStreamCreateFlagNone)) else { return }
+        FSEventStreamSetDispatchQueue(s, .main)
+        FSEventStreamStart(s)
+        stream = s
+    }
+
+    func stop() {
+        guard let s = stream else { return }
+        FSEventStreamStop(s)
+        FSEventStreamInvalidate(s)
+        FSEventStreamRelease(s)
+        stream = nil
+    }
+
+    deinit { stop() }
 }

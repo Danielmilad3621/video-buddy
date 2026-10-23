@@ -79,6 +79,12 @@ struct RootView: View {
         .sheet(item: $model.namePrompt) { NamePromptSheet(prompt: $0).environment(model) }
         .sheet(item: $model.addingVideosTo) { AddVideosSheet(playlist: $0).environment(model) }
         .sheet(item: $model.declaration) { DeclarationSheet(request: $0).environment(model) }
+        // Watch Later's Open in Tabs, when some didn't fit (it switches to YouTube, so the window shows it)
+        .alert("Not every video was opened", isPresented: Binding(get: { model.openReport != nil }, set: { if !$0 { model.openReport = nil } })) {
+            Button("OK") { model.openReport = nil }
+        } message: {
+            Text(model.openReport ?? "")
+        }
     }
 }
 
@@ -110,9 +116,16 @@ struct Workspace: View {
                     AIPanel(video: v, tabs: DetailTab.allCases)
                 }
             } else {
-                EmptyState(icon: "rectangle.stack", title: "Select a video",
-                           message: "Pick something from your library to watch it and see its summary, transcript and files.")
-                    .panelStyle()
+                Group {
+                    if model.section == .watchLater {
+                        EmptyState(icon: "clock", title: "Watch Later",
+                                   message: "A saved video that's on this Mac plays here. Others open in the YouTube section, where you can download them.")
+                    } else {
+                        EmptyState(icon: "rectangle.stack", title: "Select a video",
+                                   message: "Pick something from your library to watch it and see its summary, transcript and files.")
+                    }
+                }
+                .panelStyle()
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)

@@ -4,13 +4,14 @@ import Foundation
 import Observation
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home = "Home", youtube = "YouTube", library = "Library", favorites = "Favorites", playlists = "Playlists", downloads = "Downloads",
-         queue = "Queue", settings = "Settings"
+    case home = "Home", youtube = "YouTube", watchLater = "Watch Later", library = "Library", favorites = "Favorites", playlists = "Playlists",
+         downloads = "Downloads", queue = "Queue", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .home: "house.fill"
         case .youtube: "play.tv"
+        case .watchLater: "clock"
         case .library: "rectangle.stack"
         case .favorites: "heart"
         case .playlists: "music.note"
@@ -112,7 +113,7 @@ final class AppModel {
         _ = try? await db.recoverInterrupted()     // queued jobs stay queued and continue below
         network.start { [weak self] online in
             guard let self else { return }
-            if online { self.jobs.pump(); Task { await self.backfillThumbnails() } }
+            if online { self.jobs.pump(); Task { await self.backfillThumbnails() }; self.completeWatchLater() }
         }
         if AppSettings.retentionDays > 0 { _ = try? await db.prune(olderThanDays: AppSettings.retentionDays) }
         do { try await db.backupIfDue() } catch { notice = "Backup skipped: \(error)" }
@@ -123,6 +124,7 @@ final class AppModel {
         browser.onPageChange = { [weak self] _ in self?.updateBrowserCheck() }
         browser.onNotice = { [weak self] in self?.notice = $0 }
         if let problem = browser.restore() { notice = problem }
+        completeWatchLater()
         // the preview exists to try the YouTube browser (test runs pick their own section, so --remove can clear the store)
         if AppSettings.isPreview, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" { section = .youtube }
         ingestor.start()
@@ -239,8 +241,8 @@ final class AppModel {
     /// The title to show for a YouTube video: the active tab's, if it's that video's page, else the library's.
     func browserTitle(_ id: String) -> String? {
         let t = browser.active
-        let page = t.flatMap { $0.page.videoID == id && $0.titleURL == $0.url ? $0.title.replacingOccurrences(of: " - YouTube", with: "").nilIfBlank : nil }
-        return page ?? store.all.first { $0.key == "youtube:\(id)" }?.title
+        let page = t.flatMap { $0.page.videoID == id ? $0.videoTitle : nil }
+        return page ?? store.byKey["youtube:\(id)"]?.title
     }
 
     /// ⌘T, and the menu's New Tab from any section: YouTube Home in a new tab, its address field ready to type in.
@@ -249,6 +251,166 @@ final class AppModel {
         browser.open()
         // the new tab's toolbar is a new view: focus it once it's there
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.focusLinkToken += 1 }
+    }
+
+    // MARK: Watch Later (4.0 Phase 3)
+
+    /// Lookups (details and thumbnail) waiting, one at a time, by video key; the one under way can be cancelled.
+    @ObservationIgnored private var lookupQueue: [String] = []
+    @ObservationIgnored private var lookup: (key: String, task: Task<Void, Never>)?
+    /// Looked up this launch already. ponytail: one try per launch; a video YouTube gave nothing for is tried next launch.
+    @ObservationIgnored private var lookedUp: Set<String> = []
+    /// Items whose lookup hasn't answered yet (their rows say "Getting details…").
+    private(set) var lookupPending: Set<String> = []
+    /// The item to select when the Watch Later page opens (Show in Watch Later).
+    var watchLaterFocus: String?
+
+    /// Saves the video a button or menu showed (its id came with the click; saving never queues anything). The title is
+    /// that tab's only if it was read at that video's address, else the library's, else the lookup's when it answers.
+    func saveToWatchLater(_ id: String, from tab: BrowserTab?) {
+        let key = "youtube:\(id)"
+        guard !store.savedKeys.contains(key) else { notice = "Already in Watch Later."; return }
+        let library = store.byKey[key]
+        let title = (tab?.page.videoID == id ? tab?.videoTitle : nil) ?? library?.title
+        let item = WatchLaterItem.new(youtubeID: id, title: title, channel: library?.channel, duration: library?.duration)
+        Task {
+            do {
+                let added = try await store.db.saveToWatchLater(item)
+                await store.reloadWatchLater()
+                notice = added ? "Saved to Watch Later." : "Already in Watch Later."
+                if added { completeWatchLater([key]) }
+            } catch {
+                notice = "Couldn't save to Watch Later: \(error)"
+            }
+        }
+    }
+
+    /// Removing is final: a lookup or thumbnail still under way for these is cancelled (its result dropped), and their
+    /// thumbnail copies go. Files on this Mac are never touched.
+    func removeFromWatchLater(_ keys: [String]) {
+        let gone = Set(keys)
+        lookupQueue.removeAll { gone.contains($0) }
+        if let l = lookup, gone.contains(l.key) { l.task.cancel() }
+        lookupPending.subtract(gone)
+        Task {
+            do {
+                let n = try await store.db.removeFromWatchLater(keys)
+                for k in keys { Thumbnails.removeWatchLater(String(k.dropFirst("youtube:".count))) }
+                await store.reloadWatchLater()
+                notice = n == 1 ? "Removed from Watch Later." : "Removed \(n) videos from Watch Later."
+            } catch {
+                notice = "Couldn't remove: \(error)"
+            }
+        }
+    }
+
+    /// Fills in what saved items lack (a thumbnail copy, and the title, channel or duration from a yt-dlp lookup:
+    /// metadata only, nothing downloaded), one at a time. `keys`: these items; nil: every item that needs it.
+    func completeWatchLater(_ keys: [String]? = nil) {
+        let items = store.watchLater.filter { keys?.contains($0.key) ?? true }
+        for item in items where !lookupQueue.contains(item.key) && lookup?.key != item.key {
+            let needsThumb = !FileManager.default.fileExists(atPath: Thumbnails.watchLaterPath(item.youtubeID))
+            let needsInfo = (item.title == nil || item.channel == nil || item.duration == nil) && !lookedUp.contains(item.key)
+            guard needsThumb || needsInfo else { continue }
+            lookupQueue.append(item.key)
+            if needsInfo { lookupPending.insert(item.key) }
+        }
+        nextLookup()
+    }
+
+    private func nextLookup() {
+        guard lookup == nil, let key = lookupQueue.first else { return }
+        guard let item = store.watchLater.first(where: { $0.key == key }) else {
+            lookupQueue.removeFirst()
+            lookupPending.remove(key)
+            return nextLookup()
+        }
+        // offline: the library's thumbnail copy can still be used; the lookup waits until you're back online
+        let online = network.isOnline
+        guard online || store.byKey[key]?.thumbnailPath != nil else { return }
+        lookupQueue.removeFirst()
+        let db = store.db
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if !FileManager.default.fileExists(atPath: Thumbnails.watchLaterPath(item.youtubeID)) {
+                await Thumbnails.saveWatchLater(item, libraryCopy: self.store.byKey[key]?.thumbnailPath, online: online) { await db.isInWatchLater(key) }
+            }
+            if online, item.title == nil || item.channel == nil || item.duration == nil, !self.lookedUp.contains(key), !Task.isCancelled {
+                self.lookedUp.insert(key)
+                // the answer is written to the video it was asked for, and only if that item is still saved
+                if let info = await MetadataFetcher.fetch(item.url), !Task.isCancelled { _ = try? await db.fillWatchLaterInfo(key, info) }
+            }
+            self.lookupDone(key)
+        }
+        lookup = (key, task)
+    }
+
+    private func lookupDone(_ key: String) {
+        guard lookup?.key == key else { return }
+        lookup = nil
+        if !lookupQueue.contains(key) { lookupPending.remove(key) }
+        Task {
+            await store.reloadWatchLater()
+            nextLookup()
+        }
+    }
+
+    /// What didn't fit when opening several saved videos in tabs (shown until you close it).
+    var openReport: String?
+
+    /// A row's main button: play what's on this Mac (the library entry, in the player on the right), else open on YouTube.
+    func primaryAction(_ item: WatchLaterItem) {
+        guard let v = store.byKey[item.key], WatchLater.primary(availability(youtubeID: item.youtubeID)) != .openInYouTube else {
+            openInYouTube(item)
+            return
+        }
+        store.select(v.id)
+        play(v)
+    }
+
+    /// The tab already showing this video if there is one, else a new tab (in front, or behind and asleep).
+    func openInYouTube(_ item: WatchLaterItem, background: Bool = false) {
+        if let t = browser.tabs.first(where: { $0.page.videoID == item.youtubeID }) {
+            if !background { browser.select(t); section = .youtube }
+            return
+        }
+        guard browser.tabs.count < BrowserController.maxTabs, let url = URL(string: item.url) else {
+            openReport = "\(BrowserController.maxTabs) tabs are open, the most Video Buddy keeps, so “\(item.title ?? item.url)” wasn't opened. Close some tabs and try again."
+            return
+        }
+        // the tab first, then the section: showing YouTube with no tabs would add a Home tab of its own
+        browser.open(url, background: background)
+        if background { notice = "Opened in a tab behind." } else { section = .youtube }
+    }
+
+    /// Open in Tabs for several: each behind (asleep until selected), as many as there's room for; one already open is
+    /// reused. The ones that didn't fit are named.
+    func openInTabs(_ items: [WatchLaterItem]) {
+        var opened = 0, first: BrowserTab?, skipped: [WatchLaterItem] = []
+        for item in items {
+            if let t = browser.tabs.first(where: { $0.page.videoID == item.youtubeID }) {
+                opened += 1
+                first = first ?? t
+            } else if browser.tabs.count < BrowserController.maxTabs, let url = URL(string: item.url) {
+                browser.open(url, background: true)
+                opened += 1
+                first = first ?? browser.tabs.last
+            } else {
+                skipped.append(item)
+            }
+        }
+        if let first { browser.select(first); section = .youtube }
+        if !skipped.isEmpty {
+            let names = skipped.map { "• " + ($0.title ?? "youtube.com/watch?v=\($0.youtubeID)") }.joined(separator: "\n")
+            openReport = "Opened \(opened) of \(items.count). \(skipped.count == 1 ? "This one wasn't" : "These \(skipped.count) weren't") opened because "
+                + "\(BrowserController.maxTabs) tabs are open, the most Video Buddy keeps:\n\(names)\nClose some tabs and try again."
+        }
+    }
+
+    /// Shows the Watch Later page, with an item selected.
+    func showWatchLater(select key: String? = nil) {
+        watchLaterFocus = key
+        section = .watchLater
     }
 
     /// The Tab menu's commands act only while the YouTube section is shown.

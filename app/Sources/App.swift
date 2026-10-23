@@ -47,6 +47,14 @@ struct AppCommands: Commands {
             Button("New Tab") { AppModel.shared.newBrowserTab() }.keyboardShortcut("t")
             Button("Reopen Closed Tab") { AppModel.shared.reopenTab() }.keyboardShortcut("t", modifiers: [.command, .shift])
             Button("Duplicate Tab") { AppModel.shared.inBrowser { b in if let t = b.tab { b.duplicate(t) } } }
+            // like Safari's Add Bookmark: the active tab's video (nothing is downloaded)
+            Button("Save to Watch Later") {
+                AppModel.shared.inBrowser { b in
+                    if let t = b.tab, let id = t.page.videoID { AppModel.shared.saveToWatchLater(id, from: t) }
+                    else { AppModel.shared.notice = "Open a video in this tab to save it to Watch Later." }
+                }
+            }
+            .keyboardShortcut("d")
             Divider()
             Button("Show Next Tab") { AppModel.shared.inBrowser { $0.selectTab(offset: 1) } }.keyboardShortcut(.tab, modifiers: .control)
             Button("Show Previous Tab") { AppModel.shared.inBrowser { $0.selectTab(offset: -1) } }
@@ -70,7 +78,7 @@ struct AppCommands: Commands {
             Button("Cancel Processing") { AppModel.shared.jobs.cancel() }.keyboardShortcut(".")
             Divider()
             Button("Find in Library") {
-                if ![.home, .library, .favorites].contains(AppModel.shared.section) { AppModel.shared.section = .library }
+                if ![.home, .library, .favorites, .watchLater].contains(AppModel.shared.section) { AppModel.shared.section = .library }
                 AppModel.shared.focusSearchToken += 1
             }
             .keyboardShortcut("f")

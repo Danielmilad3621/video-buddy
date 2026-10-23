@@ -121,6 +121,14 @@ private struct TabChip: View {
         .onHover { hover = $0 }
         .help(name)
         .contextMenu {
+            if let id {
+                if model.store.savedKeys.contains("youtube:\(id)") {
+                    Button("Remove from Watch Later") { model.removeFromWatchLater(["youtube:\(id)"]) }
+                } else {
+                    Button("Save to Watch Later") { model.saveToWatchLater(id, from: tab) }
+                }
+                Divider()
+            }
             Button("Duplicate Tab") { b.duplicate(tab) }
             Button("Move Tab Left") { b.move(tab, to: index - 1) }.disabled(index == 0)
             Button("Move Tab Right") { b.move(tab, to: index + 1) }.disabled(index == b.tabs.count - 1)
@@ -141,7 +149,7 @@ private struct TabChip: View {
 
     /// The page's title; a tab that hasn't loaded yet (opened behind) shows the library's title or what it is.
     private func title(_ id: String?) -> String {
-        if let t = tab.title.replacingOccurrences(of: " - YouTube", with: "").nilIfBlank { return t }
+        if let t = BrowserTab.cleanTitle(tab.title) { return t }
         if let id, let t = model.store.all.first(where: { $0.key == "youtube:\(id)" })?.title { return t }
         return id != nil ? "YouTube video" : tab.page.label
     }
@@ -273,7 +281,7 @@ private struct VideoActionBar: View {
     /// Thumbnail, title and every status that applies.
     private func info(_ a: VideoAvailability, _ g: DownloadGate.Decision?, _ checking: Bool) -> some View {
         let library = model.store.all.first { $0.key == "youtube:\(id)" }
-        let pageTitle = tab.titleURL == tab.url ? tab.title.replacingOccurrences(of: " - YouTube", with: "").nilIfBlank : nil
+        let pageTitle = tab.videoTitle
         return HStack(spacing: 10) {
             Thumbnail(url: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg", localPath: library?.thumbnailPath, cornerRadius: 6)
                 .frame(width: 64, height: 36)
@@ -311,11 +319,25 @@ private struct VideoActionBar: View {
     @ViewBuilder private func actions(_ a: VideoAvailability, _ g: DownloadGate.Decision?, _ mode: LabelMode) -> some View {
         let v = SlotState.video(a, g), au = SlotState.audio(a, g), su = SlotState.summary(a, g)
         HStack(spacing: 8) {
+            watchLaterSlot(mode)
             videoSlot(v, a, mode)
             if !(au == .offline && v == .offline) { slot(.audio, au, mode) }
             slot(.summary, su, mode)
             Toggle(mode == .icons ? "+T" : "+ Transcript", isOn: $transcribe).toggleStyle(AccentCheckboxStyle()).font(.callout)
                 .help("Downloads also get a transcript made on this Mac (no summary)").fixedSize()
+        }
+    }
+
+    /// Phase 3: Save to Watch Later (nothing is downloaded), or, once saved, the way to it.
+    @ViewBuilder private func watchLaterSlot(_ mode: LabelMode) -> some View {
+        let key = "youtube:\(id)"
+        if model.store.savedKeys.contains(key) {
+            button("In Watch Later", short: "Saved", icon: "checkmark.circle.fill", mode: mode, probe: "inWatchLater",
+                   help: "Saved to Watch Later. Click to see it; right-click to remove it") { model.showWatchLater(select: key) }
+                .contextMenu { Button("Remove from Watch Later") { model.removeFromWatchLater([key]) } }
+        } else {
+            button("Save to Watch Later", short: "Later", icon: "clock.badge.plus", outline: true, mode: mode, probe: "saveWatchLater",
+                   help: "Save to Watch Later (⌘D). Nothing is downloaded") { model.saveToWatchLater(id, from: tab) }
         }
     }
 
@@ -414,10 +436,13 @@ private struct VideoActionBar: View {
         }
     }
 
-    private func button(_ title: String, short: String, icon: String, primary: Bool = false, mode: LabelMode, probe: String,
-                        help: String? = nil, action: @escaping () -> Void) -> some View {
+    private func button(_ title: String, short: String, icon: String, primary: Bool = false, outline: Bool = false, mode: LabelMode,
+                        probe: String, help: String? = nil, action: @escaping () -> Void) -> some View {
         Group {
-            if primary {
+            if outline, mode != .icons {
+                Button(action: action) { Label(mode == .short ? short : title, systemImage: icon) }
+                    .buttonStyle(OutlineButtonStyle(height: 32))
+            } else if primary {
                 Button(action: action) { Label(mode == .short ? short : title, systemImage: icon) }
                     .buttonStyle(PrimaryButtonStyle(height: 32, font: .callout.weight(.semibold), iconOnly: mode == .icons))
             } else {

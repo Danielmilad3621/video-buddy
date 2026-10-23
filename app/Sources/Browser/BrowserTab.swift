@@ -49,6 +49,21 @@ final class BrowserTab: NSObject, Identifiable {
 
     var isAsleep: Bool { webView == nil }
 
+    /// The page's title for its video, or nil: only an awake tab's, read at its current address (YouTube changes the
+    /// address first when it moves to another video in-page, so an older title is never taken for the new video).
+    var videoTitle: String? {
+        guard webView != nil, titleURL == url else { return nil }
+        return Self.cleanTitle(title)
+    }
+
+    /// Without YouTube's unread count ("(3) ") and its " - YouTube" ending; nil for YouTube's own name or nothing.
+    nonisolated static func cleanTitle(_ raw: String) -> String? {
+        var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let count = t.range(of: #"^\(\d+\+?\)\s+"#, options: .regularExpression) { t.removeSubrange(count) }
+        if t.hasSuffix(" - YouTube") { t.removeLast(" - YouTube".count) }
+        return t == "YouTube" ? nil : t.nilIfBlank
+    }
+
     /// A tab starts asleep: it gets its web view when it's first shown.
     init(id: UUID = UUID(), url: URL?, title: String = "", state: Data? = nil) {
         self.id = id
