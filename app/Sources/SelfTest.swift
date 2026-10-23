@@ -900,6 +900,7 @@ enum SelfTest {
         check(try raw6.query("PRAGMA foreign_key_check").isEmpty && raw6.query("PRAGMA quick_check").first?.string("quick_check") == "ok",
               "after v6: no broken foreign keys, quick_check ok")
         try await offlineQueue(dir.appendingPathComponent("offline-queue"))
+        try await readyForOffline(dir.appendingPathComponent("ready"))
     }
 
     /// 4.0 Phase 4: the queue's new rules. No YouTube download without a declaration, whoever asks; a prepared
@@ -930,6 +931,52 @@ enum SelfTest {
         let second = try await db.lowSpaceStop(job)
         let stillRunning = try await db.queuedJobs().contains { $0.job.id == job } == false
         check(first == 1 && requeued && second == 2 && stillRunning, "low space: requeued the first time, not the second (the runner fails it)")
+    }
+
+    /// 4.0 Phase 4: Ready for Offline. ffprobe's answer read right, damaged files never "playable", a moved file found by
+    /// name and size, and Relink changing only paths (and the resume position), never a file.
+    private static func readyForOffline(_ dir: URL) async throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let probe = Data(#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1280,"height":720},{"codec_type":"audio","codec_name":"aac"}],"format":{"duration":"14.5"}}"#.utf8)
+        check(MediaInfo.from(ffprobe: probe) == MediaInfo(duration: 14.5, width: 1280, height: 720, videoCodec: "h264", audioCodec: "aac")
+              && MediaInfo.from(ffprobe: probe)?.quality == "720p", "ffprobe: length, resolution and codecs")
+        let cover = Data(#"{"streams":[{"codec_type":"video","codec_name":"mjpeg","width":300,"height":300},{"codec_type":"audio","codec_name":"mp3"}],"format":{"duration":"60"}}"#.utf8)
+        check(MediaInfo.from(ffprobe: cover)?.height == nil, "an MP3's cover picture isn't counted as video")
+        // a text file named .mp4, and an empty one: damaged, never playable
+        let fake = dir.appendingPathComponent("not really.mp4"), empty = dir.appendingPathComponent("empty.mp3")
+        try Data("hello".utf8).write(to: fake)
+        try Data().write(to: empty)
+        let before = try Data(contentsOf: fake)
+        let fakeState = await MediaChecker.quickCheck(fake.path), emptyState = await MediaChecker.quickCheck(empty.path)
+        check({ if case .damaged = fakeState { true } else { false } }() && { if case .damaged = emptyState { true } else { false } }(),
+              "a file that isn't media, or is empty, is damaged")
+        check(try Data(contentsOf: fake) == before, "checking never changes the file")
+        check(await MediaChecker.quickCheck(dir.appendingPathComponent("gone.mp4").path) == .missing, "a file that isn't there is missing")
+        // a moved file: same name and size in a subfolder
+        let sub = dir.appendingPathComponent("moved/deeper")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 123).write(to: sub.appendingPathComponent("clip.mp4"))
+        let found = MediaChecker.search([("/old/place/clip.mp4", 123), ("/old/place/other.mp4", nil)], in: dir.path)
+        check(found == ["/old/place/clip.mp4": sub.appendingPathComponent("clip.mp4").path], "a moved file is found by name and size, in a subfolder")
+        check(MediaChecker.search([("/old/place/clip.mp4", 999)], in: dir.path).isEmpty, "…but not with another size")
+        // Relink: the job and the resume position follow; refused for a missing or already used file
+        let db = try Database(directory: dir.appendingPathComponent("db"))
+        let newPath = sub.appendingPathComponent("clip.mp4").path
+        let rec = try await db.recordCompleted(key: "file:clip", url: nil, platform: nil, info: VideoInfo(title: "Clip"),
+                                               job: NewJob(kind: .video, status: .succeeded, source: .imported, finished: Date(), filePath: "/old/place/clip.mp4"))!
+        try await db.savePosition("/old/place/clip.mp4", position: 42, duration: 100)
+        let changed = try await db.relinkFile(from: "/old/place/clip.mp4", to: newPath)
+        let moved = try await db.files().first { $0.videoID == rec.video }?.path, position = await db.position(newPath)
+        check(changed == 1 && moved == newPath && position == 42, "Relink moves the record and the resume position, nothing else")
+        var refused = false
+        do { _ = try await db.relinkFile(from: newPath, to: dir.appendingPathComponent("nowhere.mp4").path) } catch { refused = true }
+        check(refused, "Relink is refused when the new file doesn't exist")
+        refused = false
+        do { _ = try await db.relinkFile(from: "/x.mp4", to: newPath) } catch { refused = true }
+        check(refused, "…or when another entry already uses it")
+        check(FileManager.default.fileExists(atPath: newPath), "Relink never moves or deletes the file")
+        // imported media is listed like downloaded media
+        check(try await db.files().contains { $0.path == newPath && $0.role == .video }, "imported media is in the files Ready for Offline lists")
     }
 
     /// Records a (test) declaration for these YouTube ids, as the declaration sheet would.

@@ -462,49 +462,82 @@ struct DownloadsList: View {
     @Environment(\.palette) private var p
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
-    @State private var show = Show.all
+    @AppStorage("downloadsShow") private var show = Show.ready
+    @AppStorage("offlineReserveGB") private var reserveGB = 10
 
-    enum Show: String, CaseIterable { case all = "All", available = "Available", missing = "Missing" }
+    /// 4.0 Phase 4 (Offline Hub): Ready = on this Mac and not found damaged; Problems = missing or damaged; Preparing =
+    /// downloads waiting, running or failed; All = every registered file.
+    enum Show: String, CaseIterable { case ready = "Ready", problems = "Problems", preparing = "Preparing", all = "All" }
 
     var body: some View {
-        let store = model.store
+        let store = model.store, checker = model.media
+        // every registered file of every source (downloads, Raycast, import), by role: video, audio, transcript, summary
         let media = store.files.filter(\.isMedia)
         let onDisk = media.filter(\.exists)
         let usedBytes = onDisk.reduce(0) { $0 + (Self.diskSize($1.path) ?? 0) }
-        let items = media.filter {
-            (show == .all || (show == .available) == $0.exists)
-                && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ($0.videoTitle ?? "").localizedCaseInsensitiveContains(query)
-                    || store.playlistsOf($0.videoID).contains { $0.name.localizedCaseInsensitiveContains(query) })
+        let problem = { (f: FileItem) -> Bool in
+            if case .damaged = checker.state(f.path) { return true }
+            return !f.exists
+        }
+        let preparing = Set(store.all.filter { v in
+            let a = Self.youtubeAvailability(model, v)
+            return [a.video, a.audio].contains { $0 != .none }
+        }.map(\.id))
+        let items = media.filter { f in
+            let inShow = switch show {
+            case .ready: !problem(f)
+            case .problems: problem(f)
+            case .preparing: preparing.contains(f.videoID)
+            case .all: true
+            }
+            return inShow && (query.isEmpty || f.name.localizedCaseInsensitiveContains(query) || (f.videoTitle ?? "").localizedCaseInsensitiveContains(query)
+                              || store.playlistsOf(f.videoID).contains { $0.name.localizedCaseInsensitiveContains(query) })
         }
         let byVideo = Dictionary(grouping: items, by: \.videoID)
-        let videos = store.all.filter { byVideo[$0.id] != nil }
+        // Preparing also lists videos with nothing on this Mac yet
+        let videos = store.all.filter { byVideo[$0.id] != nil || (show == .preparing && preparing.contains($0.id)
+                                                                     && (query.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(query))) }
         let g = Grouping.make(videos, playlists: store.playlists, members: store.members)
+        let counts: [Show: Int] = [.ready: media.filter { !problem($0) }.count, .problems: media.filter(problem).count,
+                                   .preparing: preparing.count, .all: media.count]
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Downloads", icon: "arrow.down.to.line")
-            // what your saved audio and video take up, and what's left, for planning a flight
+            HStack {
+                SectionHeader(title: "Downloads", icon: "arrow.down.to.line")
+                Spacer()
+                prepareMenu
+            }
+            // what your saved audio and video take up, and what's left, for planning a trip
             HStack(spacing: 6) {
                 Image(systemName: "internaldrive").foregroundStyle(p.secondary)
                 Text((["\(store.videoOnMacIDs.count) videos offline", "\(onDisk.count) files", Fmt.bytes(usedBytes)]
-                      + [model.freeDiskSpace.map { "\(Fmt.bytes(Int($0))) free" }].compactMap { $0 }).compactMap { $0 }.joined(separator: " • "))
+                      + [model.freeDiskSpace.map { "\(Fmt.bytes(Int($0))) free" }, "keeping \(reserveGB) GB"]).compactMap { $0 }.joined(separator: " • "))
+                Spacer(minLength: 6)
+                Button { checker.check(onDisk.map(\.path)) } label: {
+                    Label(checker.running == nil ? "Check Files" : "Checking…", systemImage: "checkmark.shield")
+                }
+                .buttonStyle(SecondaryButtonStyle(height: 26, font: .caption.weight(.semibold)))
+                .help("Checks that each file opens and plays here (read-only; a quick check, not a full decode). Right-click a file for a deep check.")
+                .testProbe("checkFiles")
             }
             .font(.callout).foregroundStyle(p.secondary)
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .contain)
             SearchField(text: $query, prompt: "Search downloads or playlists…")
             HStack(spacing: 7) {
                 ForEach(Show.allCases, id: \.self) { s in
-                    let n = s == .all ? media.count : s == .available ? onDisk.count : media.count - onDisk.count
-                    ChipButton(title: "\(s.rawValue) \(n)", selected: show == s) { show = s }
+                    ChipButton(title: "\(s.rawValue) \(counts[s] ?? 0)", selected: show == s) { show = s }
                 }
             }
-            if items.isEmpty {
-                EmptyState(icon: "arrow.down.circle", title: media.isEmpty ? "No downloads yet" : "Nothing here",
-                           message: media.isEmpty ? "Audio and video you save appear here with their size and location."
-                                                  : "No downloads match this filter.")
+            if videos.isEmpty {
+                EmptyState(icon: show == .problems ? "checkmark.seal" : "arrow.down.circle",
+                           title: media.isEmpty && show != .preparing ? "No downloads yet" : show == .problems ? "No problems" : "Nothing here",
+                           message: show == .problems ? "Every registered file is where the library expects it, and none was found damaged."
+                               : show == .preparing ? "Nothing is waiting to download. Prepare for Offline queues videos from Watch Later or a playlist."
+                               : media.isEmpty ? "Audio and video you save appear here with their size, quality and location." : "No downloads match this filter.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(g.groups) { group in
-                            let open = !query.isEmpty || store.expanded.contains(group.playlist.id)
+                            let open = !query.isEmpty || store.expanded.contains(group.playlist.id) || show != .ready
                             header(group.playlist, open: open)
                             if open {
                                 ForEach(group.videos) { v in
@@ -525,6 +558,44 @@ struct DownloadsList: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        // files you have are checked in the background (read-only); missing ones are looked for in the downloads folder
+        .onAppear {
+            checker.check(onDisk.map(\.path))
+            checker.lookForMoved(media, in: AppSettings.downloadDir)
+        }
+        .onChange(of: store.files) { checker.lookForMoved(store.files.filter(\.isMedia), in: AppSettings.downloadDir) }
+        .alert("Relink this file?", isPresented: Binding(get: { model.pendingRelink != nil }, set: { if !$0 { model.pendingRelink = nil } })) {
+            Button("Relink") { model.confirmRelink() }.testProbe("confirmRelink")
+            Button("Cancel", role: .cancel) { model.pendingRelink = nil }
+        } message: {
+            Text("Video Buddy's record of “\(model.pendingRelink?.file.name ?? "")” will point to\n\(model.pendingRelink?.to ?? "")\nThe file isn't moved, renamed or changed, and its resume position comes along.")
+        }
+    }
+
+    /// Prepare for Offline from Watch Later or a playlist (the videos not on this Mac yet).
+    private var prepareMenu: some View {
+        let store = model.store
+        let later = store.watchLater.filter { model.availability(youtubeID: $0.youtubeID).videoFile == nil }
+        return Menu {
+            Button("From Watch Later (\(later.count))") { model.prepareForOffline(later.map { (id: $0.youtubeID, title: $0.title) }, from: "Watch Later") }
+                .disabled(later.isEmpty)
+            if !store.playlists.isEmpty {
+                Divider()
+                ForEach(store.playlists) { pl in
+                    Button("From “\(pl.name)”") { model.askDownloadMissing(pl.id) }
+                }
+            }
+        } label: {
+            Label("Prepare for Offline…", systemImage: "arrow.down.circle")
+        }
+        .menuStyle(.button).fixedSize()
+        .help("Choose videos to download, with their checks, sizes and your free space; nothing starts until you queue them")
+        .testProbe("prepareMenu")
+    }
+
+    /// A YouTube entry's availability (what the Preparing tab lists).
+    static func youtubeAvailability(_ model: AppModel, _ v: Video) -> VideoAvailability {
+        AppModel.youtubeID(v).map { model.availability(youtubeID: $0) } ?? VideoAvailability()
     }
 
     /// The playlist's own numbers (unique videos, not files), whatever the filter shows.
@@ -593,6 +664,7 @@ struct VideoFilesRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(video.displayTitle).font(.callout.weight(.semibold)).lineLimit(2)
                 ForEach(files.sorted { ($0.role == .video ? 0 : 1, $0.name) < ($1.role == .video ? 0 : 1, $1.name) }) { f in line(f) }
+                extras
             }
             Spacer(minLength: 0)
         }
@@ -605,28 +677,77 @@ struct VideoFilesRow: View {
         .accessibilityLabel(video.displayTitle)
     }
 
+    /// 4.0 Phase 4: a media file with its format, size, quality and length (once checked), what the check found, and
+    /// what you can do: play it, show it, or for a missing one relink it (after you confirm) or download it again.
     private func line(_ f: FileItem) -> some View {
         let exists = f.exists
         let format = (f.path as NSString).pathExtension.uppercased()
-        return HStack(spacing: 8) {
-            Image(systemName: f.role == .video ? "film" : "music.note").foregroundStyle(exists ? p.accent : p.secondary).frame(width: 14)
-            Text(([format.isEmpty ? f.role.rawValue : format, Fmt.bytes(f.size ?? (exists ? DownloadsList.diskSize(f.path) : nil))] as [String?])
-                .compactMap { $0 }.joined(separator: " • "))
-                .font(.caption.monospacedDigit()).foregroundStyle(p.secondary)
-            Text(exists ? "Available" : "Missing")
-                .font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 1)
-                .foregroundStyle(exists ? p.green : p.accent)
-                .background(Capsule().fill((exists ? p.green : p.accent).opacity(0.15)))
-            Spacer(minLength: 4)
-            if exists {
-                IconButton(icon: "play.circle", label: "Open \(f.name)", size: 22) { FileOps.open(f.path) }
-                IconButton(icon: "folder", label: "Show in Finder", size: 22) { FileOps.reveal(f.path) }
-            } else if video.url != nil {
-                Button("Download Again") { model.downloadAgain(video, kind: f.role == .video ? .video : .audio) }
-                    .buttonStyle(.link).tint(p.accent).font(.caption)
+        let state = model.media.state(f.path)
+        let info = state.info
+        let tone: Color = switch state {
+        case .opensHere, .fullyChecked: p.green
+        case .opensElsewhere, .notChecked, .checking: p.secondary
+        case .missing, .damaged: p.orange
+        }
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Image(systemName: f.role == .video ? "film" : "music.note").foregroundStyle(exists ? p.accent : p.secondary).frame(width: 14)
+                Text(([f.role == .video ? "Video" : "Audio", info?.quality, format.isEmpty ? nil : format,
+                       Fmt.bytes(f.size ?? (exists ? DownloadsList.diskSize(f.path) : nil)), info?.duration.flatMap(Fmt.duration)] as [String?])
+                    .compactMap { $0 }.joined(separator: " • "))
+                    .font(.caption.monospacedDigit()).foregroundStyle(p.secondary).lineLimit(1)
+                Spacer(minLength: 4)
+                if state.usable || state == .notChecked || state == .checking {
+                    if f.isPlayable, !state.opensElsewhere {
+                        Button(f.role == .video ? "Play Offline" : "Play Audio") { model.playFile(f) }
+                            .buttonStyle(.link).tint(p.accent).font(.caption.weight(.semibold))
+                    } else {
+                        IconButton(icon: "arrow.up.forward.app", label: "Open \(f.name) in another app", size: 22) { FileOps.open(f.path) }
+                    }
+                    IconButton(icon: "folder", label: "Show in Finder", size: 22) { FileOps.reveal(f.path) }
+                } else if case .missing = state {
+                    if let found = model.media.foundElsewhere[f.path] {
+                        Button("Relink…") { model.pendingRelink = (f, found) }.buttonStyle(.link).tint(p.accent).font(.caption.weight(.semibold))
+                            .help("A file with this name is at \(found)")
+                    }
+                    Button("Locate…") { model.locate(f) }.buttonStyle(.link).font(.caption)
+                }
+                if !state.usable, state != .notChecked, state != .checking, video.url != nil {
+                    Button("Download Again") { model.downloadAgain(video, kind: f.role == .video ? .video : .audio) }
+                        .buttonStyle(.link).tint(p.accent).font(.caption)
+                }
             }
+            Text(state == .missing && model.media.foundElsewhere[f.path] != nil
+                 ? "Missing here; a file of the same name is at \(model.media.foundElsewhere[f.path] ?? "")" : state.label)
+                .font(.caption2.weight(.semibold)).foregroundStyle(tone).lineLimit(2).padding(.leading, 22)
         }
         .help(f.path)
+        .contextMenu {
+            if exists {
+                Button("Check Again") { model.media.check([f.path], again: true) }
+                Button("Deep Check (decode every frame)") { model.media.check([f.path], deep: true, again: true) }
+                Button("Show in Finder") { FileOps.reveal(f.path) }
+            }
+            Button("Open in Library") { model.open(video, tab: .downloads); model.section = .library }
+            if !exists { Button("Locate…") { model.locate(f) } }
+        }
+    }
+
+    /// The video's transcript and summary, when the library has them.
+    @ViewBuilder private var extras: some View {
+        let texts = model.store.files(for: video.id).filter { !$0.isMedia }
+        let transcript = texts.contains { $0.role == .transcript && $0.exists }
+        let summary = video.hasSummary || texts.contains { $0.role == .summary && $0.exists }
+        if transcript || summary {
+            HStack(spacing: 10) {
+                if summary { Label("Summary", systemImage: "sparkles").foregroundStyle(p.accent) }
+                if transcript { Label("Transcript", systemImage: "text.quote").foregroundStyle(p.secondary) }
+                Spacer(minLength: 0)
+                Button("Open in Library") { model.open(video, tab: summary ? .summary : .transcript); model.section = .library }
+                    .buttonStyle(.link).font(.caption)
+            }
+            .font(.caption2.weight(.semibold))
+        }
     }
 }
 

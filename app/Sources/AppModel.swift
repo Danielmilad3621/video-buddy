@@ -746,6 +746,47 @@ final class AppModel {
         }
     }
 
+    // MARK: Ready for Offline (4.0 Phase 4)
+
+    /// Checks registered media files (read-only).
+    let media = MediaChecker()
+    /// Locate… / Relink, waiting for your confirmation: the file the library has, and where it is now.
+    var pendingRelink: (file: FileItem, to: String)?
+
+    /// Locate…: you pick where the file is now; nothing changes until you confirm.
+    func locate(_ f: FileItem) {
+        let panel = NSOpenPanel()
+        panel.message = "Where is “\(f.name)” now? Only Video Buddy's record changes; the file isn't moved or renamed."
+        panel.directoryURL = URL(fileURLWithPath: (f.path as NSString).deletingLastPathComponent)
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        pendingRelink = (f, url.path)
+    }
+
+    /// After you confirm: the library's record (and resume position) points at the file's new place.
+    func confirmRelink() {
+        guard let r = pendingRelink else { return }
+        pendingRelink = nil
+        Task {
+            do {
+                _ = try await store.db.relinkFile(from: r.file.path, to: r.to)
+                media.forget(r.file.path)
+                await store.reload()
+                media.check([r.to])
+                notice = "Relinked “\(r.file.name)” to \(r.to) (it was \(r.file.path)). No file was moved."
+            } catch {
+                notice = "Not relinked: \(error)"
+            }
+        }
+    }
+
+    /// The "Play Offline" / "Play Audio" of a file row: that file, in the built-in player.
+    func playFile(_ f: FileItem) {
+        store.select(f.videoID)
+        playback.play(path: f.path, videoID: f.videoID)
+    }
+
     // MARK: Prepare for Offline (4.0 Phase 4)
 
     /// The Prepare sheet, when open.

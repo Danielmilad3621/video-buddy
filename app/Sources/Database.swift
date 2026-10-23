@@ -388,6 +388,24 @@ actor Database {
 
     func setOwnChannels(_ list: [String]) throws { try setMeta("own_channels", list.joined(separator: ",")) }
 
+    // MARK: Offline Hub (4.0 Phase 4)
+
+    /// A registered file that moved: the jobs (and the resume position) that named the old path now name the new one, in
+    /// one transaction. Only paths change: no file is touched. Refused if the new file doesn't exist, or another entry
+    /// already uses it. Returns how many job paths changed.
+    func relinkFile(from old: String, to new: String) throws -> Int {
+        guard FileManager.default.fileExists(atPath: new) else { throw SQLiteError(message: "the new file doesn't exist") }
+        return try db.transaction {
+            let taken = try db.query("SELECT 1 AS x FROM jobs WHERE file_path=?1 OR summary_path=?1 OR transcript_path=?1 LIMIT 1", [new])
+            guard taken.isEmpty else { throw SQLiteError(message: "another entry already uses that file") }
+            let n = try db.run("UPDATE jobs SET file_path=? WHERE file_path=?", [new, old])
+                + db.run("UPDATE jobs SET summary_path=? WHERE summary_path=?", [new, old])
+                + db.run("UPDATE jobs SET transcript_path=? WHERE transcript_path=?", [new, old])
+            try db.run("UPDATE OR IGNORE playback SET file_path=? WHERE file_path=?", [new, old])
+            return n
+        }
+    }
+
     // MARK: Watch Later (4.0 Phase 3)
 
     /// Everything saved, newest first.

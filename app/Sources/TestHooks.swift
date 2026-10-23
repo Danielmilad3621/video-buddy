@@ -298,6 +298,21 @@ enum TestHooks {
                 }
             }
         case "forgetChecks": model.browser.checker.recheckAll(arg.split(separator: ",").map(String.init)); model.browser.checker.cancelBatch()
+        // 4.0 Phase 4: Ready for Offline
+        case "setDefault":
+            // "<key>|<value>": a setting, as the app's controls would set it
+            let f = arg.split(separator: "|", maxSplits: 1).map(String.init)
+            if f.count == 2 { UserDefaults.standard.set(f[1], forKey: f[0]) }
+        case "mediaCheck":
+            // "all", "again", or "deep <file name>"
+            let media = store.files.filter(\.isMedia)
+            if arg == "all" || arg == "again" { model.media.check(media.filter(\.exists).map(\.path), again: arg == "again") }
+            else if arg.hasPrefix("deep "), let f = media.first(where: { $0.name == String(arg.dropFirst(5)) }) { model.media.check([f.path], deep: true, again: true) }
+        case "lookForMoved": model.media.lookForMoved(store.files.filter(\.isMedia), in: AppSettings.downloadDir)
+        case "relinkFound":
+            // "<file name>": the Relink… button of that missing file (then confirmRelink, as the alert's button)
+            if let f = store.files.first(where: { $0.name == arg }), let to = model.media.foundElsewhere[f.path] { model.pendingRelink = (f, to) }
+        case "confirmRelink": model.confirmRelink()
         case "memoryWarning": model.browser.memoryWarning()
         case "cookieNames":
             // the YouTube data store's cookie names and count, never their values (sign-in survives a restart)
@@ -596,6 +611,11 @@ enum TestHooks {
             "openReport": model.openReport ?? "",
             "watchedFolders": store.watchedFolders,
             "onMacCount": store.onMacIDs.count, "reloads": store.reloads,
+            "media": store.files.filter(\.isMedia).map { f in
+                "\(f.name) | \(model.media.state(f.path).label) | \(model.media.state(f.path).info?.quality ?? "-") | \(model.media.state(f.path).info?.duration.map { String(Int($0)) } ?? "-")"
+                    + (model.media.foundElsewhere[f.path].map { " | found at \($0)" } ?? "")
+            },
+            "pendingRelink": model.pendingRelink.map { "\($0.file.name) → \($0.to)" } ?? "",
             "closedTabs": model.browser.closed.count,
             "contextMenu": TabWebView.lastMenu,
             "liveTabs": model.browser.tabs.filter { !$0.isAsleep }.count,
