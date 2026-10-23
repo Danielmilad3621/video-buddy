@@ -1153,6 +1153,11 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - **Test build:** its store, caches, settings and app were removed.
     - **Unchanged since the Phase 3 install:** 3.1, production (from a copy), `~/Downloads/cobalt` and 3.1's settings.
     - **Your Preview:** it differs only by what you did in it on Oct 23 (2 Watch Later items, a declaration, 2 cancelled jobs, your tabs).
+  - **Installed:**
+    - **Version:** the Preview was rebuilt at `76bc29e` (309 self-tests inside its bundle), quit gracefully, and opened in front on Downloads.
+    - **Migration:** its database went v5 → v6 after a verified `history-pre-v6-…` backup (v5, `quick_check ok`). Every count is the same and there are no broken foreign keys. Watch Later, declarations, videos and jobs are row for row the same, except one missing title: the existing launch step `backfillMetadata` looked it up for your video whose two jobs were cancelled.
+    - **Kept:** `tabs.json`, the sign-in store, the settings (including Background audio) and the samples. The queue is still locked, and no 3.1 file is open.
+    - **Screenshot:** `4.0-p4-04-preview-installed.png`.
   - **Screenshots:** `design/screenshots/4.0-p4-*`.
 
 ### Not verified
