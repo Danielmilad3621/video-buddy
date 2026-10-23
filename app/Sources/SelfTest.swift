@@ -717,6 +717,37 @@ enum SelfTest {
               && !FakeRunner.allowed(bundleID: FakeRunner.testBundleID, env: ["VS_DATA_DIR": "/tmp/x"]), "never without a throwaway data folder, or unasked")
         check(SizeEstimate.text(412_000_000, .known) == Fmt.bytes(412_000_000) && SizeEstimate.text(412_000_000, .approximate).hasPrefix("≈ ")
               && SizeEstimate.text(nil, .unknown) == "size unknown", "sizes say whether they're known, approximate or unknown")
+        // estimates from yt-dlp's formats: the best at or below the quality, H.264 first, plus the audio
+        let mb: Int64 = 1_000_000
+        let F = MediaFacts.Format.self
+        let facts = MediaFacts(duration: 600, formats: [
+            F.init(height: 480, vcodec: "avc1.4d401e", acodec: "none", filesize: 60 * mb),
+            F.init(height: 720, vcodec: "avc1.4d401f", acodec: "none", filesize: 120 * mb),
+            F.init(height: 720, vcodec: "vp09.00.31.08", acodec: "none", filesize: 90 * mb),
+            F.init(height: 1080, vcodec: "vp09.00.40.08", acodec: "none", filesize: 200 * mb),
+            F.init(vcodec: "none", acodec: "mp4a.40.2", filesize: 9 * mb, tbr: 128)])
+        let v720 = SizeEstimate.video(facts, quality: "720"), v480 = SizeEstimate.video(facts, quality: "480")
+        check(v720.bytes == 129 * mb && v720.kind == .known && v720.height == 720, "720p: the H.264 720p plus the audio, a known size")
+        check(v480.bytes == 69 * mb && v480.height == 480, "480p: the 480p plus the audio")
+        let best = SizeEstimate.video(facts, quality: "max")
+        check(best.height == 720, "H.264 comes first, as the download script asks (the 1080p here is VP9 only)")
+        var approx = facts; approx.formats = approx.formats.map { var f = $0; f.filesizeApprox = f.filesize; f.filesize = nil; return f }
+        check(SizeEstimate.video(approx, quality: "720").kind == .approximate, "YouTube's approximate sizes stay approximate")
+        var rate = facts; rate.formats = [F.init(height: 720, vcodec: "avc1", acodec: "mp4a", tbr: 1000)]
+        check(SizeEstimate.video(rate, quality: "720") == (75 * mb, .approximate, 720), "only a bitrate: bitrate × length, approximate")
+        var none = facts; none.duration = nil; none.formats = [F.init(height: 720, vcodec: "avc1", acodec: "none"), F.init(vcodec: "none", acodec: "mp4a")]
+        check(SizeEstimate.video(none, quality: "720").kind == .unknown && SizeEstimate.audio(none).kind == .unknown, "no sizes, no length: unknown")
+        check(SizeEstimate.audio(facts) == (9_750_000, .approximate), "audio as MP3: length × 130 kbit/s, approximate")
+        check(facts.maxHeight == 1080 && SizeEstimate.video(facts, quality: "1080").height == 720, "a video's best resolution, and what 'up to' gives")
+        // totals: everything before the last job plus twice the largest, keeping the reserve; unknown sizes don't count
+        let t = PrepareTotals([(100 * mb, .known), (50 * mb, .approximate), (nil, .unknown)])
+        check(t.bytes == 150 * mb && t.approximate && t.unknown == 1 && t.largest == 100 * mb, "totals: known and approximate added, unknown counted")
+        check(t.shortfall(tempFree: nil, finalFree: 10_250 * mb, sameVolume: true, reserve: 10_000 * mb) == nil
+              && t.shortfall(tempFree: nil, finalFree: 10_249 * mb, sameVolume: true, reserve: 10_000 * mb) != nil,
+              "fits only with room to put the largest together, above the reserve")
+        check(t.shortfall(tempFree: 10_150 * mb, finalFree: 20_000 * mb, sameVolume: false, reserve: 10_000 * mb) != nil
+              && t.shortfall(tempFree: 10_200 * mb, finalFree: 10_150 * mb, sameVolume: false, reserve: 10_000 * mb) == nil,
+              "two volumes: the downloads disk takes the total, the temporary one twice the largest")
     }
 
     /// Watch Later's page: search, sort, titles that are never empty or wrong, the row's main button, status words.
@@ -749,7 +780,7 @@ enum SelfTest {
     @MainActor private static func checkerRapidNavigation() async {
         let checker = AvailabilityChecker { id in
             try? await Task.sleep(for: .milliseconds(id == "A" ? 120 : 250))
-            return .passed(channelID: id, handle: nil, channel: nil)
+            return CheckAnswer(check: .passed(channelID: id, handle: nil, channel: nil))
         }
         checker.settle = .milliseconds(10)
         checker.show("A", needed: true)

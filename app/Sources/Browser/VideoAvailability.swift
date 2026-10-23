@@ -129,7 +129,45 @@ enum DownloadGate {
     }
 }
 
-/// 4.0 Phase 4: a download's size in words, saying how sure it is.
+/// 4.0 Phase 4: what yt-dlp's metadata says about a video's formats and length (nothing downloaded), for size estimates.
+struct MediaFacts: Equatable {
+    struct Format: Equatable {
+        var height: Int?
+        var vcodec: String?
+        var acodec: String?
+        var filesize: Int64?
+        var filesizeApprox: Int64?
+        var tbr: Double?           // kbit/s
+        var hasVideo: Bool { (vcodec ?? "none") != "none" && height != nil }
+        var hasAudio: Bool { (acodec ?? "none") != "none" }
+    }
+    var duration: Double?
+    var formats: [Format]
+    /// The highest resolution it comes in.
+    var maxHeight: Int? { formats.filter(\.hasVideo).compactMap(\.height).max() }
+
+    static func from(json: Data?) -> MediaFacts? {
+        struct Raw: Decodable {
+            struct F: Decodable {
+                let height: Int?, vcodec: String?, acodec: String?, filesize: Int64?, filesize_approx: Int64?, tbr: Double?
+            }
+            let duration: Double?
+            let formats: [F]?
+        }
+        guard let json, let r = try? JSONDecoder().decode(Raw.self, from: json) else { return nil }
+        return MediaFacts(duration: r.duration, formats: (r.formats ?? []).map {
+            Format(height: $0.height, vcodec: $0.vcodec, acodec: $0.acodec, filesize: $0.filesize, filesizeApprox: $0.filesize_approx, tbr: $0.tbr)
+        })
+    }
+}
+
+/// A check's answer: the technical restrictions, and what it says about sizes (when it could read them).
+struct CheckAnswer: Equatable {
+    var check: PlatformCheck
+    var facts: MediaFacts?
+}
+
+/// 4.0 Phase 4: how big a download will be, and how sure that is. Pure (self-tested).
 enum SizeEstimate {
     static func text(_ bytes: Int64?, _ kind: SizeKind) -> String {
         switch (bytes, kind) {
@@ -137,6 +175,75 @@ enum SizeEstimate {
         case let (b?, _): "≈ " + Fmt.bytes(Int(b))
         default: "size unknown"
         }
+    }
+
+    /// A format's size: given (known), YouTube's approximation, or bitrate × length (approximate).
+    static func size(_ f: MediaFacts.Format, duration: Double?) -> (Int64?, SizeKind) {
+        if let b = f.filesize { return (b, .known) }
+        if let b = f.filesizeApprox { return (b, .approximate) }
+        if let t = f.tbr, let d = duration { return (Int64(t * 1000 / 8 * d), .approximate) }
+        return (nil, .unknown)
+    }
+
+    /// The least sure of two sizes, added together.
+    static func sum(_ a: (Int64?, SizeKind), _ b: (Int64?, SizeKind)) -> (Int64?, SizeKind) {
+        guard let x = a.0, let y = b.0 else { return (nil, .unknown) }
+        return (x + y, a.1 == .known && b.1 == .known ? .known : .approximate)
+    }
+
+    /// Video at `quality` ("480"…"1080", "max", nil = 1080): the best video at or below it, H.264 first (as the
+    /// download script asks for), plus the best audio unless the format already has it.
+    static func video(_ f: MediaFacts, quality: String?) -> (bytes: Int64?, kind: SizeKind, height: Int?) {
+        let cap = quality == "max" ? Int.max : Int(quality ?? "") ?? 1080
+        let fit = f.formats.filter { $0.hasVideo && ($0.height ?? 0) <= cap }
+        let h264 = fit.filter { ($0.vcodec ?? "").hasPrefix("avc1") }
+        let pool = h264.isEmpty ? fit : h264
+        guard let best = pool.max(by: { (($0.height ?? 0), $0.tbr ?? 0) < (($1.height ?? 0), $1.tbr ?? 0) }) else { return (nil, .unknown, nil) }
+        var total = size(best, duration: f.duration)
+        if !best.hasAudio {
+            let audio = f.formats.filter { $0.hasAudio && !$0.hasVideo }.max { ($0.tbr ?? 0) < ($1.tbr ?? 0) }
+            total = audio.map { sum(total, size($0, duration: f.duration)) } ?? (nil, .unknown)
+        }
+        return (total.0, total.1, best.height)
+    }
+
+    /// Audio as MP3 (the script converts it): length × about 130 kbit/s, yt-dlp's default MP3 quality.
+    static func audio(_ f: MediaFacts) -> (bytes: Int64?, kind: SizeKind) {
+        guard let d = f.duration, d > 0 else { return (nil, .unknown) }
+        return (Int64(d * 130_000 / 8), .approximate)
+    }
+}
+
+/// 4.0 Phase 4: what a selection of downloads adds up to, and whether it fits while keeping your reserve. One job runs
+/// at a time, so the most room is needed while the last one is put together: everything before it, plus twice it.
+struct PrepareTotals: Equatable {
+    var bytes: Int64 = 0            // known and approximate sizes together
+    var approximate = false
+    var unknown = 0                 // how many have no size at all
+    var largest: Int64 = 0
+
+    init(_ rows: [(bytes: Int64?, kind: SizeKind)]) {
+        for r in rows {
+            guard let b = r.bytes else { unknown += 1; continue }
+            bytes += b
+            largest = max(largest, b)
+            if r.kind != .known { approximate = true }
+        }
+    }
+
+    /// Why it doesn't fit, or nil. Unknown sizes count as nothing here: for them the reserve is best effort.
+    func shortfall(tempFree: Int64?, finalFree: Int64?, sameVolume: Bool, reserve: Int64) -> String? {
+        if sameVolume {
+            guard let f = finalFree, f - reserve < bytes + largest else { return nil }
+            return "needs about \(Fmt.bytes(Int(bytes + largest))) with room to put the largest together; \(Fmt.bytes(Int(max(f - reserve, 0)))) is free above your reserve"
+        }
+        if let f = finalFree, f - reserve < bytes {
+            return "needs about \(Fmt.bytes(Int(bytes))) on the downloads disk; \(Fmt.bytes(Int(max(f - reserve, 0)))) is free above your reserve"
+        }
+        if let t = tempFree, t - reserve < 2 * largest {
+            return "the temporary folder's disk needs about \(Fmt.bytes(Int(2 * largest))) to put the largest together"
+        }
+        return nil
     }
 }
 
@@ -239,11 +346,45 @@ final class AvailabilityChecker {
     @ObservationIgnored private var checkedAt: [String: Date] = [:]
     private(set) var current: String?
     private(set) var running: String?
-    @ObservationIgnored var fetch: (String) async -> PlatformCheck
+    /// 4.0 Phase 4: what each check said about sizes (Prepare for Offline's estimates).
+    private(set) var facts: [String: MediaFacts] = [:]
+    /// The video Prepare for Offline is checking now (one at a time).
+    private(set) var batchRunning: String?
+    @ObservationIgnored var fetch: (String) async -> CheckAnswer
     @ObservationIgnored var settle: Duration = .milliseconds(800)
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var batch: Task<Void, Never>?
 
-    init(fetch: @escaping (String) async -> PlatformCheck) { self.fetch = fetch }
+    init(fetch: @escaping (String) async -> CheckAnswer) { self.fetch = fetch }
+
+    private func store(_ id: String, _ a: CheckAnswer) {
+        results[id] = a.check
+        if let f = a.facts { facts[id] = f }
+        checkedAt[id] = Date()
+    }
+
+    /// 4.0 Phase 4: checks several videos one after another (Prepare for Offline), each result under its own id as it
+    /// arrives; ones already checked (with sizes) within `maxAge` are skipped. A new batch, or cancelBatch, stops it.
+    func checkAll(_ ids: [String], maxAge: TimeInterval = 30 * 60) {
+        batch?.cancel()
+        batch = Task { [weak self] in
+            for id in ids {
+                guard let self, !Task.isCancelled else { return }
+                if self.results[id] != nil, self.facts[id] != nil, let at = self.checkedAt[id], Date().timeIntervalSince(at) < maxAge { continue }
+                self.batchRunning = id
+                let answer = await self.fetch(id)
+                guard !Task.isCancelled else { return }
+                self.store(id, answer)
+            }
+            self?.batchRunning = nil
+        }
+    }
+
+    func cancelBatch() {
+        batch?.cancel()
+        batch = nil
+        batchRunning = nil
+    }
 
     /// The tab shows `id` now (nil: not a video). `needed` is false when nothing would be downloaded anyway.
     func show(_ id: String?, needed: Bool) {
@@ -261,8 +402,7 @@ final class AvailabilityChecker {
             self.running = id
             let result = await self.fetch(id)
             guard !Task.isCancelled else { return }
-            self.results[id] = result        // under its own id, whatever is on screen by now
-            self.checkedAt[id] = Date()
+            self.store(id, result)           // under its own id, whatever is on screen by now
             if self.running == id { self.running = nil }
             if self.current == id { self.task = nil }
         }
@@ -272,9 +412,8 @@ final class AvailabilityChecker {
     func fresh(_ id: String, maxAge: TimeInterval) async -> PlatformCheck {
         if let r = results[id], let at = checkedAt[id], Date().timeIntervalSince(at) < maxAge { return r }
         let r = await fetch(id)
-        results[id] = r
-        checkedAt[id] = Date()
-        return r
+        store(id, r)
+        return r.check
     }
 
     func recheck(_ id: String) {

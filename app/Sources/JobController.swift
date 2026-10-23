@@ -625,14 +625,24 @@ enum FakeRunner {
         return file.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }.flatMap { Int64($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    /// The technical check, from the test's control file ("<id> blocked" / "<id> unknown"); otherwise it passes.
-    static func check(_ id: String) -> PlatformCheck {
+    /// The technical check, from the test's control file ("<id> blocked|unknown|nosize|approx|720max"); otherwise it
+    /// passes, with known sizes (a 10-minute video: 480p 60 MB, 720p 120 MB, 1080p 250 MB, audio 9 MB).
+    static func check(_ id: String) -> CheckAnswer {
         let lines = (ProcessInfo.processInfo.environment["VS_FAKE_CONTROL"]).flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
-        let says = lines.split(separator: "\n").last { $0.hasPrefix(id + " ") }.map { $0.split(separator: " ").dropFirst().joined(separator: " ") }
+        let says = lines.split(separator: "\n").last { $0.hasPrefix(id + " ") }.map { $0.split(separator: " ").dropFirst().joined(separator: " ") } ?? ""
+        let mb: Int64 = 1_000_000
+        var formats = [(480, 60 * mb), (720, 120 * mb), (1080, 250 * mb)].map {
+            MediaFacts.Format(height: $0.0, vcodec: "avc1.4d401f", acodec: "none", filesize: $0.1, tbr: Double($0.1 * 8) / 600_000)
+        } + [MediaFacts.Format(vcodec: "none", acodec: "mp4a.40.2", filesize: 9 * mb, tbr: 128)]
         switch says {
-        case "blocked"?: return .blocked("Members-only content. (test)")
-        case "unknown"?: return .unknown("The check didn't finish. (test)")
-        default: return .passed(channelID: "UCtest", handle: "@test", channel: "Test channel")
+        case "blocked": return CheckAnswer(check: .blocked("Members-only content. (test)"))
+        case "unknown": return CheckAnswer(check: .unknown("The check didn't finish. (test)"))
+        case "nosize": formats = formats.map { var f = $0; f.filesize = nil; f.tbr = nil; return f }
+        case "approx": formats = formats.map { var f = $0; f.filesizeApprox = f.filesize; f.filesize = nil; return f }
+        case "720max": formats = formats.filter { ($0.height ?? 0) <= 720 }
+        default: break
         }
+        return CheckAnswer(check: .passed(channelID: "UCtest", handle: "@test", channel: "Test channel"),
+                           facts: MediaFacts(duration: says == "nosize" ? nil : 600, formats: formats))
     }
 }
