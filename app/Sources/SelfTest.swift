@@ -44,6 +44,7 @@ enum SelfTest {
         browserBar()
         browserTabs()
         watchLaterRules()
+        offlineRules()
         await checkerRapidNavigation()
         try await migrations(root.appendingPathComponent("migrations"))
         preview()
@@ -55,7 +56,8 @@ enum SelfTest {
         check(AppSettings.dataDir.lastPathComponent.hasPrefix("Video Buddy 4.0 ") && AppSettings.dataDir.lastPathComponent != "Video Summarizer",
               "preview: its own data folder")
         check(AppSettings.defaultDownloadDir.hasPrefix(AppSettings.dataDir.path + "/"), "preview: downloads inside its data folder")
-        check(JobController.locked(false), "preview: the queue can't be resumed")
+        check(JobController.locked(false) || FakeRunner.enabled, "preview: the queue can't be resumed")
+        check(Bundle.main.bundleIdentifier != "local.video-summarizer.preview" || !FakeRunner.enabled, "the Preview never runs the fake runner")
     }
 
     // MARK: pure parsing
@@ -311,6 +313,7 @@ enum SelfTest {
         let v2dir = dir.appendingPathComponent("v2")
         do {
             let fresh = try Database(directory: v2dir)
+            try await declare(fresh, ["jNQXAC9IVRw"])
             _ = try await fresh.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
         }
         do {
@@ -328,6 +331,7 @@ enum SelfTest {
 
     private static func queue(_ dir: URL) async throws {
         let db = try Database(directory: dir)
+        try await declare(db, ["jNQXAC9IVRw"])
         let a = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .summarize, format: "ADHD-Friendly", language: "English")
         let t = try await db.enqueue(videoID: a.video, action: .transcribe, filePath: "/tmp/zoo.mp4")
         let b = try await db.enqueue(VideoRef.parse("https://vimeo.com/5")!, action: .audio)
@@ -387,6 +391,7 @@ enum SelfTest {
         check(preview?.entries.last?.channel == "U" && preview?.entries.first?.url == "https://www.youtube.com/watch?v=jNQXAC9IVRw", "playlist entry details")
 
         let db = try Database(directory: dir)
+        try await declare(db, ["jNQXAC9IVRw", "CCCCCCCCCCC"])
         let existing = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
         let r = try await db.importPlaylist(preview!.available, action: .video, format: nil, language: nil, into: .new("Trip"), sourceURL: "u")
         check(r.jobs == 2 && r.playlist != nil, "playlist import queues each video")
@@ -423,6 +428,7 @@ enum SelfTest {
     private static func grouping(_ dir: URL) async throws {
         let db = try Database(directory: dir)
         let ids = (1...5).map { String(format: "EPISODE%04d", $0) }
+        try await declare(db, ids + ["SOLOVIDEO01"])
         let all = ids.enumerated().map { i, id in
             PlaylistEntry(id: id, index: i, title: "Episode \(i + 1)", duration: 100, url: "https://www.youtube.com/watch?v=\(id)",
                           channel: "C", available: true)
@@ -683,6 +689,36 @@ enum SelfTest {
         check(BrowserActionOutcome.decide(clicked: "A", current: nil, slot: .ready) == .pageChanged, "a click from another tab does nothing")
     }
 
+    /// 4.0 Phase 4: room on every volume a download uses, the network rule, and the fake runner's lock.
+    private static func offlineRules() {
+        let gb: Int64 = 1_000_000_000
+        check(SpaceRule.check(estimate: 2 * gb, tempFree: nil, finalFree: 13 * gb, sameVolume: true, reserve: 10 * gb) == SpaceRule.Shortfall(volume: .downloads, free: 13 * gb, needed: 14 * gb),
+              "same volume: the reserve plus twice the estimate (put together, then kept)")
+        check(SpaceRule.check(estimate: 2 * gb, tempFree: nil, finalFree: 14 * gb, sameVolume: true, reserve: 10 * gb) == nil, "…enough: it may start")
+        check(SpaceRule.check(estimate: 2 * gb, tempFree: 13 * gb, finalFree: 100 * gb, sameVolume: false, reserve: 10 * gb)?.volume == .temporary
+              && SpaceRule.check(estimate: 2 * gb, tempFree: 100 * gb, finalFree: 11 * gb, sameVolume: false, reserve: 10 * gb)?.volume == .downloads
+              && SpaceRule.check(estimate: 2 * gb, tempFree: 14 * gb, finalFree: 12 * gb, sameVolume: false, reserve: 10 * gb) == nil,
+              "two volumes: twice the estimate where it's put together, once where it's kept, each keeping the reserve")
+        check(SpaceRule.check(estimate: nil, tempFree: nil, finalFree: 9 * gb, sameVolume: true, reserve: 10 * gb) != nil
+              && SpaceRule.check(estimate: nil, tempFree: nil, finalFree: 11 * gb, sameVolume: true, reserve: 10 * gb) == nil,
+              "unknown size: only the reserve is checked before it starts (best effort)")
+        check(SpaceRule.belowReserve(tempFree: 20 * gb, finalFree: 9 * gb, reserve: 10 * gb) == .downloads
+              && SpaceRule.belowReserve(tempFree: 9 * gb, finalFree: 20 * gb, reserve: 10 * gb) == .temporary
+              && SpaceRule.belowReserve(tempFree: 11 * gb, finalFree: 11 * gb, reserve: 10 * gb) == nil, "while downloading, either volume under the reserve stops it")
+        check(NetworkRule.unmetered(NetworkRule.flags(pretending: "wifi")) && NetworkRule.unmetered(NetworkRule.flags(pretending: "ethernet")),
+              "Wi-Fi and Ethernet that macOS doesn't flag are unmetered")
+        check(["hotspot", "lowdata", "cellular", "other"].allSatisfy { !NetworkRule.unmetered(NetworkRule.flags(pretending: $0)) },
+              "an iPhone hotspot, Low Data Mode, cellular or an unnamed interface waits")
+        let env = ["VS_DATA_DIR": "/tmp/x", "VS_TEST_FAKE_DOWNLOADS": "/tmp/fake-dl.sh"]
+        check(FakeRunner.allowed(bundleID: FakeRunner.testBundleID, env: env), "the fake runner: the test build, when asked")
+        check(!FakeRunner.allowed(bundleID: "local.video-summarizer.preview", env: env) && !FakeRunner.allowed(bundleID: "local.video-summarizer", env: env)
+              && !FakeRunner.allowed(bundleID: nil, env: env), "never the Preview, 3.1 or an unbundled binary")
+        check(!FakeRunner.allowed(bundleID: FakeRunner.testBundleID, env: ["VS_TEST_FAKE_DOWNLOADS": "x"])
+              && !FakeRunner.allowed(bundleID: FakeRunner.testBundleID, env: ["VS_DATA_DIR": "/tmp/x"]), "never without a throwaway data folder, or unasked")
+        check(SizeEstimate.text(412_000_000, .known) == Fmt.bytes(412_000_000) && SizeEstimate.text(412_000_000, .approximate).hasPrefix("≈ ")
+              && SizeEstimate.text(nil, .unknown) == "size unknown", "sizes say whether they're known, approximate or unknown")
+    }
+
     /// Watch Later's page: search, sort, titles that are never empty or wrong, the row's main button, status words.
     private static func watchLaterRules() {
         let t0 = Date(timeIntervalSince1970: 1_000)
@@ -741,11 +777,12 @@ enum SelfTest {
         let v3 = dir.appendingPathComponent("v3")
         do {
             let db = try Database(directory: v3)
+            try await declare(db, ["jNQXAC9IVRw"])
             _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
         }
         do {
             let raw = try SQLite(path: v3.appendingPathComponent("history.sqlite").path)
-            try raw.exec("DROP TABLE authorizations; DROP TABLE watch_later; PRAGMA user_version = 3;")
+            try raw.exec("DROP TABLE authorizations; DROP TABLE watch_later; DROP TABLE job_options; PRAGMA user_version = 3;")
         }
         let up = try Database(directory: v3)
         let backups = { ((try? FileManager.default.contentsOfDirectory(atPath: v3.appendingPathComponent("backups").path)) ?? []).filter { $0.hasPrefix("history-pre-v4-") } }
@@ -773,18 +810,18 @@ enum SelfTest {
         let v4 = dir.appendingPathComponent("v4")
         do {
             let db = try Database(directory: v4)
-            _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
             try await db.setAuthorization("youtube:jNQXAC9IVRw", a)
+            _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
             _ = try await db.createPlaylist("Kept")
         }
         do {
             let raw = try SQLite(path: v4.appendingPathComponent("history.sqlite").path)
-            try raw.exec("DROP TABLE watch_later; PRAGMA user_version = 4;")
+            try raw.exec("DROP TABLE watch_later; DROP TABLE job_options; PRAGMA user_version = 4;")
         }
         let five = try Database(directory: v4)
         let pre5 = ((try? FileManager.default.contentsOfDirectory(atPath: v4.appendingPathComponent("backups").path)) ?? []).filter { $0.hasPrefix("history-pre-v5-") }
-        check(try await five.schemaVersion() == 5 && pre5.count == 1 && Database.isHealthy(v4.appendingPathComponent("backups/\(pre5[0])")),
-              "v4 → v5 after one verified pre-v5 backup")
+        check(try await five.schemaVersion() == Database.latestVersion && pre5.count == 1 && Database.isHealthy(v4.appendingPathComponent("backups/\(pre5[0])")),
+              "v4 → the latest version after one verified pre-v5 backup")
         let (kept, keptAuth, keptLists) = (try await five.videos().count, try await five.allAuthorizations().count, try await five.playlists().count)
         check(kept == 1 && keptAuth == 1 && keptLists == 1, "v4 → v5 keeps the library, declarations and playlists")
         let raw = try SQLite(path: v4.appendingPathComponent("history.sqlite").path)
@@ -793,6 +830,68 @@ enum SelfTest {
         let indexes = try raw.query("PRAGMA index_list(watch_later)").compactMap { $0.string("name") }
         check(indexes.allSatisfy { $0.hasPrefix("sqlite_autoindex_") }, "watch_later has no index besides its primary key")
         try await watchLaterRecords(five)
+
+        // 4.0 Phase 4: a v5 database (the Preview's now) → v6: one verified pre-v6 backup, rows kept, job_options exact
+        let v5 = dir.appendingPathComponent("v5")
+        do {
+            let db = try Database(directory: v5)
+            try await db.setAuthorization("youtube:jNQXAC9IVRw", a)
+            _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
+            _ = try await db.saveToWatchLater(WatchLaterItem.new(youtubeID: "aqz-KE-bpKQ", title: "Kept"))
+        }
+        do {
+            let raw = try SQLite(path: v5.appendingPathComponent("history.sqlite").path)
+            try raw.exec("DROP TABLE job_options; PRAGMA user_version = 5;")
+        }
+        let six = try Database(directory: v5)
+        let pre6 = ((try? FileManager.default.contentsOfDirectory(atPath: v5.appendingPathComponent("backups").path)) ?? []).filter { $0.hasPrefix("history-pre-v6-") }
+        let (sixVersion, sixVideos, sixLater, sixAuth) = (try await six.schemaVersion(), try await six.videos().count, try await six.watchLater().count,
+                                                         try await six.allAuthorizations().count)
+        check(sixVersion == 6 && pre6.count == 1 && Database.isHealthy(v5.appendingPathComponent("backups/\(pre6[0])")), "v5 → v6 after one verified pre-v6 backup")
+        check(sixVideos == 1 && sixLater == 1 && sixAuth == 1, "v5 → v6 keeps the library, Watch Later and declarations")
+        let raw6 = try SQLite(path: v5.appendingPathComponent("history.sqlite").path)
+        let optionColumns = try raw6.query("PRAGMA table_info(job_options)").compactMap { $0.string("name") }
+        check(optionColumns == ["job_id", "video_quality", "estimated_bytes", "size_kind", "low_space_stops"], "job_options has its 5 columns")
+        check(try raw6.query("PRAGMA foreign_key_check").isEmpty && raw6.query("PRAGMA quick_check").first?.string("quick_check") == "ok",
+              "after v6: no broken foreign keys, quick_check ok")
+        try await offlineQueue(dir.appendingPathComponent("offline-queue"))
+    }
+
+    /// 4.0 Phase 4: the queue's new rules. No YouTube download without a declaration, whoever asks; a prepared
+    /// download keeps its quality and estimate; low disk space requeues once, then fails (no loop).
+    private static func offlineQueue(_ dir: URL) async throws {
+        let db = try Database(directory: dir)
+        var refused = false
+        do { _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .video) } catch is AuthorizationRequired { refused = true }
+        check(refused, "a YouTube download without a declaration is refused by the database itself")
+        refused = false
+        do { _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .summarize) } catch is AuthorizationRequired { refused = true }
+        check(refused, "…and so is a summary (it downloads the audio)")
+        check((try? await db.enqueue(VideoRef.parse("https://vimeo.com/7")!, action: .video)) != nil, "a non-YouTube link is unchanged")
+        try await declare(db, ["jNQXAC9IVRw"])
+        let o = JobOptions(quality: "480", estimatedBytes: 123_000_000, sizeKind: .approximate)
+        let (zoo, job) = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .video, options: o)
+        let next = try await db.queuedJobs().first { $0.job.id == job }?.job
+        check(next?.id == job && next?.quality == "480" && next?.estimatedBytes == 123_000_000 && next?.sizeKind == .approximate,
+              "a prepared download keeps its quality and size estimate")
+        check((try? await db.enqueue(videoID: zoo, action: .transcribe, filePath: "/tmp/zoo.mp4")) != nil, "on-device transcribing needs no declaration")
+        // Wi-Fi or Ethernet only: downloads wait, on-device work doesn't
+        check(try await db.nextQueued(networkAvailable: true, downloadsAllowed: false)?.action == .transcribe, "on a metered network only on-device work runs")
+        // low disk space: back in the queue once, then failed
+        _ = try await db.markRunning(job)
+        let first = try await db.lowSpaceStop(job)
+        let requeued = try await db.queuedJobs().contains { $0.job.id == job }
+        _ = try await db.markRunning(job)
+        let second = try await db.lowSpaceStop(job)
+        let stillRunning = try await db.queuedJobs().contains { $0.job.id == job } == false
+        check(first == 1 && requeued && second == 2 && stillRunning, "low space: requeued the first time, not the second (the runner fails it)")
+    }
+
+    /// Records a (test) declaration for these YouTube ids, as the declaration sheet would.
+    private static func declare(_ db: Database, _ ids: [String]) async throws {
+        for id in ids {
+            try await db.setAuthorization("youtube:\(id)", DownloadAuthorization(basis: .writtenPermission, reference: "self-test", recorded: Date()))
+        }
     }
 
     /// Watch Later's records: one per video, details written only to a row that's still there, apart from the library.

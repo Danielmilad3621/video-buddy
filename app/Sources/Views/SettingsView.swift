@@ -33,6 +33,8 @@ struct SettingsContent: View {
     @AppStorage("summaryFormat") private var format = SummaryFormat.standard.rawValue
     @AppStorage("downloadDir") private var downloadDir = ""
     @AppStorage("videoQuality") private var videoQuality = VideoQuality.standard.rawValue
+    @AppStorage("offlineReserveGB") private var reserveGB = 10
+    @AppStorage("downloadsUnmeteredOnly") private var unmeteredOnly = false
     @AppStorage("retentionDays") private var retention = 0
     @AppStorage("appearance") private var appearance = Appearance.dark.rawValue
     @State private var channels = ""
@@ -71,7 +73,16 @@ struct SettingsContent: View {
                         ForEach(VideoQuality.allCases) { Text($0.rawValue).tag($0.rawValue) }
                     }
                 }
-                note("For Video downloads from the app. 720p is roughly half the size, handy for filling a laptop before a flight.")
+                note("For Video downloads from the app. 720p is roughly half the size, handy for filling a laptop before a flight. Prepare for Offline can choose per batch.")
+                row("Keep free") {
+                    Picker("Keep free", selection: $reserveGB) {
+                        ForEach([5, 10, 20, 50], id: \.self) { Text("\($0) GB").tag($0) }
+                    }
+                    .fixedSize()
+                }
+                note("Downloads stop before this much space would be used up, on the downloads disk and where they're put together. For a download of unknown size this is best effort: it's checked while it downloads.")
+                Toggle("Download only on Wi-Fi or Ethernet", isOn: $unmeteredOnly).toggleStyle(.checkbox)
+                note("Waits on cellular, an iPhone's Personal Hotspot and Low Data Mode networks: macOS marks those. A travel router or another phone's hotspot can look like ordinary Wi-Fi; Video Buddy can't tell, so turn on Low Data Mode for that network. If a connection switches to a metered network during a download, that download may finish; the next one waits.")
                 note("Raycast commands always save to ~/Downloads/cobalt at the default quality.")
             }
             card("Library", "rectangle.stack") {

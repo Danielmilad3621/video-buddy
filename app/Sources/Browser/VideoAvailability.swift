@@ -129,6 +129,17 @@ enum DownloadGate {
     }
 }
 
+/// 4.0 Phase 4: a download's size in words, saying how sure it is.
+enum SizeEstimate {
+    static func text(_ bytes: Int64?, _ kind: SizeKind) -> String {
+        switch (bytes, kind) {
+        case let (b?, .known): Fmt.bytes(Int(b))
+        case let (b?, _): "≈ " + Fmt.bytes(Int(b))
+        default: "size unknown"
+        }
+    }
+}
+
 /// What you have for a video and what's under way, in words: the action bar and Watch Later show the same ones.
 struct StatusLabel: Equatable {
     enum Tone { case good, accent, warning, neutral }
@@ -224,6 +235,8 @@ enum BrowserActionOutcome: Equatable {
 @MainActor @Observable
 final class AvailabilityChecker {
     private(set) var results: [String: PlatformCheck] = [:]
+    /// When each result was looked up (the last check before a download looks again when it's old).
+    @ObservationIgnored private var checkedAt: [String: Date] = [:]
     private(set) var current: String?
     private(set) var running: String?
     @ObservationIgnored var fetch: (String) async -> PlatformCheck
@@ -249,9 +262,19 @@ final class AvailabilityChecker {
             let result = await self.fetch(id)
             guard !Task.isCancelled else { return }
             self.results[id] = result        // under its own id, whatever is on screen by now
+            self.checkedAt[id] = Date()
             if self.running == id { self.running = nil }
             if self.current == id { self.task = nil }
         }
+    }
+
+    /// A result no older than `maxAge`, looked up again if needed (the last check before a download runs).
+    func fresh(_ id: String, maxAge: TimeInterval) async -> PlatformCheck {
+        if let r = results[id], let at = checkedAt[id], Date().timeIntervalSince(at) < maxAge { return r }
+        let r = await fetch(id)
+        results[id] = r
+        checkedAt[id] = Date()
+        return r
     }
 
     func recheck(_ id: String) {

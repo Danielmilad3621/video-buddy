@@ -96,6 +96,7 @@ final class AppModel {
         playback = PlaybackController(db: db)
         browser = BrowserController(dataDir: dataDir)
         jobs.onNotice = { [weak self] in self?.notice = $0 }
+        jobs.authorize = { [weak self] _, video in await self?.lastCheck(video) }
         playback.onAdvance = { [weak self] in self?.store.select($0) }
         // only one thing plays: the native player pauses YouTube, and YouTube playing pauses the native player
         playback.onWillPlay = { [weak self] in self?.browser.pauseAll() }
@@ -254,6 +255,18 @@ final class AppModel {
         browser.open()
         // the new tab's toolbar is a new view: focus it once it's there
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.focusLinkToken += 1 }
+    }
+
+    /// 4.0 Phase 4: the runner's last check before a YouTube download (whatever queued it): a declaration on record
+    /// (still only declared, never verified) and the technical checks passed, looked up again when over 30 minutes old.
+    func lastCheck(_ v: Video) async -> String? {
+        guard v.key.hasPrefix("youtube:") else { return nil }
+        guard await store.db.authorization(v.key) != nil else { return "no declaration is on record for this video." }
+        switch await browser.checker.fresh(String(v.key.dropFirst("youtube:".count)), maxAge: 30 * 60) {
+        case .passed: return nil
+        case let .blocked(reason): return "unavailable: \(reason)"
+        case let .unknown(reason): return "couldn't check it: \(reason)"
+        }
     }
 
     // MARK: Watch Later (4.0 Phase 3)
@@ -900,8 +913,24 @@ struct OfflineBatch: Identifiable {
 enum DiskSpace {
     /// Space macOS can free up for important files on the volume holding `path` (what Finder shows as available).
     static func free(at path: String) -> Int64? {
+        if let test = FakeRunner.freeSpace(at: path) { return test }
+        return (try? existing(path).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
+    }
+
+    /// Where downloads are put together before they're moved into place (the scripts make their temporary folder here).
+    static var temporaryFolder: String { NSTemporaryDirectory() }
+
+    /// Whether two folders are on the same volume (a download put together on one and kept on another needs room on both).
+    static func sameVolume(_ a: String, _ b: String) -> Bool {
+        if FakeRunner.enabled, ProcessInfo.processInfo.environment["VS_TEST_SEPARATE_VOLUMES"] == "1" { return false }
+        let id = { (p: String) in (try? existing(p).resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier.map { "\($0)" } }
+        return id(a) != nil && id(a) == id(b)
+    }
+
+    /// The nearest folder of `path` that exists.
+    private static func existing(_ path: String) -> URL {
         var url = URL(fileURLWithPath: path)
         while !FileManager.default.fileExists(atPath: url.path), url.pathComponents.count > 1 { url.deleteLastPathComponent() }
-        return (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
+        return url
     }
 }

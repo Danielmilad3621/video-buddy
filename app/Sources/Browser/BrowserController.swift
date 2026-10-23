@@ -28,7 +28,10 @@ final class BrowserController {
     private(set) var clearReport: String?
     var onWebPlaying: () -> Void = {}
     /// 4.0 Phase 1b: the technical check for the video on screen (metadata only), results kept per video id.
-    let checker = AvailabilityChecker { id in await MetadataFetcher.platformCheck(BrowserPolicy.watchURL(id)) }
+    let checker = AvailabilityChecker { id in
+        // the test build's fake runner never looks anything up: its checks come from the test's control file
+        FakeRunner.enabled ? FakeRunner.check(id) : await MetadataFetcher.platformCheck(BrowserPolicy.watchURL(id))
+    }
     /// The active tab's page changed, or another tab became active (the action bar's checks follow it).
     @ObservationIgnored var onPageChange: (YouTubePage) -> Void = { _ in }
     @ObservationIgnored var onNotice: (String) -> Void = { _ in }

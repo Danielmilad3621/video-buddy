@@ -31,6 +31,8 @@ struct QueueItem: Identifiable, Equatable {
     let videoID: Int64
     let title: String
     let action: JobAction
+    /// 4.0 Phase 4: a prepared download's quality and size estimate ("720p · ≈ 412 MB").
+    var options: JobOptions? = nil
 }
 
 @MainActor @Observable
@@ -43,6 +45,13 @@ final class JobController {
     private(set) var queue: [QueueItem] = []
     private(set) var current: QueueItem?
     var onNotice: (String) -> Void = { _ in }
+    /// 4.0 Phase 4: why the queue paused by itself (low disk space), shown with it.
+    private(set) var pauseReason: String?
+    /// 4.0 Phase 4: the last check before a YouTube download runs (a declaration on record, the technical checks
+    /// passed, looked up again when old); returns why it may not, or nil. AppModel provides it.
+    @ObservationIgnored var authorize: (Job, Video) async -> String? = { _, _ in nil }
+    /// Set by the disk watch while a download runs: the volume that went below the reserve.
+    @ObservationIgnored private var lowSpace: SpaceRule.Volume?
 
     private var script: RunningScript?
     private var metadataRun: RunningScript?
@@ -123,9 +132,9 @@ final class JobController {
         guard !isRunning, !paused else { return }
         isRunning = true            // claimed before any await, so two calls can't start two runners
         Task {
-            while !paused, let job = try? await db.nextQueued(networkAvailable: network.isOnline) {
+            while !paused, let job = try? await db.nextQueued(networkAvailable: network.isOnline, downloadsAllowed: downloadsAllowed) {
                 // the network looked fine but nothing answers (captive Wi-Fi): now offline, look for on-device work
-                if job.action.needsNetwork, !(await network.verifyInternet()) { continue }
+                if job.action.needsNetwork, !FakeRunner.enabled, !(await network.verifyInternet()) { continue }
                 await execute(job)
             }
             isRunning = false
@@ -133,6 +142,9 @@ final class JobController {
             await refreshQueue()
         }
     }
+
+    /// Downloads may run now: online, and on Wi-Fi or Ethernet if you asked for that (checked when each job starts).
+    var downloadsAllowed: Bool { network.isOnline && (!AppSettings.downloadsUnmeteredOnly || network.isUnmetered) }
 
     func pauseQueue() { setPaused(true) }
 
@@ -177,16 +189,40 @@ final class JobController {
 
     func refreshQueue() async {
         queue = ((try? await db.queuedJobs()) ?? []).map {
-            QueueItem(id: $0.job.id, videoID: $0.job.videoID, title: $0.title ?? "Untitled video", action: $0.job.action)
+            QueueItem(id: $0.job.id, videoID: $0.job.videoID, title: $0.title ?? "Untitled video", action: $0.job.action,
+                      options: $0.job.sizeKind.map { [job = $0.job] kind in JobOptions(quality: job.quality, estimatedBytes: job.estimatedBytes, sizeKind: kind) })
         }
     }
 
     /// The preview never runs jobs (downloads, transcripts, AI summaries): its queue stays paused whatever is pressed.
-    nonisolated static func locked(_ paused: Bool) -> Bool { paused || AppSettings.isPreview }
+    /// (The test build's fake runner, which never downloads anything, is the one exception.)
+    nonisolated static func locked(_ paused: Bool) -> Bool { paused || (AppSettings.isPreview && !FakeRunner.enabled) }
+    /// The queue can run at all in this build (not the Preview).
+    nonisolated static var canRun: Bool { !locked(false) }
 
     private func setPaused(_ on: Bool) {
         paused = Self.locked(on)
         UserDefaults.standard.set(on, forKey: "queuePaused")
+        if !on { pauseReason = nil }
+    }
+
+    /// Paused for a reason the queue shows (low disk space); nothing is retried until you resume.
+    private func pause(because reason: String) {
+        setPaused(true)
+        pauseReason = reason
+    }
+
+    /// Before a download starts: room on every volume it uses, keeping your reserve.
+    private func spaceShortfall(_ job: Job) -> SpaceRule.Shortfall? {
+        let (temp, out) = (DiskSpace.temporaryFolder, AppSettings.downloadDir)
+        return SpaceRule.check(estimate: job.estimatedBytes, tempFree: DiskSpace.free(at: temp), finalFree: DiskSpace.free(at: out),
+                               sameVolume: DiskSpace.sameVolume(temp, out), reserve: AppSettings.offlineReserveBytes)
+    }
+
+    private static func describe(_ s: SpaceRule.Shortfall, estimate: Int64?) -> String {
+        "Paused: \(Fmt.bytes(Int(s.free))) free on \(s.volume.rawValue); this download needs "
+            + (estimate.map { "about \(Fmt.bytes(Int($0 * 2)))" } ?? "an unknown amount")
+            + " while it's put together, and your reserve is \(Fmt.bytes(Int(AppSettings.offlineReserveBytes)))."
     }
 
     // MARK: running one job
@@ -197,8 +233,23 @@ final class JobController {
             try? await db.removeQueued(job.id)
             return
         }
+        // 4.0: not even started without room for it (the job stays queued; the queue pauses and says why)
+        if job.action.downloadsMedia, let short = spaceShortfall(job) {
+            pause(because: Self.describe(short, estimate: job.estimatedBytes))
+            return
+        }
         guard (try? await db.markRunning(job.id)) == true else { return }   // removed from the queue meanwhile
         current = QueueItem(id: job.id, videoID: video.id, title: video.displayTitle, action: job.action)
+        // 4.0: the last check before a YouTube download: never one without a declaration and passed technical checks
+        if job.action.downloadsMedia, let refused = await authorize(job, video) {
+            await refreshQueue()
+            steps = [JobStep(id: 0, label: "Check the video", state: .failed)]
+            await fail((video.id, job.id), job: job, title: "Not downloaded: \(refused)", output: [refused],
+                       retry: RetryInfo(action: job.action, videoID: video.id))
+            current = nil
+            await store.reload()
+            return
+        }
         await refreshQueue()
         await store.reload()
         switch job.action {
@@ -231,15 +282,37 @@ final class JobController {
         let language = SummaryLanguage(rawValue: job.summaryLanguage ?? "") ?? AppSettings.language
         let outDir = AppSettings.downloadDir
 
+        // the test build's fake runner never summarizes (no AI) and never looks anything up (no network)
+        if FakeRunner.enabled, kind == .summary {
+            await fail(ids, job: job, title: "The test build's fake runner never runs summaries", output: [], retry: nil)
+            return
+        }
         // metadata runs alongside the download and never decides success
-        let metadata = Task { await MetadataFetcher.fetch(url) { self.metadataRun = $0 } }
+        let metadata = Task { FakeRunner.enabled ? nil : await MetadataFetcher.fetch(url) { self.metadataRun = $0 } }
 
         let command = kind == .summary
             ? [Paths.summarize, url]
-            : [Paths.cobaltDL, url, kind == .audio ? "audio" : "auto", outDir]
+            : [FakeRunner.script ?? Paths.cobaltDL, url, kind == .audio ? "audio" : "auto", outDir]
         var env = ["VS_FROM_APP": "1", "VS_OUT_DIR": outDir]
         if kind == .summary { env["VS_SUMMARY_PROMPT"] = Prompts.build(format, language) }
-        if kind == .video, let q = AppSettings.videoQuality.scriptValue { env["VS_VIDEO_QUALITY"] = q }
+        // a prepared download keeps the quality it was queued with; others use the setting
+        if kind == .video, let q = job.quality ?? AppSettings.videoQuality.scriptValue { env["VS_VIDEO_QUALITY"] = q }
+
+        // the reserve, watched while it downloads (a size can be unknown or wrong): below it, the download stops
+        lowSpace = nil
+        let interval: Duration = FakeRunner.enabled ? .milliseconds(300) : .seconds(5)
+        let watch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self else { return }
+                if let v = SpaceRule.belowReserve(tempFree: DiskSpace.free(at: DiskSpace.temporaryFolder), finalFree: DiskSpace.free(at: outDir),
+                                                  reserve: AppSettings.offlineReserveBytes) {
+                    self.lowSpace = v
+                    self.script?.cancel()
+                    return
+                }
+            }
+        }
 
         var output: [String] = []
         var status: Int32 = -1
@@ -254,10 +327,18 @@ final class JobController {
         } catch {
             output.append("Could not start \(command[0]): \(error)")
         }
+        watch.cancel()
         let info = await metadata.value
         // keep real metadata even when the job fails or is cancelled, so the entry isn't left untitled
         if let info { try? await db.applyInfo(video.id, info, override: true) }
 
+        // low disk space: seen while downloading, or a failure (also while finishing: the merge or the move) that
+        // leaves too little: back in the queue the first time, failed the second, and the queue pauses either way
+        let outOfSpace = output.contains { $0.localizedCaseInsensitiveContains("no space left") }
+        if !cancelRequested, lowSpace != nil || (status != 0 && (outOfSpace || spaceShortfall(job) != nil)) {
+            await stoppedForSpace(ids, job: job, output: output, retry: retry)
+            return
+        }
         if cancelRequested { await cancelled(ids, job: job, retry: retry); return }
         guard status == 0 else {
             await fail(ids, job: job, title: "Processing failed", output: output, retry: retry)
@@ -442,6 +523,25 @@ final class JobController {
         banner = .failure(title: title, detail: tail.nilIfBlank ?? "No output was captured.", retry: retry)
     }
 
+    /// Stopped for low disk space: counted; back in the queue the first time (paused, so it isn't tried again until you
+    /// resume), failed the second time, so it can't loop.
+    private func stoppedForSpace(_ ids: (video: Int64, job: Int64), job: Job, output: [String], retry: RetryInfo) async {
+        let stops = (try? await db.lowSpaceStop(job.id)) ?? 2
+        let temp = DiskSpace.free(at: DiskSpace.temporaryFolder), final = DiskSpace.free(at: AppSettings.downloadDir)
+        let free = [final.map { "\(Fmt.bytes(Int($0))) free for downloads" }, temp.map { "\(Fmt.bytes(Int($0))) in the temporary folder" }]
+            .compactMap { $0 }.joined(separator: ", ")
+        let why = "Low disk space (\(free); your reserve is \(Fmt.bytes(Int(AppSettings.offlineReserveBytes))))."
+        if stops >= 2 {
+            await fail(ids, job: job, title: "Not enough space: stopped twice for low disk space", output: output.suffix(20) + [why], retry: retry)
+        } else {
+            markRunningStep(.failed)
+            banner = .failure(title: "Paused: low disk space",
+                              detail: why + " The download is back in the queue; free up space or lower your reserve, then resume.", retry: nil)
+        }
+        pause(because: "Paused: " + why)
+        await refreshQueue()
+    }
+
     private func cancelled(_ ids: (video: Int64, job: Int64), job: Job, retry: RetryInfo) async {
         markRunningStep(.failed)
         try? await db.finishJob(ids.job, videoID: ids.video, NewJob(kind: job.kind, status: .cancelled, source: .app, error: "Cancelled"))
@@ -474,5 +574,65 @@ final class JobController {
 
     private func fileSize(_ path: String) -> Int? {
         (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue
+    }
+}
+
+/// 4.0 Phase 4: whether a download may start without eating into your reserve, on every volume it uses: about 2× its
+/// estimate where it's put together (yt-dlp downloads video and audio separately and merges them; audio is converted
+/// to MP3), 1× where it's kept. An unknown size counts as nothing here, so for it the reserve is best effort: the
+/// runner keeps checking while it downloads.
+enum SpaceRule {
+    enum Volume: String { case temporary = "the disk with the temporary folder", downloads = "your downloads folder's disk" }
+    struct Shortfall: Equatable { let volume: Volume; let free: Int64; let needed: Int64 }
+
+    static func check(estimate: Int64?, tempFree: Int64?, finalFree: Int64?, sameVolume: Bool, reserve: Int64) -> Shortfall? {
+        let e = max(estimate ?? 0, 0)
+        if sameVolume {
+            if let f = finalFree, f < reserve + 2 * e { return Shortfall(volume: .downloads, free: f, needed: reserve + 2 * e) }
+            return nil
+        }
+        if let t = tempFree, t < reserve + 2 * e { return Shortfall(volume: .temporary, free: t, needed: reserve + 2 * e) }
+        if let f = finalFree, f < reserve + e { return Shortfall(volume: .downloads, free: f, needed: reserve + e) }
+        return nil
+    }
+
+    /// While downloading: a volume below the reserve stops the download.
+    static func belowReserve(tempFree: Int64?, finalFree: Int64?, reserve: Int64) -> Volume? {
+        if let f = finalFree, f < reserve { return .downloads }
+        if let t = tempFree, t < reserve { return .temporary }
+        return nil
+    }
+}
+
+/// 4.0 Phase 4, test builds only: a stand-in for the download script (app/tests/fake-dl.sh) that never uses the
+/// network, so the queue can be checked from start to finish. Only the separate test build ("Video Buddy 4.0 Test"),
+/// with a throwaway data folder, and only when asked: never the Preview or a real build.
+enum FakeRunner {
+    static let testBundleID = "local.video-summarizer.preview-test"
+
+    static func allowed(bundleID: String?, env: [String: String]) -> Bool {
+        bundleID == testBundleID && env["VS_DATA_DIR"]?.nilIfBlank != nil && env["VS_TEST_FAKE_DOWNLOADS"]?.nilIfBlank != nil
+    }
+
+    static let enabled = allowed(bundleID: Bundle.main.bundleIdentifier, env: ProcessInfo.processInfo.environment)
+    static var script: String? { enabled ? ProcessInfo.processInfo.environment["VS_TEST_FAKE_DOWNLOADS"] : nil }
+
+    /// Test runs say how much space there is in files they can change while a job runs (bytes, one number).
+    static func freeSpace(at path: String) -> Int64? {
+        guard enabled else { return nil }
+        let env = ProcessInfo.processInfo.environment
+        let file = path.hasPrefix(DiskSpace.temporaryFolder) ? env["VS_TEST_FREE_TEMP_FILE"] : env["VS_TEST_FREE_FINAL_FILE"]
+        return file.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }.flatMap { Int64($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    /// The technical check, from the test's control file ("<id> blocked" / "<id> unknown"); otherwise it passes.
+    static func check(_ id: String) -> PlatformCheck {
+        let lines = (ProcessInfo.processInfo.environment["VS_FAKE_CONTROL"]).flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
+        let says = lines.split(separator: "\n").last { $0.hasPrefix(id + " ") }.map { $0.split(separator: " ").dropFirst().joined(separator: " ") }
+        switch says {
+        case "blocked"?: return .blocked("Members-only content. (test)")
+        case "unknown"?: return .unknown("The check didn't finish. (test)")
+        default: return .passed(channelID: "UCtest", handle: "@test", channel: "Test channel")
+        }
     }
 }

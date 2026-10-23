@@ -256,6 +256,22 @@ enum TestHooks {
                     webRead = "fixture job \(f[1]) for \(f[0])"
                 }
             }
+        // 4.0 Phase 4: the network and the queue's runner
+        case "networkPath": model.network.forcedPath = arg == "off" ? nil : arg
+        case "enqueueOptions":
+            // "<youtube id>|<action>|<quality or ->|<bytes or ->|<known|approximate|unknown>": a prepared download, straight
+            // to the database (its backstop and the runner's last check still apply), for testing the runner
+            let f = arg.split(separator: "|").map(String.init)
+            if f.count == 5, let action = JobAction(rawValue: f[1]), let ref = VideoRef.parse(BrowserPolicy.watchURL(f[0])) {
+                let o = JobOptions(quality: f[2] == "-" ? nil : f[2], estimatedBytes: Int64(f[3]), sizeKind: SizeKind(rawValue: f[4]) ?? .unknown)
+                Task {
+                    do { _ = try await store.db.enqueue(ref, action: action, options: o); webRead = "queued \(f[0])" }
+                    catch { webRead = "refused \(f[0]): \(error)" }
+                    await store.reload()
+                    await model.jobs.refreshQueue()
+                    model.jobs.pump()
+                }
+            }
         case "memoryWarning": model.browser.memoryWarning()
         case "cookieNames":
             // the YouTube data store's cookie names and count, never their values (sign-in survives a restart)
@@ -397,7 +413,9 @@ enum TestHooks {
                             filePath: dl.appendingPathComponent("fixture missing.mp4").path))
         await record("ih7q2SE5M18", "Cat water moments [fixture: Short on this Mac]",
                      NewJob(kind: .video, status: .succeeded, source: .app, started: at, finished: at, filePath: copy("sample.mp4", "fixture short.mp4")))
-        _ = try? await db.enqueue(VideoRef.parse(BrowserPolicy.watchURL("M7E_tARS0hs"))!, action: .video)   // queued (the queue is paused)
+        // queued (the queue is paused); 4.0 Phase 4: a YouTube download needs a declaration on record, so the sample has one
+        try? await db.setAuthorization("youtube:M7E_tARS0hs", DownloadAuthorization(basis: .writtenPermission, reference: "Test sample, not a real permission", recorded: at))
+        _ = try? await db.enqueue(VideoRef.parse(BrowserPolicy.watchURL("M7E_tARS0hs"))!, action: .video)
         _ = try? await db.applyInfo(try await db.videos().first { $0.key == "youtube:M7E_tARS0hs" }?.id ?? 0,
                                     VideoInfo(title: "Series episode 2 [fixture: queued]"), override: true)
         await AppModel.shared.store.reload()
@@ -602,6 +620,9 @@ enum TestHooks {
             "queue": jobs.queue.map { "\($0.action.rawValue): \($0.title)" },
             // which videos are queued, by their YouTube id (the wrong-tab checks compare these exactly)
             "queueKeys": jobs.queue.map { q in "\(q.action.rawValue) \(store.video(q.videoID)?.key ?? "?")" },
+            "queueOptions": jobs.queue.map { q in "\(store.video(q.videoID)?.key ?? "?") \(q.options.map { "\($0.quality ?? "-") \($0.estimatedBytes.map(String.init) ?? "-") \($0.sizeKind.rawValue)" } ?? "none")" },
+            "pauseReason": jobs.pauseReason ?? "", "downloadsAllowed": jobs.downloadsAllowed, "unmetered": model.network.isUnmetered,
+            "running": jobs.current.map { store.video($0.videoID)?.key ?? "?" } ?? "",
             "onMac": store.videos.filter { store.onMacIDs.contains($0.id) }.map(\.displayTitle),
             "thumbnailPath": selected?.thumbnailPath ?? "",
             "playback": ["path": model.playback.currentPath ?? "", "time": model.playback.currentTime,

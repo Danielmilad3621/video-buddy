@@ -43,7 +43,7 @@ actor Database {
     /// backups/history-pre-v<N>-<ms>.sqlite (a new name every time, never an existing file); if that copy can't be
     /// made, the upgrade doesn't run and the error stops the open, so the data on disk is left as it was.
     /// Additive steps after v3, numbered in the order they were written: every number used once, none skipped, so a
-    /// database at any version gets exactly the steps it lacks (v4 authorizations, v5 Watch Later). Each only
+    /// database at any version gets exactly the steps it lacks (v4 authorizations, v5 Watch Later, v6 job options). Each only
     /// creates what doesn't exist yet, inside a transaction, after a verified backup of an existing database.
     static let additive: [(version: Int, label: String, sql: String)] = [
         (4, "authorizations", """
@@ -56,6 +56,13 @@ actor Database {
             CREATE TABLE IF NOT EXISTS watch_later(
               video_key TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, channel TEXT, duration REAL,
               thumbnail_url TEXT, added REAL NOT NULL);
+            """),
+        // 4.0 Phase 4: what a prepared download was queued with (its quality and size estimate) and how often low disk
+        // space stopped it; its own table so the step stays safe to re-run, and a job's options go with it
+        (6, "job options", """
+            CREATE TABLE IF NOT EXISTS job_options(
+              job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+              video_quality TEXT, estimated_bytes INTEGER, size_kind TEXT, low_space_stops INTEGER NOT NULL DEFAULT 0);
             """),
     ]
     static var latestVersion: Int { additive.last?.version ?? 3 }
@@ -144,7 +151,7 @@ actor Database {
     // MARK: queue
 
     /// Queues a job for a link. The video entry is created at once, so it shows up in history while it waits.
-    func enqueue(_ ref: VideoRef, action: JobAction, format: String? = nil, language: String? = nil,
+    func enqueue(_ ref: VideoRef, action: JobAction, format: String? = nil, language: String? = nil, options: JobOptions? = nil,
                  at: Date = Date()) throws -> (video: Int64, job: Int64) {
         try db.transaction {
             let video = try upsertVideo(key: ref.key, url: ref.url, platform: ref.platform, at: at,
@@ -153,34 +160,60 @@ actor Database {
                                                         summaryLanguage: language, summaryFormat: format)) else {
                 throw AlreadyQueued(videoID: video)
             }
+            try setOptions(job, options)
             return (video, job)
         }
     }
 
     /// Queues a job on an existing entry (transcribe a local file, summarize a saved transcript, download again).
     func enqueue(videoID: Int64, action: JobAction, filePath: String? = nil, format: String? = nil,
-                 language: String? = nil, at: Date = Date()) throws -> Int64 {
+                 language: String? = nil, options: JobOptions? = nil, at: Date = Date()) throws -> Int64 {
         try db.transaction {
             guard let job = try insertJob(videoID, NewJob(kind: action.kind, status: .queued, source: .app, action: action, started: at,
                                                           filePath: filePath, summaryLanguage: language, summaryFormat: format)) else {
                 throw AlreadyQueued(videoID: videoID)
             }
+            try setOptions(job, options)
             return job
         }
     }
 
-    /// The oldest queued job that can run now. Without internet only on-device work qualifies.
-    func nextQueued(networkAvailable: Bool) throws -> Job? {
+    private func setOptions(_ job: Int64, _ o: JobOptions?) throws {
+        guard let o else { return }
+        try db.run("INSERT INTO job_options(job_id, video_quality, estimated_bytes, size_kind) VALUES(?, ?, ?, ?)",
+                   [job, o.quality, o.estimatedBytes, o.sizeKind.rawValue])
+    }
+
+    /// The oldest queued job that can run now. Without internet only on-device work qualifies; `downloadsAllowed`
+    /// false (Wi-Fi or Ethernet only, on another network) holds back everything that downloads media.
+    func nextQueued(networkAvailable: Bool, downloadsAllowed: Bool? = nil) throws -> Job? {
         try db.query("""
-            SELECT * FROM jobs WHERE status='queued' AND (?1 OR action='transcribe') ORDER BY id LIMIT 1
-            """, [networkAvailable]).first.map(Database.job)
+            SELECT j.*, o.video_quality, o.estimated_bytes, o.size_kind, o.low_space_stops
+            FROM jobs j LEFT JOIN job_options o ON o.job_id = j.id
+            WHERE j.status='queued' AND (j.action='transcribe' OR (?1 AND j.action='resummarize')
+                                         OR (?2 AND j.action NOT IN ('transcribe', 'resummarize')))
+            ORDER BY j.id LIMIT 1
+            """, [networkAvailable, downloadsAllowed ?? networkAvailable]).first.map(Database.job)
     }
 
     func queuedJobs() throws -> [(job: Job, title: String?)] {
         try db.query("""
-            SELECT j.*, v.title AS video_title FROM jobs j JOIN videos v ON v.id = j.video_id
+            SELECT j.*, o.video_quality, o.estimated_bytes, o.size_kind, o.low_space_stops, v.title AS video_title
+            FROM jobs j JOIN videos v ON v.id = j.video_id LEFT JOIN job_options o ON o.job_id = j.id
             WHERE j.status='queued' ORDER BY j.id
             """).map { (Database.job($0), $0.string("video_title")) }
+    }
+
+    /// Low disk space stopped this running job: counted, and back in the queue the first time (the queue pauses, so it
+    /// isn't retried until you resume). Returns how many times it has been stopped; from the 2nd, the caller fails it.
+    func lowSpaceStop(_ id: Int64) throws -> Int {
+        try db.transaction {
+            try db.run("INSERT OR IGNORE INTO job_options(job_id) VALUES(?)", [id])
+            try db.run("UPDATE job_options SET low_space_stops = low_space_stops + 1 WHERE job_id=?", [id])
+            let stops = try db.query("SELECT low_space_stops FROM job_options WHERE job_id=?", [id]).first?.int("low_space_stops") ?? 1
+            if stops < 2 { try db.run("UPDATE jobs SET status='queued' WHERE id=? AND status='running'", [id]) }
+            return stops
+        }
     }
 
     /// Failed or interrupted jobs that nothing newer of the same kind has replaced (a retry, or a later success).
@@ -727,6 +760,14 @@ actor Database {
     /// Returns nil when the event id was already recorded, or for a download (audio or video) of a video that already
     /// has one of the same kind waiting or running, so nothing downloads twice.
     private func insertJob(_ videoID: Int64, _ j: NewJob) throws -> Int64? {
+        // 4.0: the last line of defence: whatever asked, a YouTube download is never queued without a declaration on
+        // record (a declaration, labelled not independently verified; the technical checks run before it starts)
+        if j.status == .queued, (j.action ?? JobAction.from(kind: j.kind)).downloadsMedia,
+           let r = try db.query("""
+               SELECT v.key, EXISTS(SELECT 1 FROM authorizations a WHERE a.video_key = v.key) AS declared FROM videos v WHERE v.id=?
+               """, [videoID]).first, let key = r.string("key"), key.hasPrefix("youtube:"), !r.bool("declared") {
+            throw AuthorizationRequired(key: key)
+        }
         if j.status == .queued, j.kind == .audio || j.kind == .video, try !db.query("""
             SELECT 1 FROM jobs WHERE video_id=? AND kind=? AND status IN ('queued', 'running') LIMIT 1
             """, [videoID, j.kind.rawValue]).isEmpty { return nil }
@@ -764,6 +805,8 @@ actor Database {
             filePath: r.string("file_path"), fileSize: r.int("file_size"), summaryPath: r.string("summary_path"),
             transcriptPath: r.string("transcript_path"), summary: r.string("summary"), summaryLanguage: r.string("summary_language"),
             summaryFormat: r.string("summary_format"), transcript: r.string("transcript"), segmentsJSON: r.string("transcript_segments"),
-            transcriptLanguage: r.string("transcript_language"), error: r.string("error"))
+            transcriptLanguage: r.string("transcript_language"), error: r.string("error"),
+            quality: r.string("video_quality"), estimatedBytes: r.int64("estimated_bytes"),
+            sizeKind: r.string("size_kind").flatMap(SizeKind.init), lowSpaceStops: r.int("low_space_stops") ?? 0)
     }
 }

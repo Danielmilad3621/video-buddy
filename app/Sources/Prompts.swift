@@ -54,10 +54,11 @@ enum Prompts {
 
 /// Video downloads from the app. "1080p (default)" sends nothing, so the scripts behave exactly as they always have.
 enum VideoQuality: String, CaseIterable, Identifiable {
-    case p720 = "720p (smaller)", standard = "1080p (default)", best = "Best available"
+    case p480 = "480p (smallest)", p720 = "720p (smaller)", standard = "1080p (default)", best = "Best available"
     var id: String { rawValue }
     var scriptValue: String? {
         switch self {
+        case .p480: "480"
         case .p720: "720"
         case .standard: nil
         case .best: "max"
@@ -85,6 +86,10 @@ enum AppSettings {
     static var downloadDir: String { defaults.string(forKey: "downloadDir")?.nilIfBlank ?? defaultDownloadDir }
     static var retentionDays: Int { defaults.integer(forKey: "retentionDays") }
     static var videoQuality: VideoQuality { VideoQuality(rawValue: defaults.string(forKey: "videoQuality") ?? "") ?? .standard }
+    /// 4.0 Phase 4: free space to keep on the download volumes (best effort for downloads of unknown size).
+    static var offlineReserveBytes: Int64 { Int64(defaults.object(forKey: "offlineReserveGB") as? Int ?? 10) * 1_000_000_000 }
+    /// 4.0 Phase 4: downloads only on Wi-Fi or Ethernet that macOS doesn't mark as expensive or Low Data Mode.
+    static var downloadsUnmeteredOnly: Bool { defaults.bool(forKey: "downloadsUnmeteredOnly") }
     /// the "+ Transcript" checkbox: Audio and Video downloads also get an on-device transcript
     static var transcribeDownloads: Bool { defaults.bool(forKey: "transcribeDownloads") }
     /// the preview keeps its downloads inside its own data folder, away from 3.1's

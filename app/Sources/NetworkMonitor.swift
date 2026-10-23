@@ -9,6 +9,13 @@ final class NetworkMonitor {
     private(set) var isOnline = true
     /// Test-only: VS_FORCE_OFFLINE=1 or the `offline on` test command.
     var forcedOffline = ProcessInfo.processInfo.environment["VS_FORCE_OFFLINE"] == "1" { didSet { update() } }
+    /// 4.0 Phase 4: Wi-Fi or Ethernet that macOS doesn't mark as expensive or constrained (see `NetworkRule`). Starts
+    /// false: until macOS has described the network, the Wi-Fi-only setting waits.
+    private(set) var isUnmetered = false
+    /// Test-only: what kind of network to pretend this is ("wifi", "ethernet", "hotspot", "lowdata", "cellular", "other").
+    var forcedPath: String? { didSet { pathFlags = forcedPath.map(NetworkRule.flags(pretending:)) ?? realFlags; update() } }
+    private var realFlags = NetworkRule.Flags()
+    private var pathFlags = NetworkRule.Flags()
 
     private var pathSatisfied = true
     private var internetAnswered = true
@@ -20,10 +27,15 @@ final class NetworkMonitor {
         self.onChange = onChange
         monitor.pathUpdateHandler = { [weak self] path in
             let ok = path.status == .satisfied
+            let flags = NetworkRule.Flags(expensive: path.isExpensive, constrained: path.isConstrained,
+                                          wifi: path.usesInterfaceType(.wifi), ethernet: path.usesInterfaceType(.wiredEthernet))
             Task { @MainActor in
-                self?.pathSatisfied = ok
-                self?.internetAnswered = ok   // a new path deserves a fresh try
-                self?.update()
+                guard let self else { return }
+                self.pathSatisfied = ok
+                self.internetAnswered = ok   // a new path deserves a fresh try
+                self.realFlags = flags
+                if self.forcedPath == nil { self.pathFlags = flags }
+                self.update()
             }
         }
         monitor.start(queue: DispatchQueue(label: "vs.network"))
@@ -59,8 +71,32 @@ final class NetworkMonitor {
 
     private func update() {
         let now = pathSatisfied && internetAnswered && !forcedOffline
-        guard now != isOnline else { return }
+        let unmetered = now && NetworkRule.unmetered(pathFlags)
+        guard now != isOnline || unmetered != isUnmetered else { return }
         isOnline = now
-        onChange(now)
+        isUnmetered = unmetered
+        onChange(now)      // the queue looks again (a download waiting for Wi-Fi can start now)
+    }
+}
+
+/// 4.0 Phase 4: the Wi-Fi-only setting, conservatively. Allowed only on Wi-Fi or Ethernet that macOS doesn't mark as
+/// expensive (cellular, an iPhone's Personal Hotspot) or constrained (Low Data Mode); anything else waits. macOS
+/// can't recognise every metered network: a travel router or another phone's hotspot can look like ordinary Wi-Fi.
+enum NetworkRule {
+    struct Flags: Equatable {
+        var expensive = false, constrained = false, wifi = false, ethernet = false
+    }
+
+    static func unmetered(_ f: Flags) -> Bool { !f.expensive && !f.constrained && (f.wifi || f.ethernet) }
+
+    static func flags(pretending kind: String) -> Flags {
+        switch kind {
+        case "wifi": Flags(wifi: true)
+        case "ethernet": Flags(ethernet: true)
+        case "hotspot": Flags(expensive: true, wifi: true)          // an iPhone hotspot: Wi-Fi, marked expensive
+        case "lowdata": Flags(constrained: true, wifi: true)
+        case "cellular": Flags(expensive: true)
+        default: Flags()                                            // "other": a VPN or an interface macOS doesn't name
+        }
     }
 }

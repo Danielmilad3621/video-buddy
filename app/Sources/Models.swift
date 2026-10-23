@@ -22,6 +22,9 @@ enum JobAction: String, CaseIterable {
 
     var needsNetwork: Bool { self != .transcribe }
 
+    /// Saves media from the internet (a summary downloads the audio first): what the download checks cover.
+    var downloadsMedia: Bool { self != .transcribe && self != .resummarize }
+
     var transcribesAfter: Bool { self == .audioTranscript || self == .videoTranscript }
 
     var label: String {
@@ -106,6 +109,11 @@ struct Job: Identifiable, Hashable {
     var segmentsJSON: String?
     var transcriptLanguage: String?
     var error: String?
+    // 4.0 Phase 4 (job_options): what a prepared download was queued with
+    var quality: String? = nil
+    var estimatedBytes: Int64? = nil
+    var sizeKind: SizeKind? = nil
+    var lowSpaceStops = 0
 
     var segments: [Segment] {
         guard let s = segmentsJSON, let data = s.data(using: .utf8) else { return [] }
@@ -393,4 +401,21 @@ enum WatchLater {
     static func primary(_ a: VideoAvailability) -> Primary {
         a.videoFile != nil ? .playVideo : a.audioFile != nil ? .playAudio : .openInYouTube
     }
+}
+
+/// 4.0 Phase 4: how sure a size is. Known: YouTube gave the file size; approximate: from the bitrate and length;
+/// unknown: neither (the reserve can't be protected for it in advance).
+enum SizeKind: String { case known, approximate, unknown }
+
+/// What a prepared download is queued with (the job_options table): its quality and size estimate.
+struct JobOptions: Equatable {
+    var quality: String?            // "480" | "720" | "1080" | "max"; nil = the Video quality setting when it runs
+    var estimatedBytes: Int64?
+    var sizeKind: SizeKind = .unknown
+}
+
+/// The database refuses a YouTube download (or summary, which downloads the audio) without a declaration on record.
+struct AuthorizationRequired: Error, CustomStringConvertible {
+    let key: String
+    var description: String { "This YouTube video needs your declaration before it can be downloaded." }
 }
