@@ -6,11 +6,26 @@
 #   app/tools/preview.sh --remove  delete the preview: its YouTube data (cookies, sign-in), its library and the app
 #   app/tools/preview.sh --test DIR  a test build in DIR: the same app as "Video Buddy 4.0 Test", its own identity
 #                                    (settings, WebKit data, process name), so tests never touch the installed preview
+# 4.0 Phase 5: --rc (with any of the above) is the Release Candidate instead, ~/Applications/Video Buddy 4.0 RC.app: its own
+# identity and folders too (downloads inside its data folder), installed with its queue paused, live downloads
+# off (rcLiveDownloads) and AI summaries off (rcAISummaries); only you approve switching either on. With --test, the test
+# build follows the RC's rules instead of the Preview's.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 id=local.video-summarizer.preview
 exe=VideoBuddyPreview
 name="Video Buddy 4.0 Preview"
+flag=VBPreview
+band=preview
+rc=""
+for a in "$@"; do [[ $a == --rc ]] && rc=1; done
+if [[ -n $rc ]]; then
+  id=local.video-summarizer.rc
+  exe=VideoBuddyRC
+  name="Video Buddy 4.0 RC"
+  flag=VBReleaseCandidate
+  band=rc
+fi
 app="$HOME/Applications/$name.app"
 data="$HOME/Library/Application Support/$name"
 test=""
@@ -49,7 +64,7 @@ if [[ ${1:-} == --remove ]]; then
          "$HOME/Library/Saved Application State/$id.savedState"
   defaults delete "$id" 2> /dev/null || true
   for d in "$app" "$data" "$HOME/Library/WebKit/$id"; do [[ -e "$d" ]] && echo "still there: $d"; done
-  echo "Video Buddy 4.0 Preview removed (Video Buddy 3.1 untouched)"
+  echo "$name removed (Video Buddy 3.1 untouched)"
   exit 0
 fi
 
@@ -65,14 +80,14 @@ for kv in "CFBundleIdentifier=$id" "CFBundleName=$name" "CFBundleDisplayName=$na
           "CFBundleShortVersionString=4.0" "CFBundleVersion=6" "VBCommit=$(git rev-parse --short HEAD)"; do
   plutil -replace "${kv%%=*}" -string "${kv#*=}" "$plist"
 done
-plutil -replace VBPreview -bool YES "$plist"
+plutil -replace "$flag" -bool YES "$plist"
 cp -Rp ../scripts "$b/Contents/Resources/scripts"
 cp -p ../raycast/summarize.sh "$b/Contents/Resources/raycast/"
 
 # inside the bundle, so the preview checks run too (own data folder, downloads inside it, queue locked)
 "$b/Contents/MacOS/$exe" --selftest
 
-swift make-icon.swift "$tmp/icon.png" preview
+swift make-icon.swift "$tmp/icon.png" "$band"
 for s in 16 32 128 256 512; do
   sips -z $s $s "$tmp/icon.png" --out "$tmp/AppIcon.iconset/icon_${s}x${s}.png" > /dev/null
   sips -z $((s * 2)) $((s * 2)) "$tmp/icon.png" --out "$tmp/AppIcon.iconset/icon_${s}x${s}@2x.png" > /dev/null
@@ -84,7 +99,15 @@ quit
 rm -rf "$app"
 mv "$b" "$app"
 defaults write "$id" queuePaused -bool true
-if [[ -n $test ]]; then echo "Test build: $app ($id)"; exit 0; fi
+if [[ -n $test ]]; then echo "Test build: $app ($id${rc:+, RC rules})"; exit 0; fi
+if [[ -n $rc ]]; then
+  # every install of the RC starts locked; only you approve live downloads or AI summaries (see README §2)
+  defaults write "$id" rcLiveDownloads -bool false
+  defaults write "$id" rcAISummaries -bool false
+  mkdir -p "$data"
+  list="$data/live-test-videos.txt"
+  [[ -e $list ]] || printf '%s\n' "# YouTube video IDs you approved for the live tests, one per line (# starts a note). Empty until then." > "$list"
+fi
 mkdir -p "$data/Downloads"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "Installed $app ($(git rev-parse --short HEAD)). Open it from Finder → Applications, or Spotlight: \"Video Buddy 4.0\""

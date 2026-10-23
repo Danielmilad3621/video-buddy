@@ -25,6 +25,9 @@ enum JobAction: String, CaseIterable {
     /// Saves media from the internet (a summary downloads the audio first): what the download checks cover.
     var downloadsMedia: Bool { self != .transcribe && self != .resummarize }
 
+    /// Runs Claude (a paid AI request): a summary, or a new summary from a saved transcript.
+    var usesAI: Bool { self == .summarize || self == .resummarize }
+
     var transcribesAfter: Bool { self == .audioTranscript || self == .videoTranscript }
 
     var label: String {
@@ -415,6 +418,12 @@ struct JobOptions: Equatable {
 }
 
 /// The database refuses a YouTube download (or summary, which downloads the audio) without a declaration on record.
+/// 4.0 Phase 5: this build doesn't queue that job (the RC, before you've approved it, or a video not on its list).
+struct QueueRefused: Error, CustomStringConvertible {
+    let reason: String
+    var description: String { "Not queued: \(reason)." }
+}
+
 struct AuthorizationRequired: Error, CustomStringConvertible {
     let key: String
     var description: String { "This YouTube video needs your declaration before it can be downloaded." }

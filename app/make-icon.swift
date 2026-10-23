@@ -1,5 +1,5 @@
-// make-icon.swift <out.png> [preview]: draws the 1024px Video Buddy icon (red gradient tile + white play symbol);
-// "preview" adds an amber PREVIEW band so the 4.0 Preview app can't be mistaken for the real one
+// make-icon.swift <out.png> [preview|rc]: draws the 1024px Video Buddy icon (red gradient tile + white play symbol);
+// "preview" adds an amber PREVIEW band and "rc" a blue RC band, so neither can be mistaken for the real app
 import AppKit
 
 let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024, bitsPerSample: 8,
@@ -20,13 +20,13 @@ let symbol = NSImage(systemSymbolName: "play.fill", accessibilityDescription: ni
 let size = symbol.size
 symbol.draw(in: NSRect(x: box.midX - size.width / 2 + 24, y: box.midY - size.height / 2, width: size.width, height: size.height))
 
-if CommandLine.arguments.dropFirst(2).first == "preview" {
+if let band = CommandLine.arguments.dropFirst(2).first, band == "preview" || band == "rc" {
     NSGraphicsContext.saveGraphicsState()
     tile.addClip()
-    NSColor(srgbRed: 1, green: 0.72, blue: 0.1, alpha: 1).setFill()
+    (band == "rc" ? NSColor(srgbRed: 0.25, green: 0.62, blue: 1, alpha: 1) : NSColor(srgbRed: 1, green: 0.72, blue: 0.1, alpha: 1)).setFill()
     NSRect(x: box.minX, y: box.minY, width: box.width, height: 190).fill()
     NSGraphicsContext.restoreGraphicsState()
-    let label = NSAttributedString(string: "PREVIEW", attributes: [.font: NSFont.systemFont(ofSize: 120, weight: .heavy),
+    let label = NSAttributedString(string: band == "rc" ? "RC" : "PREVIEW", attributes: [.font: NSFont.systemFont(ofSize: 120, weight: .heavy),
                                                                     .foregroundColor: NSColor.black, .kern: 6])
     label.draw(at: NSPoint(x: box.midX - label.size().width / 2, y: box.minY + 95 - label.size().height / 2))
 }

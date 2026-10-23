@@ -560,6 +560,59 @@ struct DeclarationSheet: View {
     }
 }
 
+/// 4.0 Phase 5: a videobuddy:// request (Raycast) waiting for you. Download isn't the default button, so it always
+/// takes a click; it then goes through the same checks as a pasted link.
+struct ExternalRequestSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.palette) private var p
+    let request: ExternalRequest
+
+    var body: some View {
+        let live = model.externalRequest?.id == request.id ? model.externalRequest ?? request : request
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Another app sent a link").font(.title2.weight(.semibold))
+            HStack(spacing: 10) {
+                if let id = live.youtubeID {
+                    Thumbnail(url: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg", cornerRadius: 6).frame(width: 96, height: 54)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(live.playlist != nil ? "YouTube playlist" : live.title ?? "Looking up the title…").font(.headline).lineLimit(2)
+                    if let channel = live.channel { Text(channel).font(.callout).foregroundStyle(p.secondary) }
+                    Text(live.youtubeID.map { "youtube.com/watch?v=\($0)" } ?? live.playlist.map { "youtube.com/playlist?list=\($0.listID)" } ?? live.link)
+                        .font(.caption.monospaced()).foregroundStyle(p.secondary).textSelection(.enabled)
+                }
+            }
+            .testProbe("externalVideo")
+            Label(what(live), systemImage: live.kind == .summary ? "sparkles" : live.kind == .audio ? "music.note" : "film")
+            Text("Nothing happens unless you choose \(button(live)). It then goes through the usual checks: your declaration for this video and its availability"
+                 + (AppSettings.isRC ? ", and \(AppSettings.appName)'s live-test list." : "."))
+                .font(.callout).foregroundStyle(p.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { model.externalRequest = nil }.keyboardShortcut(.cancelAction).testProbe("externalCancel")
+                Button(button(live)) { model.confirmExternal() }.testProbe("externalDownload")
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .background(p.bg)
+    }
+
+    private func what(_ r: ExternalRequest) -> String {
+        let quality = AppSettings.videoQuality.rawValue
+        switch (r.playlist != nil, r.kind) {
+        case (true, _): return "Show the playlist, to choose videos to prepare for offline"
+        case (false, .video): return "Download the video (\(quality))"
+        case (false, .audio): return "Download the audio (MP3)"
+        default: return "Summarize: download the audio, transcribe it, then a paid AI summary"
+        }
+    }
+
+    private func button(_ r: ExternalRequest) -> String {
+        r.playlist != nil ? "Show Playlist" : r.kind == .summary ? "Summarize" : r.kind == .audio ? "Download Audio" : "Download Video"
+    }
+}
+
 private struct OfflineBrowserScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p

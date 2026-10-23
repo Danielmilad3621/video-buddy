@@ -3,6 +3,9 @@
 import Foundation
 
 actor Database {
+    /// 4.0 Phase 5: asked before every queued job (action, video key): why this build refuses it, or nil. The app sets
+    /// it to AppSettings.queueRefusal (only the RC refuses anything); self-tests set it only where they test it.
+    nonisolated(unsafe) static var queueRule: ((JobAction, String) -> String?)?
     nonisolated let directory: URL?
     private let db: SQLite
     private(set) var recoveredCorruptFile: URL?
@@ -782,6 +785,11 @@ actor Database {
     private func insertJob(_ videoID: Int64, _ j: NewJob) throws -> Int64? {
         // 4.0: the last line of defence: whatever asked, a YouTube download is never queued without a declaration on
         // record (a declaration, labelled not independently verified; the technical checks run before it starts)
+        if j.status == .queued, let rule = Self.queueRule,
+           let key = try db.query("SELECT key FROM videos WHERE id=?", [videoID]).first?.string("key"),
+           let reason = rule(j.action ?? JobAction.from(kind: j.kind), key) {
+            throw QueueRefused(reason: reason)
+        }
         if j.status == .queued, (j.action ?? JobAction.from(kind: j.kind)).downloadsMedia,
            let r = try db.query("""
                SELECT v.key, EXISTS(SELECT 1 FROM authorizations a WHERE a.video_key = v.key) AS declared FROM videos v WHERE v.id=?

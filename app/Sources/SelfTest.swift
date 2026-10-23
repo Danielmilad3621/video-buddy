@@ -47,7 +47,113 @@ enum SelfTest {
         offlineRules()
         await checkerRapidNavigation()
         try await migrations(root.appendingPathComponent("migrations"))
+        try await releaseCandidate(root.appendingPathComponent("rc"))
+        externalRequests()
         preview()
+        rcIdentity()
+    }
+
+    /// 4.0 Phase 5: the RC's rules. Its live-test list, its two locks (AI summaries; downloads of anything unlisted),
+    /// the database refusing what the rule refuses, and the test hooks that only the test build accepts.
+    private static func releaseCandidate(_ dir: URL) async throws {
+        let list = LiveTestList.parse("""
+            # approved 1 Jan
+            jNQXAC9IVRw   # a note
+              M7E_tARS0hs
+            https://youtu.be/aqz-KE-bpKQ?t=3
+            https://vimeo.com/76979871
+            short1
+            jNQXAC9IVRw2x
+            not a link
+            """)
+        check(list == ["youtube:jNQXAC9IVRw", "youtube:M7E_tARS0hs", "youtube:aqz-KE-bpKQ", "url:vimeo.com/76979871"],
+              "live-test list: IDs, YouTube and other links (notes and junk ignored)")
+        check(LiveTestList.ids(in: dir) == [], "no list file: nothing is listed")
+        func refusal(_ a: JobAction, _ key: String, ai: Bool = false) -> String? {
+            LiveTestList.refusal(a, key: key, aiApproved: ai, listed: list, app: "RC")
+        }
+        check(refusal(.summarize, "youtube:jNQXAC9IVRw") != nil && refusal(.resummarize, "youtube:jNQXAC9IVRw") != nil,
+              "RC: no AI summary (nor a new one) before you've approved them")
+        check(refusal(.resummarize, "youtube:zzzzzzzzzzz", ai: true) == nil && refusal(.summarize, "youtube:jNQXAC9IVRw", ai: true) == nil,
+              "RC: once approved, a new summary needs no download; a summary of a listed video is allowed")
+        check(refusal(.summarize, "youtube:zzzzzzzzzzz", ai: true) != nil, "RC: a summary still downloads, so the list applies")
+        check(refusal(.video, "youtube:jNQXAC9IVRw") == nil && refusal(.audioTranscript, "youtube:M7E_tARS0hs") == nil
+              && refusal(.video, "url:vimeo.com/76979871") == nil, "RC: listed videos download")
+        check(refusal(.video, "youtube:zzzzzzzzzzz")?.contains("zzzzzzzzzzz") == true && refusal(.audio, "url:vimeo.com/1") != nil,
+              "RC: anything unlisted is refused, from any site")
+        check(refusal(.transcribe, "youtube:zzzzzzzzzzz") == nil, "RC: on-device transcribing isn't restricted")
+
+        // the database asks the rule before every queued job, whoever asks
+        let db = try Database(directory: dir)
+        try await declare(db, ["jNQXAC9IVRw", "zzzzzzzzzzz"])
+        Database.queueRule = { a, key in LiveTestList.refusal(a, key: key, aiApproved: false, listed: list, app: "RC") }
+        defer { Database.queueRule = nil }
+        var refused: String?
+        do { _ = try await db.enqueue(VideoRef.parse("https://youtu.be/zzzzzzzzzzz")!, action: .video) } catch let e as QueueRefused { refused = e.reason }
+        check(refused?.contains("live-test list") == true, "RC: the database refuses a declared video that isn't listed")
+        refused = nil
+        do { _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .summarize) } catch let e as QueueRefused { refused = e.reason }
+        check(refused?.contains("AI summaries") == true, "RC: …and an AI summary before it's approved")
+        check((try? await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .video)) != nil, "RC: a declared, listed video is queued")
+        check(try await db.queuedJobs().count == 1, "RC: only that one is in the queue")
+        Database.queueRule = nil
+        check((try? await db.enqueue(VideoRef.parse("https://youtu.be/zzzzzzzzzzz")!, action: .audio)) != nil, "other builds: no such rule")
+
+        // hooks that write test data or settings: the test build only
+        for id in ["local.video-summarizer.rc", "local.video-summarizer", "local.video-summarizer.preview"] {
+            check(!TestHooks.allowed("declareOnly", bundleID: id) && !TestHooks.allowed("setDefault", bundleID: id)
+                  && !TestHooks.allowed("loadFixtures", bundleID: id) && !TestHooks.allowed("enqueueOptions", bundleID: id),
+                  "\(id): test hooks can't record declarations, change settings or add fixtures")
+            check(TestHooks.allowed("state", bundleID: id) && TestHooks.allowed("nativeClick", bundleID: id), "\(id): read-only hooks work")
+        }
+        check(TestHooks.allowed("declareOnly", bundleID: FakeRunner.testBundleID), "the test build accepts them")
+    }
+
+    /// 4.0 Phase 5: videobuddy:// requests carry no secret, so only an exact, well-formed request for a YouTube video or
+    /// playlist is accepted (and then it only asks you).
+    private static func externalRequests() {
+        func parse(_ s: String) -> ExternalRequest? { URL(string: s).flatMap { try? ExternalRequest.parse($0).get() } }
+        func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
+        let v = parse("videobuddy://request?action=video&url=\(enc("https://www.youtube.com/watch?v=jNQXAC9IVRw&t=5&utm=x"))")
+        check(v?.kind == .video && v?.youtubeID == "jNQXAC9IVRw" && v?.link == "https://www.youtube.com/watch?v=jNQXAC9IVRw" && v?.playlist == nil,
+              "request: a YouTube video, reduced to its canonical link")
+        check(parse("VideoBuddy://Request/?url=\(enc("https://youtu.be/jNQXAC9IVRw"))&action=audio")?.kind == .audio
+              && parse("videobuddy://request?url=\(enc("https://youtube.com/shorts/jNQXAC9IVRw"))&action=summarize")?.kind == .summary,
+              "request: youtu.be, Shorts; audio and summarize")
+        let pl = parse("videobuddy://request?action=video&url=\(enc("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"))")
+        check(pl?.playlist?.listID == "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf" && pl?.youtubeID == nil, "request: a playlist")
+        let refused = [
+            "https://request?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))",                  // another scheme
+            "videobuddy://download?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))",            // another host
+            "videobuddy://request/now?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))",         // a path
+            "videobuddy://request?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))&queue=1",     // an extra parameter
+            "videobuddy://request?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))&url=\(enc("https://youtu.be/aqz-KE-bpKQ"))",
+            "videobuddy://request?url=\(enc("https://youtu.be/jNQXAC9IVRw"))",                          // no action
+            "videobuddy://request?action=delete&url=\(enc("https://youtu.be/jNQXAC9IVRw"))",            // unknown action
+            "videobuddy://request?action=video&url=\(enc("javascript:alert(1)//youtu.be/jNQXAC9IVRw"))",
+            "videobuddy://request?action=video&url=\(enc("file:///etc/passwd"))",
+            "videobuddy://request?action=video&url=\(enc("https://vimeo.com/76979871"))",               // not YouTube
+            "videobuddy://request?action=video&url=\(enc("https://www.youtube.com/@somechannel"))",     // not a video
+            "videobuddy://request?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw?x=" + String(repeating: "a", count: 2100)))",
+            "videobuddy://request?action=video&url=",
+            "videobuddy://me:pw@request?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))",
+            "videobuddy://request?action=video&url=\(enc("https://youtu.be/jNQXAC9IVRw"))#go",
+        ]
+        let accepted = refused.filter { parse($0) != nil }
+        check(accepted.isEmpty, "request: \(refused.count) malformed or unsafe requests refused (accepted: \(accepted))")
+    }
+
+    /// Only inside Video Buddy 4.0 RC.app (preview.sh --rc runs this before installing): its own folders, never 3.1's,
+    /// and its locks as its settings say (both off when installed).
+    private static func rcIdentity() {
+        guard AppSettings.isRC else { return }
+        check(AppSettings.dataDir.lastPathComponent == AppSettings.appName && AppSettings.appName.hasPrefix("Video Buddy 4.0 ")
+              && AppSettings.dataDir.lastPathComponent != "Video Summarizer", "RC: its own data folder")
+        check(AppSettings.defaultDownloadDir == AppSettings.dataDir.appendingPathComponent("Downloads").path, "RC: downloads inside its own data folder")
+        let live = UserDefaults.standard.bool(forKey: "rcLiveDownloads"), ai = UserDefaults.standard.bool(forKey: "rcAISummaries")
+        check(JobController.locked(false) == !live || FakeRunner.enabled, "RC: the queue is locked until live downloads are approved")
+        check((AppSettings.queueRefusal(.summarize, key: "url:example.com/x") != nil) == !ai, "RC: AI summaries locked until approved")
+        check(Bundle.main.bundleIdentifier != "local.video-summarizer.rc" || !FakeRunner.enabled, "the RC never runs the fake runner")
     }
 
     /// Only inside Video Buddy 4.0 Preview.app (preview.sh runs this before installing): it must never share 3.1's data or run jobs.

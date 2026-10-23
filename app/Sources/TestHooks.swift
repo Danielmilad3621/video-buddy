@@ -49,10 +49,22 @@ enum TestHooks {
         }
     }
 
+    /// 4.0 Phase 5: hooks that write test data, change settings or fake state work only in the test build, so no
+    /// automation can record a declaration, fake a job or switch an RC lock on in the RC or a real build.
+    nonisolated static let testBuildOnly: Set<String> = ["loadFixtures", "fixtureComplete", "fixtureJob", "declareOnly", "fakeRunning",
+                                             "setDefault", "enqueueOptions", "networkPath", "ownChannels"]
+    nonisolated static func allowed(_ command: String, bundleID: String?) -> Bool {
+        !testBuildOnly.contains(command) || bundleID == FakeRunner.testBundleID
+    }
+
     private static func handle(_ line: String, dir: String) {
         let model = AppModel.shared, store = model.store
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
         let arg = parts.count > 1 ? parts[1] : ""
+        guard allowed(parts.first ?? "", bundleID: Bundle.main.bundleIdentifier) else {
+            model.notice = "The test command “\(parts.first ?? "")” works only in the test build."
+            return
+        }
         switch parts.first ?? "" {
         case "link": model.link = arg
         case "start": model.start(JobKind(rawValue: arg) ?? .summary)
@@ -398,6 +410,8 @@ enum TestHooks {
             // brings this test window to the front (only used while nobody is at the keyboard)
             NSApp.activate(ignoringOtherApps: true)
             if let web = model.browser.tab?.webView, let w = web.window { w.makeKeyAndOrderFront(nil); w.makeFirstResponder(web) }
+        // 4.0 Phase 5: a videobuddy:// request, as if another app had sent it (tests also send real ones with `open`)
+        case "openURL": if let url = URL(string: arg) { model.receive(url) } else { model.notice = "openURL: not a URL" }
         case "snapshot": Snapshot.save(to: dir)
         case "state": writeState(to: dir)
         default: break
@@ -597,6 +611,8 @@ enum TestHooks {
                 ["n": i + 1, "url": t.url?.absoluteString ?? "", "title": t.title, "page": t.page.label, "videoID": t.page.videoID ?? "",
                  "active": t.id == model.browser.activeID, "asleep": t.isAsleep, "media": t.media, "audioTab": t.id == model.browser.audioTabID,
                  "loadError": t.loadError ?? "",
+                 // 4.0 Phase 5, for measuring memory: the page's web-content process (WebKit's private property, read here only)
+                 "webPID": (t.webView?.value(forKey: "_webProcessIdentifier") as? Int) ?? 0,
                  "opener": t.openerID.flatMap { id in model.browser.tabs.firstIndex { $0.id == id }.map { $0 + 1 } } ?? 0] as [String: Any]
             },
             "watchLater": store.watchLater.map { i in
@@ -676,6 +692,16 @@ enum TestHooks {
             "queueKeys": jobs.queue.map { q in "\(q.action.rawValue) \(store.video(q.videoID)?.key ?? "?")" },
             "queueOptions": jobs.queue.map { q in "\(store.video(q.videoID)?.key ?? "?") \(q.options.map { "\($0.quality ?? "-") \($0.estimatedBytes.map(String.init) ?? "-") \($0.sizeKind.rawValue)" } ?? "none")" },
             "pauseReason": jobs.pauseReason ?? "", "downloadsAllowed": jobs.downloadsAllowed, "unmetered": model.network.isUnmetered,
+            "hookResult": webRead,
+            // 4.0 Phase 5: which build this is, and what's locked
+            "build": ["bundleID": Bundle.main.bundleIdentifier ?? "", "appName": AppSettings.appName, "isRC": AppSettings.isRC,
+                      "isPreview": AppSettings.isPreview, "dataDir": AppSettings.dataDir.path, "downloadDir": AppSettings.downloadDir,
+                      "canRun": JobController.canRun, "paused": jobs.paused, "jobsLock": AppSettings.jobsLockReason ?? "",
+                      "rcLiveDownloads": UserDefaults.standard.bool(forKey: "rcLiveDownloads"),
+                      "rcAISummaries": UserDefaults.standard.bool(forKey: "rcAISummaries"),
+                      "liveTestList": LiveTestList.ids(in: AppSettings.dataDir).sorted(), "badge": AppSettings.buildBadge ?? ""] as [String: Any],
+            "external": model.externalRequest.map { ["kind": $0.kind.rawValue, "link": $0.link, "youtubeID": $0.youtubeID ?? "",
+                                                     "playlist": $0.playlist?.listID ?? "", "title": $0.title ?? ""] } ?? [:],
             "running": jobs.current.map { store.video($0.videoID)?.key ?? "?" } ?? "",
             "onMac": store.videos.filter { store.onMacIDs.contains($0.id) }.map(\.displayTitle),
             "thumbnailPath": selected?.thumbnailPath ?? "",

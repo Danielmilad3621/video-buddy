@@ -81,6 +81,7 @@ final class AppModel {
 
     private init() {
         dataDir = AppSettings.dataDir
+        Database.queueRule = AppSettings.queueRefusal
         let db: Database
         var warning: String?
         do {
@@ -128,7 +129,7 @@ final class AppModel {
         completeWatchLater()
         // the preview exists to try the YouTube browser (test runs pick their own section, so --remove can clear the store)
         // (a launch argument, -previewStartSection "Watch Later", can pick another section for that launch only)
-        if AppSettings.isPreview, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" {
+        if AppSettings.isolated, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" {
             section = UserDefaults.standard.string(forKey: "previewStartSection").flatMap(AppSection.init) ?? .youtube
         }
         ingestor.start()
@@ -718,6 +719,13 @@ final class AppModel {
     /// record and passed technical checks; without a declaration, the declaration sheet opens for that video;
     /// unavailable or unchecked, it says why. Other sites and on-device work go to the queue as in 3.1.
     func requestDownload(_ r: DownloadRequest) {
+        // the RC: not before you've approved AI summaries, nor a video that isn't on its live-test list (the database
+        // and the runner check this too)
+        let key = r.youtubeID.map { "youtube:\($0)" } ?? r.videoID.flatMap { store.video($0)?.key } ?? r.link.flatMap { VideoRef.parse($0)?.key } ?? ""
+        if let refusal = AppSettings.queueRefusal(r.action, key: key) {
+            notice = "Not queued: \(refusal)."
+            return
+        }
         guard r.action.downloadsMedia, let id = r.youtubeID else { enqueueNow(r); return }
         Task {
             var decision = browserGate(id)
@@ -744,6 +752,44 @@ final class AppModel {
         } else if let link = r.link {
             jobs.enqueue(r.action, link: link)
         }
+    }
+
+    // MARK: requests from other apps (4.0 Phase 5)
+
+    /// A videobuddy:// request waiting for your confirmation (one at a time).
+    var externalRequest: ExternalRequest?
+
+    /// From Raycast, or any other app or web page: checked, then shown for you to confirm. Nothing is queued here.
+    func receive(_ url: URL) {
+        switch ExternalRequest.parse(url) {
+        case let .failure(r):
+            notice = "Ignored a request from another app: \(r.reason)."
+        case var .success(request):
+            // one at a time, and never on top of something you're in the middle of
+            guard externalRequest == nil, !NSApp.windows.contains(where: { $0.attachedSheet != nil }) else {
+                notice = "Ignored a request from another app: finish what's open in Video Buddy first, then send it again."
+                return
+            }
+            request.title = request.youtubeID.flatMap { store.byKey["youtube:\($0)"]?.title }
+            externalRequest = request
+            NSApp.activate()
+            guard let id = request.youtubeID, request.title == nil else { return }
+            Task {
+                let info = await MetadataFetcher.fetch(BrowserPolicy.watchURL(id))
+                guard externalRequest?.id == request.id else { return }   // cancelled meanwhile
+                externalRequest?.title = info?.title
+                externalRequest?.channel = info?.channel
+            }
+        }
+    }
+
+    /// Download: as if you'd pasted the link and pressed the button (your declaration and the checks; a playlist
+    /// opens its list, then Prepare).
+    func confirmExternal() {
+        guard let r = externalRequest else { return }
+        externalRequest = nil
+        if let playlist = r.playlist { readPlaylist(playlist, kind: r.kind); return }
+        requestDownload(DownloadRequest(action: downloadAction(r.kind), youtubeID: r.youtubeID, link: r.link))
     }
 
     // MARK: Ready for Offline (4.0 Phase 4)
@@ -804,7 +850,8 @@ final class AppModel {
 
     /// A row's state right now, from what's on this Mac, the queue and the download checks.
     func prepareStatus(_ row: PrepareRow) -> PrepareRule.Status {
-        PrepareRule.status(kind: row.kind, availability: availability(youtubeID: row.id), gate: browserGate(row.id))
+        PrepareRule.status(kind: row.kind, availability: availability(youtubeID: row.id), gate: browserGate(row.id),
+                           refused: AppSettings.queueRefusal(.from(kind: row.kind), key: "youtube:\(row.id)"))
     }
 
     /// Queue N Downloads: each ticked row is checked again now (ready, not already here, not already queued), then
@@ -832,7 +879,7 @@ final class AppModel {
             await jobs.refreshQueue()
             jobs.pump()
             notice = "Queued \(queued) \(queued == 1 ? "download" : "downloads")" + (skipped > 0 ? "; \(skipped) not queued (already here, queued or not allowed)" : "")
-                + (JobController.canRun ? "." : ". Downloads don't run in Video Buddy 4.0 Preview.")
+                + (JobController.canRun ? "." : ". They wait: \(AppSettings.jobsLockReason ?? "the queue is locked").")
         }
     }
 
@@ -849,6 +896,7 @@ final class AppModel {
     /// A new summary from the saved transcript (queued until online when needed).
     func regenerate(format: SummaryFormat = AppSettings.format, language: SummaryLanguage = AppSettings.language) {
         guard let v = store.selectedVideo, store.transcriptJob != nil else { return }
+        if let refusal = AppSettings.queueRefusal(.resummarize, key: v.key) { notice = "Not queued: \(refusal)."; return }
         detailTab = .summary
         jobs.enqueue(.resummarize, videoID: v.id, format: format, language: language)
     }
@@ -1035,6 +1083,55 @@ extension BarSlot {
 }
 
 /// 4.0 Phase 4: a download asked for from the Library, the link field or Retry, with the video it's for.
+/// 4.0 Phase 5: a request from another app (Raycast), videobuddy://request?url=<link>&action=video|audio|summarize.
+/// It carries no secret, since anything on this Mac (or a web page, after Safari asks) can send one: every request is
+/// checked strictly here, then shown for you to confirm; only Download goes on, through the same checks as a pasted link.
+struct ExternalRequest: Identifiable, Equatable {
+    struct Refusal: Error { let reason: String }
+
+    let id = UUID()
+    let kind: JobKind
+    let link: String                // the video's canonical link, or the playlist's
+    let youtubeID: String?          // a YouTube video, or
+    let playlist: PlaylistLink?     // a playlist (it opens Prepare, which still needs its own Queue)
+    var title: String? = nil
+    var channel: String? = nil
+
+    static let maxLink = 2048
+
+    static func parse(_ url: URL) -> Result<ExternalRequest, Refusal> {
+        guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false), c.scheme?.lowercased() == "videobuddy",
+              c.host?.lowercased() == "request", c.path.isEmpty || c.path == "/",
+              c.user == nil, c.password == nil, c.port == nil, c.fragment == nil else {
+            return .failure(Refusal(reason: "it isn't a videobuddy://request link"))
+        }
+        let items = c.queryItems ?? []
+        guard items.count == 2, Set(items.map(\.name)) == ["url", "action"] else {
+            return .failure(Refusal(reason: "it must have exactly a link and an action"))
+        }
+        let value = { (name: String) in items.first { $0.name == name }?.value ?? "" }
+        let kind: JobKind
+        switch value("action") {
+        case "video": kind = .video
+        case "audio": kind = .audio
+        case "summarize": kind = .summary
+        default: return .failure(Refusal(reason: "it asks for something Video Buddy doesn't do"))
+        }
+        let link = value("url")
+        guard !link.isEmpty, link.count <= maxLink, let scheme = URLComponents(string: link)?.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            return .failure(Refusal(reason: "its link isn't a web link"))
+        }
+        if let id = VideoRef.parse(link)?.youtubeID {
+            return .success(ExternalRequest(kind: kind, link: BrowserPolicy.watchURL(id), youtubeID: id, playlist: nil))
+        }
+        if let playlist = PlaylistLink.parse(link) {
+            return .success(ExternalRequest(kind: kind, link: playlist.url, youtubeID: nil, playlist: playlist))
+        }
+        return .failure(Refusal(reason: "only YouTube videos and playlists can be sent to Video Buddy"))
+    }
+}
+
 struct DownloadRequest {
     let action: JobAction
     let youtubeID: String?           // nil: not a YouTube video (3.1's behaviour)
@@ -1062,9 +1159,11 @@ struct PrepareState: Identifiable {
 enum PrepareRule {
     enum Status: Equatable { case haveIt, queued, checking, needsDeclaration, unavailable(String), unknown(String), ready }
 
-    static func status(kind: JobKind, availability a: VideoAvailability, gate: DownloadGate.Decision?) -> Status {
+    /// `refused`: why this build won't queue it at all (the RC's live-test list), whatever the checks say.
+    static func status(kind: JobKind, availability a: VideoAvailability, gate: DownloadGate.Decision?, refused: String? = nil) -> Status {
         if kind == .video ? a.videoFile != nil : a.audioFile != nil { return .haveIt }
         if (kind == .video ? a.video : a.audio) == .queued || (kind == .video ? a.video : a.audio) == .running { return .queued }
+        if let refused { return .unavailable(refused) }
         switch gate {
         case nil: return .checking
         case let .blocked(r)?: return .unavailable(r)

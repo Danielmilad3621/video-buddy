@@ -11,6 +11,9 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)   # the project folder; works wherever it lives
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH"   # Raycast doesn't load your shell profile
 url=${1:-$(pbpaste)}
+# 4.0: from Raycast, a YouTube link goes to Video Buddy, which asks you and runs its checks (the app runs this script
+# itself for its own summaries, with VS_FROM_APP set, after those checks)
+if [[ -z ${VS_FROM_APP:-} ]] && "$root/scripts/send-to-app.sh" --is-youtube "$url"; then exec "$root/scripts/send-to-app.sh" summarize "$url"; fi
 out=${VS_OUT_DIR:-$HOME/Downloads/cobalt}
 prompt=${VS_SUMMARY_PROMPT:-"Summarize this video transcript. Start with a 3-sentence TL;DR, then the key points as bullets, then any actionable takeaways."}
 base=""

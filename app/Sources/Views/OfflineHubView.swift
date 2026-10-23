@@ -60,7 +60,7 @@ struct PrepareSheet: View {
                         .font(.caption.weight(.semibold)).foregroundStyle(p.orange)
                 }
                 if !JobController.canRun {
-                    Label("Video Buddy 4.0 Preview never downloads: queued videos wait.", systemImage: "lock.fill").font(.caption).foregroundStyle(p.secondary)
+                    Label("Queued videos wait: \(AppSettings.jobsLockReason ?? "the queue can't run in this build").", systemImage: "lock.fill").font(.caption).foregroundStyle(p.secondary)
                 }
             }
             HStack {

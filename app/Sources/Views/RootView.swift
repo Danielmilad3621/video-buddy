@@ -83,6 +83,7 @@ struct RootView: View {
             DeclarationSheet(request: $0).environment(model)
         }
         .sheet(item: $model.prepare) { PrepareSheet(state: $0).environment(model) }
+        .sheet(item: $model.externalRequest) { ExternalRequestSheet(request: $0).environment(model) }
         // Watch Later's Open in Tabs, when some didn't fit (it switches to YouTube, so the window shows it)
         .alert("Not every video was opened", isPresented: Binding(get: { model.openReport != nil }, set: { if !$0 { model.openReport = nil } })) {
             Button("OK") { model.openReport = nil }
@@ -196,8 +197,8 @@ struct Sidebar: View {
                 if !compact {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Video Buddy").font(.title2.weight(.bold))
-                        Text(AppSettings.isPreview ? "4.0 Preview · downloads off" : "Watch smarter. Learn faster.").font(.caption)
-                            .foregroundStyle(AppSettings.isPreview ? Color.orange : p.secondary)
+                        Text(AppSettings.buildBadge ?? "Watch smarter. Learn faster.").font(.caption)
+                            .foregroundStyle(AppSettings.buildBadge != nil ? Color.orange : p.secondary)
                     }
                 }
             }

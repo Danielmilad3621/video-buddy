@@ -15,7 +15,7 @@ struct VideoSummarizerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window(AppSettings.isPreview ? "Video Buddy 4.0 Preview" : "Video Buddy", id: "main") {
+        Window(AppSettings.appName, id: "main") {
             ThemedRoot { RootView() }
                 .environment(AppModel.shared)
                 .frame(minWidth: 980, minHeight: 660)
@@ -143,6 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The YouTube tabs, as they are now (they're also saved a second after every change).
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated { AppModel.shared.browser.saveNow() }
+    }
+
+    /// 4.0 Phase 5: videobuddy:// requests (Raycast): each one is checked, then shown for you to confirm.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated { for url in urls { AppModel.shared.receive(url) } }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

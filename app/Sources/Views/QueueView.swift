@@ -227,7 +227,7 @@ struct WaitingStrip: View {
         let n = jobs.queue.count
         let (icon, title, detail): (String, String, String) = jobs.paused
             ? ("pause.circle.fill", "Queue paused • \(n) waiting",
-               !JobController.canRun ? "Downloads and AI jobs don't run in Video Buddy 4.0 Preview."
+               !JobController.canRun ? "Locked: \(AppSettings.jobsLockReason ?? "the queue can't run in this build")."
                    : jobs.pauseReason ?? "Press Resume to continue with the next job.")
             : !model.network.isOnline
             ? ("wifi.slash", "Waiting for internet • \(n) in the queue", "They start by themselves when you're back online.")
@@ -265,7 +265,7 @@ struct QueueColumn: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "Queue", icon: "slider.horizontal.3") {
                 if !JobController.canRun {
-                    Label("Preview: downloads off", systemImage: "lock.fill").font(.callout).foregroundStyle(p.secondary)
+                    Label(AppSettings.isRC ? "RC: downloads locked" : "Preview: downloads off", systemImage: "lock.fill").font(.callout).foregroundStyle(p.secondary)
                 } else if jobs.paused {
                     Button { jobs.resumeQueue() } label: { Label("Resume", systemImage: "play.fill") }
                         .buttonStyle(PrimaryButtonStyle(height: 30, font: .callout.weight(.semibold)))
@@ -280,7 +280,7 @@ struct QueueColumn: View {
                     .help("Remove everything waiting (nothing already saved is touched)")
             }
             if jobs.paused || !model.network.isOnline || !jobs.downloadsAllowed {
-                Label(jobs.paused ? (!JobController.canRun ? "Video Buddy 4.0 Preview never runs jobs: nothing is downloaded or summarized."
+                Label(jobs.paused ? (!JobController.canRun ? "Nothing is downloaded or summarized: \(AppSettings.jobsLockReason ?? "the queue can't run in this build")."
                                                            : jobs.pauseReason ?? "Paused: nothing new starts until you press Resume.")
                                   : !model.network.isOnline ? "Offline: jobs that need the internet wait; transcribing on this Mac still runs."
                                   : WaitingStrip.meteredNote,

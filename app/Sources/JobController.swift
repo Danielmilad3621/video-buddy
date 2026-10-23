@@ -85,6 +85,8 @@ final class JobController {
             } catch let e as AlreadyQueued {
                 store.select(e.videoID)
                 onNotice("Already in the queue: this \(action.kind.rawValue) is waiting or downloading.")
+            } catch let e as QueueRefused {
+                onNotice(e.description)
             } catch {
                 banner = .failure(title: "Couldn't add to the queue", detail: "\(error)", retry: nil)
             }
@@ -102,6 +104,8 @@ final class JobController {
                 await queued(action)
             } catch is AlreadyQueued {
                 onNotice("Already in the queue: this \(action.kind.rawValue) is waiting or downloading.")
+            } catch let e as QueueRefused {
+                onNotice(e.description)
             } catch {
                 banner = .failure(title: "Couldn't add to the queue", detail: "\(error)", retry: nil)
             }
@@ -113,7 +117,7 @@ final class JobController {
     private func queued(_ action: JobAction) async {
         await refreshQueue()
         if !Self.canRun {
-            onNotice("Added to the queue. Downloads and AI jobs don't run in Video Buddy 4.0 Preview.")
+            onNotice("Added to the queue, where it waits: \(AppSettings.jobsLockReason ?? "the queue is locked").")
         } else if paused {
             onNotice("Added to the queue. The queue is paused; press Resume to continue.")
         } else if action.needsNetwork, !network.isOnline {
@@ -194,10 +198,11 @@ final class JobController {
         }
     }
 
-    /// The preview never runs jobs (downloads, transcripts, AI summaries): its queue stays paused whatever is pressed.
-    /// (The test build's fake runner, which never downloads anything, is the one exception.)
-    nonisolated static func locked(_ paused: Bool) -> Bool { paused || (AppSettings.isPreview && !FakeRunner.enabled) }
-    /// The queue can run at all in this build (not the Preview).
+    /// The Preview never runs jobs (downloads, transcripts, AI summaries), and the RC not before you've approved live
+    /// downloads: the queue stays paused whatever is pressed. (The test build's fake runner, which never downloads
+    /// anything, is the one exception.)
+    nonisolated static func locked(_ paused: Bool) -> Bool { paused || (AppSettings.jobsLockReason != nil && !FakeRunner.enabled) }
+    /// The queue can run at all in this build (not the Preview, nor the RC before you've approved live downloads).
     nonisolated static var canRun: Bool { !locked(false) }
 
     private func setPaused(_ on: Bool) {
@@ -240,11 +245,14 @@ final class JobController {
         }
         guard (try? await db.markRunning(job.id)) == true else { return }   // removed from the queue meanwhile
         current = QueueItem(id: job.id, videoID: video.id, title: video.displayTitle, action: job.action)
-        // 4.0: the last check before a YouTube download: never one without a declaration and passed technical checks
-        if job.action.downloadsMedia, let refused = await authorize(job, video) {
+        // 4.0: the last check before a YouTube download: never one without a declaration and passed technical checks;
+        // in the RC, never a video that isn't on its live-test list, nor an AI summary before you've approved them
+        var refused = AppSettings.queueRefusal(job.action, key: video.key)
+        if refused == nil, job.action.downloadsMedia { refused = await authorize(job, video) }
+        if let refused {
             await refreshQueue()
             steps = [JobStep(id: 0, label: "Check the video", state: .failed)]
-            await fail((video.id, job.id), job: job, title: "Not downloaded: \(refused)", output: [refused],
+            await fail((video.id, job.id), job: job, title: "\(job.action.downloadsMedia ? "Not downloaded" : "Not run"): \(refused)", output: [refused],
                        retry: RetryInfo(action: job.action, videoID: video.id))
             current = nil
             await store.reload()
