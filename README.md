@@ -120,7 +120,7 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
   - Deleting a playlist never touches its videos, summaries, history or files. Any video's ⋮ menu has *Add to Playlist ▸* and, inside a playlist, *Remove from This Playlist*.
 - **Keyboard (unchanged in 3.0):** ⌘L focus the link field · ⇧⌘V paste link · ⌘↩ Summarize (and Return in the link field) · ⇧⌘A Audio · ⇧⌘D Video · ⌘. Cancel · ⌘F search the library · ↑/↓ move through the list · **⌘K play/pause · ⌘[ back 10 s · ⌘] forward 10 s** (Playback menu; ⌘[ and ⌘] were chosen over ⌘←/⌘→ so the link field keeps its normal cursor keys).
 
-### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branches `feature/4.0-phase1-browser` → `phase2-tabs` → `phase3-watch-later` only)
+### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branches `feature/4.0-phase1-browser` → `phase2-tabs` → `phase3-watch-later` → `phase4-offline-hub` only)
 A separate app for trying the YouTube browser before it reaches the real one.
 - **Open it:** Finder → Applications, or Spotlight "Video Buddy 4.0". It opens straight into the **YouTube** section. Quit and reopen it like any app.
 - **Telling the two apart:**
@@ -152,6 +152,13 @@ A separate app for trying the YouTube browser before it reaches the real one.
   - **Titles:** the page's own, the library's, or a lookup's (yt-dlp metadata, nothing downloaded); until then "Getting details…" or "Title unavailable", with the video's link.
   - **Offline:** everything shows from the saved details and thumbnail copies; Open in YouTube waits for internet; Play Offline works.
   - **Separate from the Library:** Clear All History, removing a library video and retention keep Watch Later; removing from Watch Later never touches files. To download a saved video, open it and use the bar (it asks for your authorization as before).
+- **Offline Hub (Phase 4), in Downloads:**
+  - **Ready / Problems / Preparing / All:** every registered file (downloaded, from Raycast or imported) with its quality, size and length, and its video's summary and transcript. **Check Files** runs the quick check (it opens and plays on this Mac); right-click a file for the **deep check** (every frame decoded). Neither changes a file, and the quick check never claims "no corruption".
+  - **Problems:** a missing file shows **Relink…** when a file of the same name and size is in the downloads folder, and **Locate…** otherwise; the record (and the resume position) changes only after you confirm. Damaged and missing files offer Download Again.
+  - **Prepare for Offline** (Downloads, Watch Later's selection bar, a playlist's Prepare Missing, the playlist import sheet): each video checked one at a time, video, audio and summary shown separately, Video or Audio, **Declare…** per video, sizes known / ≈ / unknown, quality per batch ("up to 720p", "720p (its best)"), the keep-free reserve, totals and whether they fit. Only **Queue N Downloads** queues, and each row is checked again then.
+  - **The download checks everywhere in the app:** the link field and its shortcuts, Make Available Offline, Download Again, Process Again and Retry go through the same checks as the browser bar for YouTube videos; the database itself refuses a YouTube download without a declaration; the queue checks once more before it starts one. On-device work and other sites are unchanged.
+  - **Settings → Downloads:** keep 5 / 10 / 20 / 50 GB free (best effort for unknown sizes), and **Download only on Wi-Fi or Ethernet** (it can't recognise every metered network; see the note there).
+  - **In the Preview nothing downloads:** queued items wait.
 - **Rebuild:** `app/tools/preview.sh` (on the branch). `app/tools/preview.sh --test DIR` builds the same app as *Video Buddy 4.0 Test*, under its own identity, for test runs.
 - **Remove:** `app/tools/preview.sh --remove` (its WebKit store through WebKit on a fresh launch, then its data folder and the app).
 
@@ -338,6 +345,8 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Browser/BrowserPolicy.swift` | **4.0 Phase 1 (branch `feature/4.0-phase1-browser`):** what a YouTube address is (home, video, Short, playlist, channel, search, sign-in, consent) from the URL alone, and the navigation rules (YouTube and Google's sign-in/consent pages stay in the app, other sites open in your browser, no downloads or `file://`) |
 | `Browser/BrowserTab.swift` | 4.0 P1: one tab owning its `WKWebView` (survives section switches), its state through KVO (so YouTube's in-page navigation is seen), the delegates, camera/mic refused, and releasing everything before its data is removed. **Phase 2 (branch `feature/4.0-phase2-tabs`):** sleep and wake (`interactionState`), ⌘-/middle-click and `_blank` into tabs, `window.close()`, page-crash handling, the right-click menu (`TabWebView`) |
 | `Browser/BrowserController.swift` | 4.0 P1: the YouTube section's browser: its own WebKit data store per data folder, the one-player rule (a read-only media check in a separate script world, since WebKit's own playback state is wrong on YouTube), Clear Browsing Data. **P2:** the tabs (order, active, closed), the pure tab rules, the 4-live-tab limit and memory pressure, background audio, `tabs.json` save/restore (`TabSession`) |
+| `Views/OfflineHubView.swift` | **4.0 Phase 4 (branch `feature/4.0-phase4-offline-hub`):** the Prepare for Offline sheet (rows, checks, Declare…, sizes, quality, reserve, totals, Queue N) |
+| `MediaCheck.swift` | 4.0 P4: `MediaChecker`, read-only file checks: the quick check (ffprobe + AVFoundation opens it), the deep check (ffmpeg decodes it), finding moved files |
 | `Views/WatchLaterView.swift` | **4.0 Phase 3 (branch `feature/4.0-phase3-watch-later`):** the Watch Later page in the library column: search, sort, multi-selection and its bar, rows with live status and Play Offline / Play Audio / Open in YouTube; nothing on it downloads |
 | `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen). **P2:** the tab strip, one view identity per tab, the declaration sheet names its video |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
@@ -424,6 +433,14 @@ watch_later(video_key PK /*youtube:<id>, the key videos and authorizations use*/
 - A lookup's details are written with an `UPDATE` only (an item removed meanwhile never comes back); its title replaces a guess, channel and duration fill only what's empty.
 - What's on this Mac for each item is never stored: it's read live from the library's files and the queue.
 - The thumbnail copy's path is worked out from the id (`watch-later/<id>.jpg`), not stored.
+```sql
+-- v6 (Phase 4): what a prepared download was queued with
+job_options(job_id PK → jobs ON DELETE CASCADE, video_quality /*480|720|1080|max*/,
+            estimated_bytes, size_kind /*known|approximate|unknown*/, low_space_stops /*after 2: failed, no loop*/)
+```
+- **The backstop:** `insertJob` refuses a queued YouTube download or summary unless `authorizations` has its `video_key` (`AuthorizationRequired`), whoever asks.
+- **Relink** (`relinkFile`) changes `jobs.file_path` / `summary_path` / `transcript_path` and `playback.file_path` in one transaction, refuses a new path that doesn't exist or is already used, and never touches a file.
+- **Restoring a backup, only on request:** `app/tools/restore-db.sh <data folder> <backup>`. It refuses while anything has the database open, saves the current state (log included) as `backups/history-before-restore-…` and checks it, restores through SQLite (`.restore`, then a checkpoint, never a file copy over the live database), and compares integrity, foreign keys, version and every table's count with the backup.
 
 ### 5.4 A job's life (`JobController`)
 1. Parse the link. If it's bad, show an inline error and run nothing. Playlist links open the playlist flow (§5.14).
@@ -738,6 +755,26 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **Why:** the try-out only lived in `~/Library/Caches`, started from a script, and had 3.1's bundle ID, so it couldn't be found.
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
+
+### 2026-10-23: Video Buddy 4.0, Phase 4: the Offline Hub (branch only)
+- **Request:** a practical offline preparation tool in Downloads: Ready for Offline (verified files), Prepare for Offline from Watch Later and playlists (sizes, quality, free space, a reserve), the authorization checks on every in-app download path, Wi-Fi-only, safe low-space handling, and a WAL-safe rollback. Branch `feature/4.0-phase4-offline-hub` (from Phase 3); schema v6; `main` and 3.1 unchanged.
+- **Built, in four commits:**
+  - **4a:** v6 `job_options`, the database backstop, the runner's space checks (two volumes, about 2× while merging, during and at finalization, no retry loop) and last check, the network rule, the fake runner.
+  - **4b:** per-video checks for a batch, size estimates from the same metadata.
+  - **4c:** Prepare for Offline, and the download checks at every entry point (the link field too).
+  - **4d:** Ready for Offline (file checks, problems, relink).
+  - Plus `app/tools/restore-db.sh`.
+- **Your requirements kept:**
+  - every in-app YouTube download path gated, including the link field;
+  - every registered file of every source;
+  - disk space checked on both volumes, best effort for unknown sizes;
+  - media checks that don't overclaim;
+  - the network rule conservative, with its limits said in Settings;
+  - rollback through SQLite's own backup and restore.
+- **Found:**
+  - **Backups keep WAL mode:** a backup SQLite makes keeps the log mode, so `sqlite3 -readonly` can't open it (it can't create the `-shm`); quiescent backups are read as immutable instead.
+  - **Paths in listings:** a file listing names `/var/…` files as `/private/var/…`, so moved files are searched with paths relative to the folder.
+  - **The test queue's paused state is kept in its settings:** the first fake-runner run had to resume it once.
 
 ### 2026-10-23: Video Buddy 4.0, Phase 3: native Watch Later (branch only)
 - **Request:** save videos while browsing, without copying links, downloading anything or a Google integration; a Watch Later that works offline and shows what you already have; the download authorization gate unchanged; ready for Phase 4's Offline Hub without building it. Branch `feature/4.0-phase3-watch-later` (from Phase 2); schema v5; `main` and 3.1 unchanged.
@@ -1074,7 +1111,59 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - **Afterwards:** the test build's leftovers were removed. Compared with a baseline taken before testing, identical: 3.1, production (from a copy), `~/Downloads/cobalt`, 3.1's settings, and your Preview's data folder, database counts, `tabs.json`, store id, WebKit store and settings.
   - **Installed:** the Preview was rebuilt at `2e0e83a` (260 self-tests inside its bundle), quit gracefully and opened in front on the Watch Later page. Its database went from v4 to v5 after a verified `history-pre-v5-…` backup (v4, 7 videos, 8 jobs, 1 declaration); every count is the same. Its open tab, sign-in store, settings (including the Background audio you turned on) and samples were kept; only `tabs.json` was re-saved on quit (the same tab). The queue is still locked. Screenshot: `design/screenshots/4.0-p3-03-preview-installed.png`.
 
+- **4.0 Phase 4 (10-23), in the test build** (its own bundle ID, temp data folders; the **fake runner** only there, which copies a sample clip and never downloads or summarizes; nothing real downloaded, no AI):
+  - **Self-tests:** 309 inside the bundle (260 + 49).
+    - **Migrations:** v5 → v6 (backup, rows, the 5 columns, `foreign_key_check`); v3 → latest; v4 → latest.
+    - **The backstop:** a YouTube download or summary refused without a declaration; other sites and on-device work allowed.
+    - **Job options:** quality and estimate travel with the job.
+    - **Low space:** requeued once, then failed.
+    - **Rules:** the two-volume space rule (same volume: reserve + 2×; separate: 2× on the temporary one, 1× on the downloads one, the reserve on both; unknown size: the reserve only); the network rule (Wi-Fi or Ethernet without the expensive or constrained flags; hotspot, Low Data Mode, cellular, unnamed: wait); size estimates (known, ≈, unknown, H.264 first, the quality cap, audio as MP3); totals and fit; Prepare's row states.
+    - **The fake runner:** never the Preview, 3.1 or an unbundled binary.
+    - **Files:** ffprobe parsing (an MP3's cover isn't video); damaged and empty files; a moved file found by name and size in a subfolder; Relink moving the record and the resume position, refused for a missing or used file, never touching the file; imported media listed.
+  - **The queue, with the fake runner:**
+    - A declared 480p job ran, and its quality reached the script.
+    - **Low space:** before the start → it stays queued, with the reason; resuming while still low pauses again with no attempt; during the download → requeued (stop 1), then failed (stop 2); at finalization ("No space left") → requeued. No partial file was left in Downloads.
+    - **Order:** three jobs ran in queue order.
+    - **Cancel:** the job was cancelled and its process stopped.
+    - **`kill -9`:** the job became "interrupted" with Retry, and the process guard stopped the download.
+    - **Wi-Fi only:** it waited on a hotspot, Low Data Mode, cellular and an unnamed interface, and ran on Wi-Fi.
+    - **Double Queue:** one job.
+    - **Live status:** Watch Later showed "Downloading video", then "Video available offline".
+  - **The gate at every entry point:**
+    - **The link field:** without a declaration, the declaration sheet (nothing queued); declared, one job; members-only, refused with the reason.
+    - **The Library:** Make Available Offline, Download Again, Process Again and Retry, each to the declaration sheet; declared, one job.
+    - **Not gated:** Transcribe and a non-YouTube link queue as in 3.1.
+    - **The runner's last check:** a declared video that's members-only at run time failed with the reason, and nothing was downloaded.
+    - **Playlists:** Prepare Missing and the import sheet open Prepare and queue nothing by themselves.
+    - **The backstop:** a direct queue call without a declaration was refused.
+  - **Prepare:**
+    - **10 rows:** a duplicate merged; already here, unavailable, needs a declaration, ready; known, ≈ and unknown sizes; "720p (its best)".
+    - **Wrong video:** a row that became "already here" after the sheet opened was skipped at Queue.
+    - **What was queued:** exactly the ready rows, with their quality, estimate and kind (Video or Audio); unticked rows were left out.
+  - **Ready for Offline:**
+    - **Files:** an imported clip and the samples opened and played (quality and length); a truncated file and a text file renamed `.mp4` were damaged; a missing one was missing.
+    - **Deep check:** a good file was fully checked; the truncated one was still damaged.
+    - **Moved:** a file moved two folders down was found and relinked after confirming.
+    - **Unchanged:** the checksums were identical before and after.
+  - **Rollback rehearsals (isolated copies only):**
+    - **Uncheckpointed log:** a copy of your Preview's database with 3 rows only in its `-wal` (the writer force-quit). `restore-db.sh` refused while a process held it (nothing changed), then saved a recovery copy holding all 8 test rows, restored exactly the backup's rows with none of the log's coming back (log truncated), and the undo put all 8 back.
+    - **v5 → v6 → v5:** a copy migrated to v6 with identical counts and no broken foreign keys, then restored from its pre-v6 backup with identical Watch Later, declarations, videos and jobs.
+    - **3.1 backup:** a copy of your last full 3.1 backup (v3) → v6 with identical rows; the original unchanged.
+  - **Afterwards:**
+    - **Test build:** its store, caches, settings and app were removed.
+    - **Unchanged since the Phase 3 install:** 3.1, production (from a copy), `~/Downloads/cobalt` and 3.1's settings.
+    - **Your Preview:** it differs only by what you did in it on Oct 23 (2 Watch Later items, a declaration, 2 cancelled jobs, your tabs).
+  - **Screenshots:** `design/screenshots/4.0-p4-*`.
+
 ### Not verified
+- **4.0 Phase 4 (needs real downloads, so Phase 5):**
+  - real cobalt or yt-dlp downloads at a chosen quality, and whether the result has that resolution;
+  - size estimates against real files;
+  - the disk really filling during a real download, and the script cleaning up a real one;
+  - a real Wi-Fi to hotspot switch;
+  - "+ Transcript" after a real download;
+  - paid summaries.
+- **4.0 Phase 4, by hand:** the native controls in the Prepare sheet (pickers draw blank in snapshots), Locate…'s file panel, and a deep check of a long video (slow; cancellable by design).
 - **4.0 Phase 3:**
   - your own mouse and keyboard on the page: ⇧/⌘-click selection, ⌘A, Delete, the right-click menu (driven through the same model calls instead);
   - the tab-limit alert's look (system alerts draw blank in snapshots; its text was checked);
