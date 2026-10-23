@@ -327,3 +327,70 @@ struct Watch: Equatable {
 
 /// A download of this kind is already waiting or running for the video, so nothing was queued.
 struct AlreadyQueued: Error { let videoID: Int64 }
+
+/// 4.0 Phase 3: a video saved to Watch Later. Its own record, apart from the library (what was processed); joined to
+/// it, and to download declarations, by `key` (youtube:<id>).
+struct WatchLaterItem: Identifiable, Hashable {
+    var key: String
+    var url: String
+    var title: String?
+    var channel: String?
+    var duration: Double?
+    var thumbnailURL: String?
+    var added: Date
+    var id: String { key }
+    var youtubeID: String { String(key.dropFirst("youtube:".count)) }
+
+    /// A new item for a YouTube video id: the canonical link and YouTube's thumbnail for that id.
+    static func new(youtubeID id: String, title: String?, channel: String? = nil, duration: Double? = nil, at: Date = Date()) -> WatchLaterItem {
+        WatchLaterItem(key: "youtube:\(id)", url: BrowserPolicy.watchURL(id), title: title?.nilIfBlank, channel: channel?.nilIfBlank,
+                       duration: duration, thumbnailURL: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg", added: at)
+    }
+}
+
+enum WatchLaterSort: String, CaseIterable, Identifiable {
+    case newest = "Newest First", oldest = "Oldest First", title = "Title", channel = "Channel", duration = "Longest First"
+    var id: String { rawValue }
+}
+
+/// The Watch Later page's rules (pure, self-tested).
+enum WatchLater {
+    /// Search by title or channel (any case, any accents), then sort; unknown values go last.
+    static func arrange(_ items: [WatchLaterItem], search: String, sort: WatchLaterSort) -> [WatchLaterItem] {
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let found = term.isEmpty ? items : items.filter {
+            ($0.title ?? "").localizedStandardContains(term) || ($0.channel ?? "").localizedStandardContains(term)
+        }
+        let text = { (a: String?, b: String?) -> Bool? in
+            switch (a?.nilIfBlank, b?.nilIfBlank) {
+            case let (x?, y?): x.localizedStandardCompare(y) == .orderedSame ? nil : x.localizedStandardCompare(y) == .orderedAscending
+            case (_?, nil): true
+            case (nil, _?): false
+            case (nil, nil): nil
+            }
+        }
+        return found.sorted { a, b in
+            let decided: Bool? = switch sort {
+            case .newest: a.added == b.added ? nil : a.added > b.added
+            case .oldest: a.added == b.added ? nil : a.added < b.added
+            case .title: text(a.title, b.title)
+            case .channel: text(a.channel, b.channel)
+            case .duration: a.duration == b.duration ? nil : (a.duration ?? -1) > (b.duration ?? -1)
+            }
+            return decided ?? (a.added > b.added)
+        }
+    }
+
+    /// What a row shows as the title: never empty and never another video's. `pending`: its lookup hasn't answered yet.
+    static func displayTitle(_ item: WatchLaterItem, pending: Bool) -> (text: String, placeholder: Bool) {
+        if let t = item.title?.nilIfBlank { return (t, false) }
+        return (pending ? "Getting details…" : "Title unavailable", true)
+    }
+
+    enum Primary: Equatable { case playVideo, playAudio, openInYouTube }
+
+    /// The row's main button: play what's on this Mac, else open the video on YouTube.
+    static func primary(_ a: VideoAvailability) -> Primary {
+        a.videoFile != nil ? .playVideo : a.audioFile != nil ? .playAudio : .openInYouTube
+    }
+}

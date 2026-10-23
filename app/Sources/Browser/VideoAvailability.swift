@@ -129,6 +129,36 @@ enum DownloadGate {
     }
 }
 
+/// What you have for a video and what's under way, in words: the action bar and Watch Later show the same ones.
+struct StatusLabel: Equatable {
+    enum Tone { case good, accent, warning, neutral }
+    let text: String
+    let icon: String
+    let tone: Tone
+}
+
+extension VideoAvailability {
+    /// `nothing`: what to say when there's nothing (the bar says whether it's in the library).
+    func labels(nothing: String? = nil) -> [StatusLabel] {
+        var c: [StatusLabel] = []
+        if videoFile != nil { c.append(StatusLabel(text: "Video available offline", icon: "checkmark.circle.fill", tone: .good)) }
+        if audioFile != nil { c.append(StatusLabel(text: "Audio available offline", icon: "headphones", tone: .good)) }
+        if summarized { c.append(StatusLabel(text: "Summary ready", icon: "sparkles", tone: .accent)) }
+        for (job, what) in [(video, "video"), (audio, "audio"), (summary, "summary")] {
+            switch job {
+            case .running: c.append(StatusLabel(text: what == "summary" ? "Summarizing" : "Downloading \(what)", icon: "arrow.down.circle", tone: .accent))
+            case .queued: c.append(StatusLabel(text: "\(what.capitalized) queued", icon: "clock", tone: .accent))
+            case .failed: c.append(StatusLabel(text: "\(what.capitalized) failed", icon: "exclamationmark.triangle.fill", tone: .warning))
+            case .none: break
+            }
+        }
+        if videoMissing { c.append(StatusLabel(text: "Video file missing", icon: "questionmark.folder", tone: .warning)) }
+        if audioMissing { c.append(StatusLabel(text: "Audio file missing", icon: "questionmark.folder", tone: .warning)) }
+        if c.isEmpty { c.append(StatusLabel(text: nothing ?? (inLibrary ? "Not downloaded" : "Not in your library"), icon: "circle.dashed", tone: .neutral)) }
+        return c
+    }
+}
+
 /// What one slot of the action bar shows (Video, Audio or Summarize).
 enum SlotState: Equatable {
     case offline                    // the file is here (Summarize: the summary exists)

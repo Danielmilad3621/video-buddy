@@ -43,12 +43,19 @@ actor Database {
     /// backups/history-pre-v<N>-<ms>.sqlite (a new name every time, never an existing file); if that copy can't be
     /// made, the upgrade doesn't run and the error stops the open, so the data on disk is left as it was.
     /// Additive steps after v3, numbered in the order they were written: every number used once, none skipped, so a
-    /// database at any version gets exactly the steps it lacks (v4 authorizations; Watch Later will be v5). Each only
+    /// database at any version gets exactly the steps it lacks (v4 authorizations, v5 Watch Later). Each only
     /// creates what doesn't exist yet, inside a transaction, after a verified backup of an existing database.
     static let additive: [(version: Int, label: String, sql: String)] = [
         (4, "authorizations", """
             CREATE TABLE IF NOT EXISTS authorizations(
               video_key TEXT PRIMARY KEY, basis TEXT NOT NULL, reference TEXT, recorded REAL NOT NULL);
+            """),
+        // 4.0 Phase 3: videos you saved to watch later, apart from the library (no link to `videos`: removing a library
+        // entry or clearing the history leaves them); one row per video, by the same key the library uses
+        (5, "watch later", """
+            CREATE TABLE IF NOT EXISTS watch_later(
+              video_key TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, channel TEXT, duration REAL,
+              thumbnail_url TEXT, added REAL NOT NULL);
             """),
     ]
     static var latestVersion: Int { additive.last?.version ?? 3 }
@@ -345,6 +352,45 @@ actor Database {
     }
 
     func setOwnChannels(_ list: [String]) throws { try setMeta("own_channels", list.joined(separator: ",")) }
+
+    // MARK: Watch Later (4.0 Phase 3)
+
+    /// Everything saved, newest first.
+    func watchLater() throws -> [WatchLaterItem] {
+        try db.query("SELECT * FROM watch_later ORDER BY added DESC").compactMap { r in
+            guard let key = r.string("video_key"), let url = r.string("url") else { return nil }
+            return WatchLaterItem(key: key, url: url, title: r.string("title"), channel: r.string("channel"), duration: r.double("duration"),
+                                  thumbnailURL: r.string("thumbnail_url"), added: r.date("added") ?? Date())
+        }
+    }
+
+    /// Saves a video once: false when it was already saved (the key is the table's primary key).
+    func saveToWatchLater(_ item: WatchLaterItem) throws -> Bool {
+        try db.run("""
+            INSERT INTO watch_later(video_key, url, title, channel, duration, thumbnail_url, added) VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(video_key) DO NOTHING
+            """, [item.key, item.url, item.title, item.channel, item.duration, item.thumbnailURL, item.added]) == 1
+    }
+
+    /// A lookup's details, written to the video they belong to: an UPDATE only, so an item removed meanwhile never comes
+    /// back (false then). The lookup's title replaces a guess; channel and duration only fill what's empty.
+    @discardableResult
+    func fillWatchLaterInfo(_ key: String, _ info: VideoInfo) throws -> Bool {
+        try db.run("""
+            UPDATE watch_later SET title = coalesce(?, title), channel = coalesce(channel, ?), duration = coalesce(duration, ?)
+            WHERE video_key = ?
+            """, [info.title?.nilIfBlank, info.channel?.nilIfBlank, info.duration, key]) == 1
+    }
+
+    func isInWatchLater(_ key: String) -> Bool {
+        (try? db.query("SELECT 1 AS x FROM watch_later WHERE video_key=?", [key]))?.isEmpty == false
+    }
+
+    /// In one transaction; files on this Mac are never touched.
+    @discardableResult
+    func removeFromWatchLater(_ keys: [String]) throws -> Int {
+        try db.transaction { try keys.reduce(0) { $0 + (try db.run("DELETE FROM watch_later WHERE video_key=?", [$1])) } }
+    }
 
     // MARK: playback and thumbnails
 

@@ -179,7 +179,7 @@ final class AppModel {
 
     /// What the library has for a YouTube video, from its canonical id, real files and the queue.
     func availability(youtubeID id: String) -> VideoAvailability {
-        guard let v = store.all.first(where: { $0.key == "youtube:\(id)" }) else { return VideoAvailability() }
+        guard let v = store.byKey["youtube:\(id)"] else { return VideoAvailability() }
         let current = jobs.current?.videoID == v.id ? jobs.current : nil
         return .make(inLibrary: true, files: store.files(for: v.id),
                      usable: { FileManager.default.fileExists(atPath: $0.path) && (DownloadsList.diskSize($0.path) ?? 0) > 0 },

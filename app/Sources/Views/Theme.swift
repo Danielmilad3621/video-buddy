@@ -20,6 +20,16 @@ struct Palette {
         green: Color(hex: 0x1F9D49), orange: Color(hex: 0xC86A00), gold: Color(hex: 0xD9A100),
         text: Color(hex: 0x1D1D1F), secondary: Color(hex: 0x6E6E73), border: Color(hex: 0xD2D2D7))
 
+    /// A status label's color (green: on this Mac; red: under way; orange: needs you; grey: nothing yet).
+    func tone(_ t: StatusLabel.Tone) -> Color {
+        switch t {
+        case .good: green
+        case .accent: accent
+        case .warning: orange
+        case .neutral: secondary
+        }
+    }
+
     /// The red tile behind the logo and the primary button.
     var accentGradient: LinearGradient {
         LinearGradient(colors: [accent, accentDark], startPoint: .topLeading, endPoint: .bottomTrailing)

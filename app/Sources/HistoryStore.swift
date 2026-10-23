@@ -8,6 +8,8 @@ final class HistoryStore {
     var videos: [Video] = []
     /// Every entry, unfiltered (newest first), for screens that group by playlist whatever the filter is.
     var all: [Video] = []
+    /// The same entries by key (youtube:<id>), for the browser bar and Watch Later.
+    private(set) var byKey: [String: Video] = [:]
     var recent: [Video] { Array(all.prefix(8)) }
     var files: [FileItem] = []
     var stats = Stats()
@@ -35,6 +37,9 @@ final class HistoryStore {
     var continueWatching: [(video: Video, progress: Double)] = []
     /// The Queue's "Failed" list: jobs that failed or were interrupted and haven't been retried or redone.
     var failed: [FailedItem] = []
+    /// 4.0 Phase 3: Watch Later, newest first, and its keys (to tell at once that a video is saved).
+    private(set) var watchLater: [WatchLaterItem] = []
+    private(set) var savedKeys: Set<String> = []
     var lastError: String?
 
     init(db: Database) { self.db = db }
@@ -52,6 +57,7 @@ final class HistoryStore {
             let loaded = try await list
             videos = filter == .offline ? loaded.filter { onMac.contains($0.id) } : loaded
             all = try await everything
+            byKey = Dictionary(all.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
             self.files = files
             onMacIDs = onMac
             videoOnMacIDs = Set(onDisk.filter { $0.role == .video }.map(\.videoID))
@@ -63,7 +69,17 @@ final class HistoryStore {
         }
         await reloadPlaylists()
         await reloadWatch()
+        await reloadWatchLater()
         await refreshSelection()
+    }
+
+    func reloadWatchLater() async {
+        do {
+            watchLater = try await db.watchLater()
+            savedKeys = Set(watchLater.map(\.key))
+        } catch {
+            lastError = "Couldn't load Watch Later: \(error)"
+        }
     }
 
     /// What depends on resume positions (watched marks, Continue, Continue watching); the player calls this after saving one.

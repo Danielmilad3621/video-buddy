@@ -288,21 +288,7 @@ private struct VideoActionBar: View {
     private struct Chip { let text: String; let icon: String; let color: Color }
 
     private func chips(_ a: VideoAvailability, _ g: DownloadGate.Decision?, _ checking: Bool) -> [Chip] {
-        var c: [Chip] = []
-        if a.videoFile != nil { c.append(Chip(text: "Video available offline", icon: "checkmark.circle.fill", color: p.green)) }
-        if a.audioFile != nil { c.append(Chip(text: "Audio available offline", icon: "headphones", color: p.green)) }
-        if a.summarized { c.append(Chip(text: "Summary ready", icon: "sparkles", color: p.accent)) }
-        for (job, what) in [(a.video, "video"), (a.audio, "audio"), (a.summary, "summary")] {
-            switch job {
-            case .running: c.append(Chip(text: what == "summary" ? "Summarizing" : "Downloading \(what)", icon: "arrow.down.circle", color: p.accent))
-            case .queued: c.append(Chip(text: "\(what.capitalized) queued", icon: "clock", color: p.accent))
-            case .failed: c.append(Chip(text: "\(what.capitalized) failed", icon: "exclamationmark.triangle.fill", color: p.orange))
-            case .none: break
-            }
-        }
-        if a.videoMissing { c.append(Chip(text: "Video file missing", icon: "questionmark.folder", color: p.orange)) }
-        if a.audioMissing { c.append(Chip(text: "Audio file missing", icon: "questionmark.folder", color: p.orange)) }
-        if c.isEmpty { c.append(Chip(text: a.inLibrary ? "Not downloaded" : "Not in your library", icon: "circle.dashed", color: p.secondary)) }
+        var c = a.labels().map { Chip(text: $0.text, icon: $0.icon, color: p.tone($0.tone)) }
         switch g {
         case nil where checking: c.append(Chip(text: "Checking availability…", icon: "magnifyingglass", color: p.secondary))
         case let .blocked(r)?: c.append(Chip(text: "Unavailable: \(r)", icon: "nosign", color: p.orange))

@@ -43,6 +43,7 @@ enum SelfTest {
         browserPolicy()
         browserBar()
         browserTabs()
+        watchLaterRules()
         await checkerRapidNavigation()
         try await migrations(root.appendingPathComponent("migrations"))
         preview()
@@ -682,6 +683,32 @@ enum SelfTest {
         check(BrowserActionOutcome.decide(clicked: "A", current: nil, slot: .ready) == .pageChanged, "a click from another tab does nothing")
     }
 
+    /// Watch Later's page: search, sort, titles that are never empty or wrong, the row's main button, status words.
+    private static func watchLaterRules() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let items = [WatchLaterItem.new(youtubeID: "aaaaaaaaaaa", title: "Zebra Café", channel: "Blender", duration: 60, at: t0),
+                     WatchLaterItem.new(youtubeID: "bbbbbbbbbbb", title: "apple pie", channel: "Ännchen", duration: nil, at: t0.addingTimeInterval(10)),
+                     WatchLaterItem.new(youtubeID: "ccccccccccc", title: nil, channel: nil, duration: 600, at: t0.addingTimeInterval(20))]
+        let ids = { (s: WatchLaterSort, q: String) in WatchLater.arrange(items, search: q, sort: s).map(\.youtubeID.first!) }
+        check(ids(.newest, "") == ["c", "b", "a"] && ids(.oldest, "") == ["a", "b", "c"], "sort by date added, both ways")
+        check(ids(.title, "") == ["b", "a", "c"] && ids(.channel, "") == ["b", "a", "c"], "sort by title and channel; unknown last")
+        check(ids(.duration, "") == ["c", "a", "b"], "sort longest first; unknown duration last")
+        check(ids(.newest, "cafe") == ["a"] && ids(.newest, "annchen") == ["b"] && ids(.newest, "blend") == ["a"] && ids(.newest, "zzz").isEmpty,
+              "search title and channel, any case or accents")
+        check(WatchLater.displayTitle(items[2], pending: true) == ("Getting details…", true)
+              && WatchLater.displayTitle(items[2], pending: false) == ("Title unavailable", true)
+              && WatchLater.displayTitle(items[0], pending: true) == ("Zebra Café", false), "a missing title shows a clear placeholder, never blank")
+        var a = VideoAvailability()
+        check(WatchLater.primary(a) == .openInYouTube && a.labels(nothing: "Not downloaded").map(\.text) == ["Not downloaded"], "nothing here: open on YouTube")
+        a.audioFile = "/x.mp3"
+        check(WatchLater.primary(a) == .playAudio, "audio only: Play Audio")
+        a.videoFile = "/x.mp4"; a.summarized = true; a.summary = .queued
+        check(WatchLater.primary(a) == .playVideo && a.labels().map(\.text) == ["Video available offline", "Audio available offline", "Summary ready", "Summary queued"],
+              "a video file: Play Offline, and every status that applies")
+        var b = VideoAvailability(); b.inLibrary = true; b.videoMissing = true; b.video = .failed
+        check(b.labels().map(\.text) == ["Video failed", "Video file missing"], "failed and missing files are shown")
+    }
+
     /// Rapid navigation: a slow answer for video A must never appear as video B's.
     @MainActor private static func checkerRapidNavigation() async {
         let checker = AvailabilityChecker { id in
@@ -718,13 +745,14 @@ enum SelfTest {
         }
         do {
             let raw = try SQLite(path: v3.appendingPathComponent("history.sqlite").path)
-            try raw.exec("DROP TABLE authorizations; PRAGMA user_version = 3;")
+            try raw.exec("DROP TABLE authorizations; DROP TABLE watch_later; PRAGMA user_version = 3;")
         }
         let up = try Database(directory: v3)
         let backups = { ((try? FileManager.default.contentsOfDirectory(atPath: v3.appendingPathComponent("backups").path)) ?? []).filter { $0.hasPrefix("history-pre-v4-") } }
         let (upVersion, upCount) = (try await up.schemaVersion(), try await up.videos().count)
-        check(upVersion == 4 && upCount == 1, "3.1 → v4 keeps its entries")
-        check(backups().count == 1 && Database.isHealthy(v3.appendingPathComponent("backups/\(backups()[0])")), "a verified backup before v4")
+        check(upVersion == Database.latestVersion && upCount == 1, "3.1 → the latest version keeps its entries")
+        check(backups().count == 1 && Database.isHealthy(v3.appendingPathComponent("backups/\(backups()[0])")),
+              "one verified backup (pre-v4) before the additive steps")
         _ = try Database(directory: v3)
         check(backups().count == 1, "opening again changes nothing and makes no second backup")
         do {   // a step that finds its table already there (a half-applied upgrade) still completes
@@ -732,7 +760,7 @@ enum SelfTest {
             try raw.exec("PRAGMA user_version = 3;")
         }
         let again = try Database(directory: v3)
-        check(try await again.schemaVersion() == 4, "re-running a step is harmless (CREATE … IF NOT EXISTS)")
+        check(try await again.schemaVersion() == Database.latestVersion, "re-running a step is harmless (CREATE … IF NOT EXISTS)")
         // declarations and your channels
         let a = DownloadAuthorization(basis: .writtenPermission, reference: "Email from the rights holder, 2026-10-22", recorded: Date())
         try await again.setAuthorization("youtube:jNQXAC9IVRw", a)
@@ -740,6 +768,61 @@ enum SelfTest {
         check(stored?.reference == a.reference && count == 1, "a declaration is stored by video key")
         try await again.setOwnChannels(["@me", "UCabc"])
         check(await again.ownChannels() == ["@me", "UCabc"], "your channels are kept in this profile's database")
+
+        // 4.0 Phase 3: a v4 database (the Preview's) → v5: one verified pre-v5 backup, every row kept, exactly 7 columns
+        let v4 = dir.appendingPathComponent("v4")
+        do {
+            let db = try Database(directory: v4)
+            _ = try await db.enqueue(VideoRef.parse("https://youtu.be/jNQXAC9IVRw")!, action: .audio)
+            try await db.setAuthorization("youtube:jNQXAC9IVRw", a)
+            _ = try await db.createPlaylist("Kept")
+        }
+        do {
+            let raw = try SQLite(path: v4.appendingPathComponent("history.sqlite").path)
+            try raw.exec("DROP TABLE watch_later; PRAGMA user_version = 4;")
+        }
+        let five = try Database(directory: v4)
+        let pre5 = ((try? FileManager.default.contentsOfDirectory(atPath: v4.appendingPathComponent("backups").path)) ?? []).filter { $0.hasPrefix("history-pre-v5-") }
+        check(try await five.schemaVersion() == 5 && pre5.count == 1 && Database.isHealthy(v4.appendingPathComponent("backups/\(pre5[0])")),
+              "v4 → v5 after one verified pre-v5 backup")
+        let (kept, keptAuth, keptLists) = (try await five.videos().count, try await five.allAuthorizations().count, try await five.playlists().count)
+        check(kept == 1 && keptAuth == 1 && keptLists == 1, "v4 → v5 keeps the library, declarations and playlists")
+        let raw = try SQLite(path: v4.appendingPathComponent("history.sqlite").path)
+        let columns = try raw.query("PRAGMA table_info(watch_later)").compactMap { $0.string("name") }
+        check(columns == ["video_key", "url", "title", "channel", "duration", "thumbnail_url", "added"], "watch_later has exactly its 7 columns")
+        let indexes = try raw.query("PRAGMA index_list(watch_later)").compactMap { $0.string("name") }
+        check(indexes.allSatisfy { $0.hasPrefix("sqlite_autoindex_") }, "watch_later has no index besides its primary key")
+        try await watchLaterRecords(five)
+    }
+
+    /// Watch Later's records: one per video, details written only to a row that's still there, apart from the library.
+    private static func watchLaterRecords(_ db: Database) async throws {
+        // every way of linking one video gives one key
+        let id = "jNQXAC9IVRw"
+        let links = ["https://www.youtube.com/watch?v=\(id)&list=PL6B3937A5D230E335&index=2&t=30s", "https://youtu.be/\(id)?si=abc",
+                     "https://www.youtube.com/shorts/\(id)", "https://m.youtube.com/watch?v=\(id)", "https://music.youtube.com/watch?v=\(id)&pp=x"]
+        check(Set(links.compactMap { VideoRef.parse($0)?.youtubeID }) == [id], "watch, youtu.be, Shorts, mobile and &list links: one video id")
+        let item = WatchLaterItem.new(youtubeID: id, title: "A guess")
+        check(item.key == "youtube:\(id)" && item.url == BrowserPolicy.watchURL(id), "the item uses the library's key and the canonical link")
+        let first = try await db.saveToWatchLater(item), second = try await db.saveToWatchLater(item)
+        let saved = try await db.watchLater().count
+        check(first && !second && saved == 1, "saving twice keeps one item and says it was already saved")
+        // a lookup: its title replaces the guess, channel and duration fill only what's empty
+        try await db.fillWatchLaterInfo(item.key, VideoInfo(title: "Me at the zoo", channel: "jawed", duration: 19))
+        try await db.fillWatchLaterInfo(item.key, VideoInfo(title: nil, channel: "Someone else", duration: 99))
+        let filled = try await db.watchLater().first
+        check(filled?.title == "Me at the zoo" && filled?.channel == "jawed" && filled?.duration == 19, "a lookup fills details, never over existing ones")
+        // the library's own records are separate: deleting entries, clearing the history and pruning leave Watch Later
+        try await db.deleteAll()
+        _ = try await db.prune(olderThanDays: 1, now: Date().addingTimeInterval(86_400 * 30))
+        check(try await db.watchLater().count == 1, "Clear All History and pruning leave Watch Later as it is")
+        // removed while its lookup was running: the late answer finds no row and adds none
+        let other = WatchLaterItem.new(youtubeID: "aqz-KE-bpKQ", title: nil)
+        _ = try await db.saveToWatchLater(other)
+        let removed = try await db.removeFromWatchLater([item.key, other.key])
+        let late = try await db.fillWatchLaterInfo(other.key, VideoInfo(title: "Big Buck Bunny"))
+        let left = try await db.watchLater().count
+        check(removed == 2 && !late && left == 0, "removing is final: a late lookup doesn't bring an item back")
     }
 
     private static func importer(_ dir: URL) async throws {
