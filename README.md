@@ -162,6 +162,24 @@ A separate app for trying the YouTube browser before it reaches the real one.
 - **Rebuild:** `app/tools/preview.sh` (on the branch). `app/tools/preview.sh --test DIR` builds the same app as *Video Buddy 4.0 Test*, under its own identity, for test runs.
 - **Remove:** `app/tools/preview.sh --remove` (its WebKit store through WebKit on a fresh launch, then its data folder and the app).
 
+### The 4.0 Release Candidate: `~/Applications/Video Buddy 4.0 RC.app` (branch `release/4.0-candidate`, Phase 5)
+The whole of 4.0 (Phases 1–4) as a third, separate app, for the real-world tests before 4.0 replaces 3.1. It's installed **locked**: nothing downloads and no AI runs until you approve the live tests.
+- **Telling it apart:** a blue **RC** band on the icon; the window and menu say *Video Buddy 4.0 RC*; the sidebar says **"4.0 RC · downloads locked · AI locked"**.
+- **Isolated like the Preview:**
+  - bundle ID `local.video-summarizer.rc`, process `VideoBuddyRC`;
+  - library, live-test list and downloads in `~/Library/Application Support/Video Buddy 4.0 RC/` (downloads in its `Downloads/`, like the Preview's: not in `~/Downloads`, which asks for permission and syncs to your Google Drive);
+  - its own settings domain and WebKit data (a fresh YouTube sign-in, if you sign in at all);
+  - it never reads 3.1's library, downloads folder or Raycast inbox.
+- **Its locks (settings you don't see in Settings; I change them only after your approval):**
+  - **`rcLiveDownloads`** (off): the queue can't run; queued items wait ("live downloads aren't approved yet").
+  - **`rcAISummaries`** (off): Summarize and a new summary aren't even queued.
+  - **The live-test list:** `live-test-videos.txt` in its data folder, the videos you approved (a YouTube ID or a full link per line). Every download of anything not on it is refused, from any site, by the app, by the database and again by the queue before it starts. With your own declaration, that's two independent conditions.
+  - Check them: `defaults read local.video-summarizer.rc` (`queuePaused = 1`, `rcLiveDownloads = 0`, `rcAISummaries = 0` when installed).
+- **Requests from Raycast (`videobuddy://`):** the release branch's Raycast scripts hand a YouTube link to the app instead of downloading it. The app checks the request strictly (only `url` and `action`, only a YouTube video or playlist), then **asks you**: *Another app sent a link*, with the video, the action and **Download** / **Cancel**. Download isn't the default button. Only Download goes on, through the usual checks. A request carries no secret, so a web page can send one too (Safari asks first), and it still only asks you.
+- **Your Raycast commands are unchanged:** they run the scripts in `~/Desktop/Dev/video-summarizer` (on `main`). The new scripts are only in the release worktree, `~/Desktop/Dev/video-summarizer-rc`, until the final app is installed.
+- **Rebuild:** `app/tools/preview.sh --rc` in the release worktree (self-tests inside the bundle first; every install starts locked again). **Remove:** `app/tools/preview.sh --remove --rc` (its WebKit data, library, downloads and the app).
+- **Regression:** `app/tests/regression.sh` builds the test build, drives it through every phase with the fake downloader (first with the Preview's rules, then the RC's), and removes it again.
+
 ### Before a flight (2-minute checklist)
 1. Online: for each video you want, press **Video** (or *Make Available Offline*, or *Make All Available Offline* on a playlist). Tick **+ Transcript** first if you'll want to search what was said. Use **Summarize** too if you want to read the summary. Settings → Video quality → **720p** fits about twice as much.
 2. Check **Downloads**: the files are there, and the free space is enough.
@@ -179,6 +197,8 @@ The script folder is `~/Desktop/Dev/video-summarizer/raycast`. Add it in Raycast
 | Quicklink **Open in cobalt** | `http://localhost:9001/#{clipboard}`: opens cobalt's own web page with the link filled in |
 
 Leaving the argument blank uses the clipboard. Raycast always uses the Standard prompt in English and always saves to `~/Downloads/cobalt`.
+
+**From 4.0 (release branch, active only once the final app is installed):** all three commands hand a **YouTube** link to Video Buddy (`scripts/send-to-app.sh`, a `videobuddy://request`), which asks you, then runs its usual checks; Raycast never downloads a YouTube link itself, and stops with "Video Buddy 4.0 isn't installed" if the app can't take requests. Other sites download as before.
 
 **Playlist links** (`youtube.com/playlist?list=…`) stop at once with *"Playlist link: paste it into the Video Buddy app to pick videos"*. Paste them into the app instead. A video link that's part of a playlist (`watch?v=…&list=…`) still works and downloads just that video.
 
@@ -351,7 +371,7 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen). **P2:** the tab strip, one view identity per tab, the declaration sheet names its video |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
-Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`; `preview` adds the amber PREVIEW band), `tests/vsctl.swift`, `tools/preview.sh` (4.0 branch: builds and installs the isolated *Video Buddy 4.0 Preview.app*; `--remove` deletes it and its data).
+Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`; `preview` adds the amber PREVIEW band), `tests/vsctl.swift`, `tools/preview.sh` (4.0 branch: builds and installs the isolated *Video Buddy 4.0 Preview.app*; `--remove` deletes it and its data; 4.0 Phase 5: `--rc` the same for *Video Buddy 4.0 RC.app*, `make-icon.swift rc` its blue RC band), `tests/regression.sh` (4.0 Phase 5: every phase in the test build with the fake downloader), `tests/measure.sh` (4.0 Phase 5: memory and CPU of the app and its YouTube pages, every 5 s). `scripts/send-to-app.sh` (4.0 Phase 5): Raycast hands a YouTube link to the app as a `videobuddy://request`, and stops if the app isn't a 4.0 build; `Info.plist` registers `videobuddy://`.
 
 ### 5.2 Video identity: one entry per video
 `VideoRef.parse` turns a link into a **key**:
@@ -440,6 +460,7 @@ job_options(job_id PK → jobs ON DELETE CASCADE, video_quality /*480|720|1080|m
 ```
 - **The backstop:** `insertJob` refuses a queued YouTube download or summary unless `authorizations` has its `video_key` (`AuthorizationRequired`), whoever asks.
 - **Relink** (`relinkFile`) changes `jobs.file_path` / `summary_path` / `transcript_path` and `playback.file_path` in one transaction, refuses a new path that doesn't exist or is already used, and never touches a file.
+- **The RC's rule (4.0 Phase 5):** in *Video Buddy 4.0 RC* only, `insertJob` also refuses a queued AI summary before you've approved them, and any download of a video that isn't on its live-test list (`QueueRefused`); the queue asks the same again before a job starts. `Database.queueRule` is that check (nil in every other build).
 - **Restoring a backup, only on request:** `app/tools/restore-db.sh <data folder> <backup>`. It refuses while anything has the database open, saves the current state (log included) as `backups/history-before-restore-…` and checks it, restores through SQLite (`.restore`, then a checkpoint, never a file copy over the live database), and compares integrity, foreign keys, version and every table's count with the backup.
 
 ### 5.4 A job's life (`JobController`)
@@ -583,6 +604,9 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 | Docker VM | `~/.colima/` (the VM disk lives here; images and containers are inside it) |
 | Colima autostart | `~/Library/LaunchAgents/sh.brew.colima.plist` (`brew services`) |
 | Docker CLI config (compose plugin dir, context) | `~/.docker/config.json` |
+| 4.0 Preview (Phase 1–4 branches): app, library, downloads, WebKit data | `~/Applications/Video Buddy 4.0 Preview.app`, `~/Library/Application Support/Video Buddy 4.0 Preview/`, `~/Library/WebKit/local.video-summarizer.preview/` |
+| 4.0 Release Candidate (Phase 5): app, library and live-test list, downloads, WebKit data | `~/Applications/Video Buddy 4.0 RC.app`, `~/Library/Application Support/Video Buddy 4.0 RC/` (downloads in its `Downloads/`), `~/Library/WebKit/local.video-summarizer.rc/` |
+| The release worktree (branch `release/4.0-candidate`) | `~/Desktop/Dev/video-summarizer-rc` (this folder stays on `main` until the release) |
 | Raycast script directory + Quicklink | Raycast's own settings |
 | Claude login | handled by the Claude Code CLI (`claude`) |
 
@@ -755,6 +779,28 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **Why:** the try-out only lived in `~/Library/Caches`, started from a script, and had 3.1's bundle ID, so it couldn't be found.
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
+
+### 2026-10-23: Video Buddy 4.0, Phase 5a–5b: the release branch and the Release Candidate (branch only)
+- **Request:** consolidate Phases 1–4 into one release branch, and build a separate, locked *Video Buddy 4.0 RC* for the real-world tests, with safety locks, a live-test list and a Raycast handoff that can't start a download by itself. Stop at gate G1 before anything downloads.
+- **Where:**
+  - branch `release/4.0-candidate`, made from `main` and fast-forwarded to Phase 4 in a separate worktree (`~/Desktop/Dev/video-summarizer-rc`);
+  - this folder stayed on `main`, so your Raycast commands didn't change.
+- **Built:**
+  - **A third identity:** `VBReleaseCandidate`, with its own folders, named after the app.
+  - **The RC's locks:** `rcLiveDownloads` and `rcAISummaries` (off when installed), plus the live-test list. Both are checked in the app, in the database (`QueueRefused`) and by the queue before a job starts.
+  - **`videobuddy://` requests:**
+    - checked strictly, with no secret in the link;
+    - always confirmed in the app;
+    - one at a time;
+    - never while another sheet is open.
+  - **Raycast:** `scripts/send-to-app.sh` hands YouTube links over, and stops if the app isn't a 4.0 build.
+  - **Test hooks:** the ones that write data or settings work only in the test build.
+  - **New tools:** `preview.sh --rc`, `tests/regression.sh` and `tests/measure.sh`.
+- **Your requirements kept:**
+  - `main`, 3.1, production and the Preview unchanged;
+  - no real download, no AI;
+  - the RC installed with `rcLiveDownloads = 0`, `rcAISummaries = 0` and its queue paused;
+  - the new Raycast scripts inactive until the final app is installed.
 
 ### 2026-10-23: Video Buddy 4.0, Phase 4: the Offline Hub (branch only)
 - **Request:** a practical offline preparation tool in Downloads: Ready for Offline (verified files), Prepare for Offline from Watch Later and playlists (sizes, quality, free space, a reserve), the authorization checks on every in-app download path, Wi-Fi-only, safe low-space handling, and a WAL-safe rollback. Branch `feature/4.0-phase4-offline-hub` (from Phase 3); schema v6; `main` and 3.1 unchanged.
@@ -1159,8 +1205,39 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - **Kept:** `tabs.json`, the sign-in store, the settings (including Background audio) and the samples. The queue is still locked, and no 3.1 file is open.
     - **Screenshot:** `4.0-p4-04-preview-installed.png`.
   - **Screenshots:** `design/screenshots/4.0-p4-*`.
+- **4.0 Phase 5a–5b (10-23), the release branch and the RC** (nothing real downloaded, no AI):
+  - **Consolidation:** the branch tips of `main`, `phase1-browser`, `phase2-tabs`, `phase3-watch-later` and `phase4-offline-hub` are all ancestors of `release/4.0-candidate`; it was made by a fast-forward (20 commits, no merge), and `git diff` against Phase 4 was empty before the Phase 5 commits. Every phase's self-test functions, tools, README sections and screenshots are present. The original folder stayed on `main` (`ad13eec`, clean), with its `raycast/` and `scripts/` byte-identical.
+  - **Self-tests:** 333 inside the test build, 334 inside the RC (its identity checks), including the live-test list, the RC rule in the database, 15 malformed or unsafe `videobuddy://` requests refused, and the test-hook restriction.
+  - **`app/tests/regression.sh`: 45 of 45 passed**, in the test build with the fake downloader, under two sets of rules:
+    - **Preview rules:**
+      - the gate at the link field; declared → downloaded;
+      - one job for two clicks; low space pauses with the reason, then carries on; members-only refused;
+      - failure and Retry; cancel (no file, the queue pauses as in 3.1);
+      - Prepare; Watch Later once and live status;
+      - tabs (new, behind, duplicate, close, reopen, restart); the bar follows the active tab;
+      - requests: confirm, one at a time, Cancel, refusals, Download;
+      - Raycast handed over (Download Video and Summarize), and stopped when the target is 3.1;
+      - player, playlists, Clear All keeping Watch Later.
+    - **RC rules:**
+      - **Locked:** queued items wait, nothing runs, nothing in its folder.
+      - **Refused:** an unlisted declared video by the app, by the database and by the queue's last check (taken off the list after queueing); an AI summary; an unlisted video in Prepare; an unlisted video requested from outside.
+      - **Allowed:** a listed, declared video downloads (fake).
+    - Afterwards the test build, its WebKit data and settings were removed.
+  - **The installed RC** (`314c966`):
+    - **Settings at install:** `queuePaused = 1`, `rcLiveDownloads = 0`, `rcAISummaries = 0`, an empty live-test list.
+    - **Live state:** "4.0 RC · downloads locked · AI locked"; `canRun` false; its own data and downloads folder; database v6, empty.
+    - **Test commands refused:** `declareOnly`, `setDefault rcLiveDownloads|1` and `loadFixtures` (0 declarations, the setting still 0).
+    - **A real Raycast request** from the worktree's script showed *Another app sent a link* for *Me at the zoo*. Cancel queued nothing. Download Audio → Download was refused ("not on the live-test list").
+    - **No processes:** no download, yt-dlp, Whisper or Claude process ran under it.
+  - **Unchanged against a baseline taken before 5a:** the 3.1 and Preview app bundles; both databases (counted and hashed from copies), their data folders, settings and WebKit store IDs; your Preview's tabs; `~/Downloads/cobalt`. The only new thing is the RC's own WebKit store.
+  - **Found:**
+    - **A stray 3.1 copy:** macOS resolved `local.video-summarizer` to a leftover 3.1 copy in my scratch folder, not `~/Applications/Video Buddy.app`. It was removed from LaunchServices and deleted.
+    - **Two more copies under 3.1's ID are still registered:** `~/.Trash/Video Summarizer.app` and the old try-out. They must be unregistered before the release (approval needed).
+    - **The Desktop folder asks for permission:** the test build ran the fake downloader from the project folder on the Desktop, so macOS asked for Desktop access and the first download waited. The test now copies it into its temporary folder.
+  - **Screenshots:** `design/screenshots/4.0-p5-*`.
 
 ### Not verified
+- **4.0 Phase 5 (waits for gate G1, your approval of the live tests):** every real download test (each quality, audio, sizes against estimates, playback, cancel and interruption of a real script, the network changes, the bounded low-storage test), direct non-YouTube Raycast downloads, a request confirmed with Download for a declared, listed video in the RC itself, memory and CPU figures (`measure.sh` only smoke-tested), and a full UI review. Paid summaries wait for G2.
 - **4.0 Phase 4 (needs real downloads, so Phase 5):**
   - real cobalt or yt-dlp downloads at a chosen quality, and whether the result has that resolution;
   - size estimates against real files;
