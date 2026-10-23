@@ -602,7 +602,7 @@ struct ExternalRequestSheet: View {
         let quality = AppSettings.videoQuality.rawValue
         switch (r.playlist != nil, r.kind) {
         case (true, _): return "Show the playlist, to choose videos to prepare for offline"
-        case (false, .video): return "Download the video (\(quality))"
+        case (false, .video): return "Download the video at \(quality)"
         case (false, .audio): return "Download the audio (MP3)"
         default: return "Summarize: download the audio, transcribe it, then a paid AI summary"
         }
