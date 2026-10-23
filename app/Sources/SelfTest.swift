@@ -717,6 +717,20 @@ enum SelfTest {
               && !FakeRunner.allowed(bundleID: FakeRunner.testBundleID, env: ["VS_DATA_DIR": "/tmp/x"]), "never without a throwaway data folder, or unasked")
         check(SizeEstimate.text(412_000_000, .known) == Fmt.bytes(412_000_000) && SizeEstimate.text(412_000_000, .approximate).hasPrefix("≈ ")
               && SizeEstimate.text(nil, .unknown) == "size unknown", "sizes say whether they're known, approximate or unknown")
+        // Prepare rows: only a row whose checks passed and that isn't here or queued can be queued
+        var here = VideoAvailability(); here.videoFile = "/x.mp4"
+        let auth = DownloadAuthorization(basis: .writtenPermission, reference: "r", recorded: Date())
+        check(PrepareRule.status(kind: .video, availability: here, gate: .allowed(auth)) == .haveIt
+              && PrepareRule.status(kind: .audio, availability: here, gate: .allowed(auth)) == .ready, "a video file here: Video is done, Audio can still be queued")
+        var waiting = VideoAvailability(); waiting.video = .queued
+        check(PrepareRule.status(kind: .video, availability: waiting, gate: .allowed(auth)) == .queued, "already queued: not queued again")
+        check(PrepareRule.status(kind: .video, availability: VideoAvailability(), gate: nil) == .checking
+              && PrepareRule.status(kind: .video, availability: VideoAvailability(), gate: .needsDeclaration) == .needsDeclaration
+              && PrepareRule.status(kind: .video, availability: VideoAvailability(), gate: .blocked("x")) == .unavailable("x")
+              && PrepareRule.status(kind: .video, availability: VideoAvailability(), gate: .unknown("y")) == .unknown("y")
+              && PrepareRule.status(kind: .video, availability: VideoAvailability(), gate: .allowed(auth)) == .ready,
+              "checking, needs a declaration, unavailable and couldn't check never queue; passed checks with a declaration do")
+
         // estimates from yt-dlp's formats: the best at or below the quality, H.264 first, plus the audio
         let mb: Int64 = 1_000_000
         let F = MediaFacts.Format.self

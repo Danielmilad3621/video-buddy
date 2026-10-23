@@ -310,8 +310,10 @@ actor Database {
     /// already waiting or running is not queued twice) and, with a target, saves the playlist: every entry of the
     /// YouTube playlist that's in the library joins it by video id, ticked or not. Members it already has keep their
     /// positions; new ones are slotted in next to their YouTube neighbours.
+    /// `queue` false (4.0): the ticked videos join the library and the playlist without downloads; Prepare for Offline
+    /// then queues them, one video at a time through the download checks.
     func importPlaylist(_ chosen: [PlaylistEntry], all: [PlaylistEntry]? = nil, action: JobAction, format: String?, language: String?,
-                        into target: PlaylistTarget?, sourceURL: String?, at: Date = Date()) throws -> PlaylistImportResult {
+                        into target: PlaylistTarget?, sourceURL: String?, queue: Bool = true, at: Date = Date()) throws -> PlaylistImportResult {
         try db.transaction {
             var jobs = 0
             for (i, e) in chosen.enumerated() {
@@ -319,7 +321,7 @@ actor Database {
                                             info: VideoInfo(title: e.title, channel: e.channel,
                                                             thumbnail: "https://i.ytimg.com/vi/\(e.id)/mqdefault.jpg"))
                 if let d = e.duration { try db.run("UPDATE videos SET duration = coalesce(duration, ?) WHERE id=?", [d, video]) }
-                if try insertJob(video, NewJob(kind: action.kind, status: .queued, source: .app, action: action,
+                if queue, try insertJob(video, NewJob(kind: action.kind, status: .queued, source: .app, action: action,
                                                started: at.addingTimeInterval(Double(i) / 1000),
                                                summaryLanguage: language, summaryFormat: format)) != nil { jobs += 1 }
             }

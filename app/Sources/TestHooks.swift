@@ -272,6 +272,32 @@ enum TestHooks {
                     model.jobs.pump()
                 }
             }
+        // 4.0 Phase 4: Prepare for Offline and the download checks at each entry point
+        case "prepareFor": model.prepareForOffline(arg.split(separator: ",").map { (id: String($0), title: nil) }, from: "Test")
+        case "prepareQueue":
+            // "<quality>|<transcript on/off>": the sheet's Queue button, with the rows as they are now
+            let f = arg.split(separator: "|").map(String.init)
+            if let rows = model.prepare?.rows { model.queuePrepared(rows, quality: f.first, transcript: f.count > 1 && f[1] == "on") }
+        case "prepareRow":
+            // "<id>|<video|audio|off>"
+            let f = arg.split(separator: "|").map(String.init)
+            if f.count == 2, let i = model.prepare?.rows.firstIndex(where: { $0.id == f[0] }) {
+                if f[1] == "off" { model.prepare?.rows[i].include = false } else { model.prepare?.rows[i].kind = f[1] == "audio" ? .audio : .video }
+            }
+        case "libraryAction":
+            // "<youtube id>|offline|again-video|again-audio|process|retry": the Library's buttons for that entry
+            let f = arg.split(separator: "|").map(String.init)
+            if f.count == 2, let v = store.all.first(where: { $0.key == "youtube:\(f[0])" }) {
+                switch f[1] {
+                case "offline": model.makeAvailableOffline(v)
+                case "again-video": model.downloadAgain(v, kind: .video)
+                case "again-audio": model.downloadAgain(v, kind: .audio)
+                case "process": model.processAgain(v)
+                case "retry": model.retry(RetryInfo(action: .video, videoID: v.id))
+                default: break
+                }
+            }
+        case "forgetChecks": model.browser.checker.recheckAll(arg.split(separator: ",").map(String.init)); model.browser.checker.cancelBatch()
         case "memoryWarning": model.browser.memoryWarning()
         case "cookieNames":
             // the YouTube data store's cookie names and count, never their values (sign-in survives a restart)
@@ -574,6 +600,14 @@ enum TestHooks {
             "contextMenu": TabWebView.lastMenu,
             "liveTabs": model.browser.tabs.filter { !$0.isAsleep }.count,
             "declarationTitle": model.declaration?.title ?? "",
+            "declarationFor": model.declaration.map { d in "\(d.videoID) " + { switch d.after { case .bar: "bar"; case .queue(let r): "queue \(r.action.rawValue)"; case .prepare: "prepare" } }() } ?? "",
+            "prepare": (model.prepare?.rows ?? []).map { r in
+                let st = model.prepareStatus(r)
+                let f = model.browser.checker.facts[r.id]
+                let est = f.map { r.kind == .video ? SizeEstimate.text(SizeEstimate.video($0, quality: "720").bytes, SizeEstimate.video($0, quality: "720").kind)
+                                                   : SizeEstimate.text(SizeEstimate.audio($0).bytes, SizeEstimate.audio($0).kind) } ?? "-"
+                return "\(r.id) \(r.include ? "on" : "off") \(r.kind.rawValue) \(st) \(est)"
+            },
             "playlistSheet": model.playlistImport.map { ["linkOnly": $0.linkOnly, "entries": $0.preview.entries.count] as [String: Any] } ?? [:],
             "browser": { () -> [String: Any] in
                 let b = model.browser

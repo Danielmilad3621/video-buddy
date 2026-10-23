@@ -354,6 +354,7 @@ final class AvailabilityChecker {
     @ObservationIgnored var settle: Duration = .milliseconds(800)
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var batch: Task<Void, Never>?
+    @ObservationIgnored private var batchIDs: [String] = []
 
     init(fetch: @escaping (String) async -> CheckAnswer) { self.fetch = fetch }
 
@@ -366,6 +367,7 @@ final class AvailabilityChecker {
     /// 4.0 Phase 4: checks several videos one after another (Prepare for Offline), each result under its own id as it
     /// arrives; ones already checked (with sizes) within `maxAge` are skipped. A new batch, or cancelBatch, stops it.
     func checkAll(_ ids: [String], maxAge: TimeInterval = 30 * 60) {
+        batchIDs = ids
         batch?.cancel()
         batch = Task { [weak self] in
             for id in ids {
@@ -378,6 +380,12 @@ final class AvailabilityChecker {
             }
             self?.batchRunning = nil
         }
+    }
+
+    /// Check Again for some rows: they're looked up afresh, and the rest of the batch carries on.
+    func recheckAll(_ ids: [String]) {
+        for id in ids { results[id] = nil; facts[id] = nil; checkedAt[id] = nil }
+        checkAll(batchIDs.isEmpty ? ids : batchIDs)
     }
 
     func cancelBatch() {

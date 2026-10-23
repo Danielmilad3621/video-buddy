@@ -78,7 +78,11 @@ struct RootView: View {
         }
         .sheet(item: $model.namePrompt) { NamePromptSheet(prompt: $0).environment(model) }
         .sheet(item: $model.addingVideosTo) { AddVideosSheet(playlist: $0).environment(model) }
-        .sheet(item: $model.declaration) { DeclarationSheet(request: $0).environment(model) }
+        // the declaration sheet opens over Prepare for Offline when that's open (one sheet over another)
+        .sheet(item: Binding(get: { model.prepare == nil ? model.declaration : nil }, set: { model.declaration = $0 })) {
+            DeclarationSheet(request: $0).environment(model)
+        }
+        .sheet(item: $model.prepare) { PrepareSheet(state: $0).environment(model) }
         // Watch Later's Open in Tabs, when some didn't fit (it switches to YouTube, so the window shows it)
         .alert("Not every video was opened", isPresented: Binding(get: { model.openReport != nil }, set: { if !$0 { model.openReport = nil } })) {
             Button("OK") { model.openReport = nil }

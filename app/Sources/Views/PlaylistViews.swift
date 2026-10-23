@@ -138,11 +138,11 @@ struct PlaylistDetailCard: View {
             }
             HStack(spacing: 8) {
                 Button { model.askDownloadMissing(playlist.id) } label: {
-                    Label(missing == 0 ? "All Downloaded" : "Download \(missing) Missing", systemImage: missing == 0 ? "checkmark.circle" : "arrow.down.circle")
+                    Label(missing == 0 ? "All Downloaded" : "Prepare \(missing) for Offline…", systemImage: missing == 0 ? "checkmark.circle" : "arrow.down.circle")
                 }
                 .buttonStyle(SecondaryButtonStyle(height: 30, font: .caption.weight(.semibold)))
                 .disabled(missing == 0)
-                .help("Download the video of every episode that isn't on this Mac (asks first; files you have are never downloaded again)")
+                .help("Choose which missing episodes to download, with their checks, sizes and your free space (nothing starts until you queue it)")
                 Button { model.addingVideosTo = playlist } label: { Label("Add Videos", systemImage: "plus") }
                     .buttonStyle(SecondaryButtonStyle(height: 30, font: .caption.weight(.semibold)))
             }

@@ -112,7 +112,7 @@ final class JobController {
 
     private func queued(_ action: JobAction) async {
         await refreshQueue()
-        if AppSettings.isPreview {
+        if !Self.canRun {
             onNotice("Added to the queue. Downloads and AI jobs don't run in Video Buddy 4.0 Preview.")
         } else if paused {
             onNotice("Added to the queue. The queue is paused; press Resume to continue.")

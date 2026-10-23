@@ -177,7 +177,7 @@ final class AppModel {
             if playlist.videoID != nil { playlistChoice = (playlist, kind) } else { readPlaylist(playlist, kind: kind) }
             return
         }
-        jobs.enqueue(downloadAction(kind), link: link)
+        requestDownload(DownloadRequest(action: downloadAction(kind), youtubeID: VideoRef.parse(link)?.youtubeID, link: link))
     }
 
     /// The Video Buddy bar in the YouTube section: the same actions as the toolbar, for the page's video.
@@ -226,7 +226,7 @@ final class AppModel {
         switch outcome {
         case let .queue(id): queueFromBrowser(slot, id)
         case .pageChanged: notice = "The page changed before your click, so nothing was queued. Try again."
-        case let .declare(id): declaration = DeclarationRequest(videoID: id, slot: slot, title: browserTitle(id))
+        case let .declare(id): declaration = DeclarationRequest(videoID: id, slot: slot, title: browserTitle(id), after: .bar)
         case let .explain(reason): notice = reason
         case .alreadyHave: notice = slot == .summary ? "This video already has a summary." : "You already have this on this Mac."
         case .alreadyQueued: notice = "Already in the queue."
@@ -261,11 +261,11 @@ final class AppModel {
     /// (still only declared, never verified) and the technical checks passed, looked up again when over 30 minutes old.
     func lastCheck(_ v: Video) async -> String? {
         guard v.key.hasPrefix("youtube:") else { return nil }
-        guard await store.db.authorization(v.key) != nil else { return "no declaration is on record for this video." }
+        guard await store.db.authorization(v.key) != nil else { return "No declaration is on record for this video." }
         switch await browser.checker.fresh(String(v.key.dropFirst("youtube:".count)), maxAge: 30 * 60) {
         case .passed: return nil
-        case let .blocked(reason): return "unavailable: \(reason)"
-        case let .unknown(reason): return "couldn't check it: \(reason)"
+        case let .blocked(reason): return reason
+        case let .unknown(reason): return "It couldn't be checked: \(reason)"
         }
     }
 
@@ -456,9 +456,14 @@ final class AppModel {
         Task {
             do { try await store.db.setAuthorization(key, a) } catch { notice = "Couldn't save the declaration: \(error)"; return }
             authorizations[key] = a
-            switch slotState(request.slot, request.videoID) {
-            case .ready, .retry, .downloadAgain: queueFromBrowser(request.slot, request.videoID)
-            case let state: notice = "Declaration saved. \(state == .checking ? "Still checking the video; try again in a moment." : "Nothing queued.")"
+            switch request.after {
+            case .bar:
+                switch slotState(request.slot, request.videoID) {
+                case .ready, .retry, .downloadAgain: queueFromBrowser(request.slot, request.videoID)
+                case let state: notice = "Declaration saved. \(state == .checking ? "Still checking the video; try again in a moment." : "Nothing queued.")"
+                }
+            case let .queue(r): requestDownload(r)          // the action it was asked for, through the same checks
+            case .prepare: notice = "Declaration saved (declared, not independently verified)."
             }
         }
     }
@@ -477,7 +482,7 @@ final class AppModel {
     func justThisVideo() {
         guard let choice = playlistChoice else { return }
         playlistChoice = nil
-        jobs.enqueue(downloadAction(choice.kind), link: link)
+        requestDownload(DownloadRequest(action: downloadAction(choice.kind), youtubeID: VideoRef.parse(link)?.youtubeID, link: link))
     }
 
     func wholePlaylist() {
@@ -524,12 +529,15 @@ final class AppModel {
     func importPlaylist(_ entries: [PlaylistEntry], all: [PlaylistEntry], action: JobAction, into target: PlaylistTarget?, sourceURL: String) {
         let entries = playlistImport?.linkOnly == true ? [] : entries
         playlistImport = nil
+        // 4.0: the ticked YouTube videos join the library and the playlist without downloads; Prepare for Offline
+        // queues them, each through the download checks
+        let prepareThese = action.downloadsMedia ? entries.map { (id: $0.id, title: Optional($0.title)) } : []
         guard !entries.isEmpty || target != nil else { return }
         let (format, language) = action == .summarize ? (AppSettings.format.rawValue, AppSettings.language.rawValue) : (nil, nil)
         Task {
             do {
                 let r = try await store.db.importPlaylist(entries, all: all, action: action, format: format, language: language,
-                                                          into: target, sourceURL: sourceURL)
+                                                          into: target, sourceURL: sourceURL, queue: prepareThese.isEmpty)
                 await store.reload()
                 await jobs.refreshQueue()
                 jobs.pump()
@@ -537,12 +545,9 @@ final class AppModel {
                     section = .playlists
                     store.openPlaylistID = id
                 }
-                let skipped = entries.count - r.jobs
                 let linked = r.playlist == nil ? nil : "\(r.linked) \(r.linked == 1 ? "video" : "videos") linked to the playlist"
-                notice = entries.isEmpty ? "\(linked ?? "Nothing changed"). Nothing was downloaded."
-                    : ([r.jobs > 0 ? "Queued \(r.jobs) \(r.jobs == 1 ? "video" : "videos")" : nil,
-                        skipped > 0 ? "\(skipped) already waiting in the queue" : nil, linked] as [String?])
-                        .compactMap { $0 }.joined(separator: "; ") + "."
+                notice = "\(linked ?? "Nothing changed"). Nothing was downloaded."
+                if !prepareThese.isEmpty { prepareForOffline(prepareThese, from: "Playlist") }
             } catch {
                 notice = "Couldn't add the playlist: \(error)"
             }
@@ -642,6 +647,12 @@ final class AppModel {
             notice = busy.isEmpty ? "Every video in this playlist is already on this Mac." : "The missing videos are already in the queue."
             return
         }
+        // 4.0: YouTube videos go through Prepare for Offline (checked one at a time); others as in 3.1
+        let youtube = missing.compactMap { v in Self.youtubeID(v).map { (id: $0, title: Optional(v.displayTitle)) } }
+        if !youtube.isEmpty {
+            prepareForOffline(youtube, from: store.playlists.first { $0.id == id }?.name ?? "Playlist")
+            return
+        }
         pendingOfflineBatch = OfflineBatch(videoIDs: missing.map(\.id), totalDuration: missing.compactMap(\.duration).reduce(0, +))
     }
 
@@ -676,23 +687,112 @@ final class AppModel {
         }
     }
 
-    func retry(_ r: RetryInfo) { jobs.retry(r) }
+    /// Retry: a download or summary of a YouTube video goes through the download checks again; on-device work doesn't.
+    func retry(_ r: RetryInfo) {
+        guard r.action.downloadsMedia, let v = store.video(r.videoID), let id = Self.youtubeID(v) else { jobs.retry(r); return }
+        requestDownload(DownloadRequest(action: r.action, youtubeID: id, videoID: r.videoID))
+    }
 
     func processAgain(_ v: Video) {
         guard v.url != nil else { return }
-        jobs.enqueue(.summarize, videoID: v.id, format: AppSettings.format, language: AppSettings.language)
+        requestDownload(DownloadRequest(action: .summarize, youtubeID: Self.youtubeID(v), videoID: v.id, format: AppSettings.format, language: AppSettings.language))
     }
 
     func downloadAgain(_ v: Video, kind: JobKind) {
         guard v.url != nil else { return }
-        jobs.enqueue(JobAction.from(kind: kind), videoID: v.id)
+        requestDownload(DownloadRequest(action: JobAction.from(kind: kind), youtubeID: Self.youtubeID(v), videoID: v.id))
     }
 
     /// Downloads the video file, so the entry can be watched without internet.
     func makeAvailableOffline(_ v: Video) {
         guard v.url != nil else { return }
-        jobs.enqueue(.video, videoID: v.id)
-        notice = network.isOnline ? "Downloading “\(v.displayTitle)” for offline viewing." : "Queued: it downloads when you're back online."
+        requestDownload(DownloadRequest(action: .video, youtubeID: Self.youtubeID(v), videoID: v.id))
+    }
+
+    // MARK: the download checks for every way of starting one (4.0 Phase 4)
+
+    static func youtubeID(_ v: Video) -> String? { v.key.hasPrefix("youtube:") ? String(v.key.dropFirst("youtube:".count)) : nil }
+
+    /// Every way of starting a download in the app comes here, except the browser bar (whose buttons already show the
+    /// checks) and Prepare for Offline (which checks each row): a YouTube video is queued only with a declaration on
+    /// record and passed technical checks; without a declaration, the declaration sheet opens for that video;
+    /// unavailable or unchecked, it says why. Other sites and on-device work go to the queue as in 3.1.
+    func requestDownload(_ r: DownloadRequest) {
+        guard r.action.downloadsMedia, let id = r.youtubeID else { enqueueNow(r); return }
+        Task {
+            var decision = browserGate(id)
+            if decision == nil {
+                notice = "Checking this video before downloading…"
+                _ = await browser.checker.fresh(id, maxAge: 30 * 60)
+                decision = browserGate(id)
+            }
+            switch decision {
+            case .allowed?: enqueueNow(r)
+            case .needsDeclaration?:
+                notice = nil
+                declaration = DeclarationRequest(videoID: id, slot: BarSlot(r.action), title: browserTitle(id), after: .queue(r))
+            case let .blocked(reason)?: notice = "Not downloaded: \(reason)"
+            case let .unknown(reason)?: notice = "Couldn't check this video, so nothing was queued: \(reason)"
+            case nil: notice = "Couldn't check this video, so nothing was queued."
+            }
+        }
+    }
+
+    private func enqueueNow(_ r: DownloadRequest) {
+        if let v = r.videoID {
+            jobs.enqueue(r.action, videoID: v, format: r.format, language: r.language)
+        } else if let link = r.link {
+            jobs.enqueue(r.action, link: link)
+        }
+    }
+
+    // MARK: Prepare for Offline (4.0 Phase 4)
+
+    /// The Prepare sheet, when open.
+    var prepare: PrepareState?
+
+    /// Opens Prepare for Offline for these YouTube videos (Watch Later, a playlist, Downloads) and starts their checks,
+    /// one at a time. Nothing is queued until you press Queue.
+    func prepareForOffline(_ items: [(id: String, title: String?)], from source: String) {
+        var seen = Set<String>()
+        let rows = items.filter { seen.insert($0.id).inserted }.map { PrepareRow(id: $0.id, title: $0.title ?? store.byKey["youtube:\($0.id)"]?.title) }
+        guard !rows.isEmpty else { notice = "Nothing to prepare."; return }
+        prepare = PrepareState(rows: rows, source: source)
+        browser.checker.checkAll(rows.map(\.id))
+    }
+
+    /// A row's state right now, from what's on this Mac, the queue and the download checks.
+    func prepareStatus(_ row: PrepareRow) -> PrepareRule.Status {
+        PrepareRule.status(kind: row.kind, availability: availability(youtubeID: row.id), gate: browserGate(row.id))
+    }
+
+    /// Queue N Downloads: each ticked row is checked again now (ready, not already here, not already queued), then
+    /// queued with its quality and size estimate; anything else is skipped and counted. Never anything unticked.
+    func queuePrepared(_ rows: [PrepareRow], quality: String?, transcript: Bool) {
+        prepare = nil
+        browser.checker.cancelBatch()
+        Task {
+            var queued = 0, skipped = 0
+            for row in rows where row.include {
+                guard prepareStatus(row) == .ready, let ref = VideoRef.parse(BrowserPolicy.watchURL(row.id)) else { skipped += 1; continue }
+                let facts = browser.checker.facts[row.id]
+                let estimate: (Int64?, SizeKind) = row.kind == .video
+                    ? facts.map { let e = SizeEstimate.video($0, quality: quality); return (e.bytes, e.kind) } ?? (nil, .unknown)
+                    : facts.map { SizeEstimate.audio($0) } ?? (nil, .unknown)
+                let options = JobOptions(quality: row.kind == .video ? quality : nil, estimatedBytes: estimate.0, sizeKind: estimate.1)
+                do {
+                    _ = try await store.db.enqueue(ref, action: .download(row.kind, transcript: transcript), options: options)
+                    queued += 1
+                } catch {
+                    skipped += 1
+                }
+            }
+            await store.reload()
+            await jobs.refreshQueue()
+            jobs.pump()
+            notice = "Queued \(queued) \(queued == 1 ? "download" : "downloads")" + (skipped > 0 ? "; \(skipped) not queued (already here, queued or not allowed)" : "")
+                + (JobController.canRun ? "." : ". Downloads don't run in Video Buddy 4.0 Preview.")
+        }
     }
 
     /// On-device transcript of a file already on this Mac (audio first: it needs no conversion).
@@ -883,6 +983,55 @@ struct DeclarationRequest: Identifiable {
     let slot: BarSlot
     /// Shown in the sheet, so you always see which video the declaration is for.
     let title: String?
+    /// What happens once you've declared: the bar's button, the action it was asked for, or nothing (Prepare's row).
+    var after: AfterDeclaring = .bar
+}
+
+enum AfterDeclaring { case bar, queue(DownloadRequest), prepare }
+
+extension BarSlot {
+    init(_ action: JobAction) { self = action.kind == .video ? .video : action.kind == .audio ? .audio : .summary }
+}
+
+/// 4.0 Phase 4: a download asked for from the Library, the link field or Retry, with the video it's for.
+struct DownloadRequest {
+    let action: JobAction
+    let youtubeID: String?           // nil: not a YouTube video (3.1's behaviour)
+    var link: String? = nil          // a pasted link (a new library entry), or
+    var videoID: Int64? = nil        // an existing library entry
+    var format: SummaryFormat? = nil
+    var language: SummaryLanguage? = nil
+}
+
+/// 4.0 Phase 4: one video in Prepare for Offline, and what you chose for it.
+struct PrepareRow: Identifiable, Equatable {
+    let id: String                   // the YouTube id
+    var title: String?
+    var include = true
+    var kind = JobKind.video         // .video or .audio
+}
+
+struct PrepareState: Identifiable {
+    let id = UUID()
+    var rows: [PrepareRow]
+    let source: String
+}
+
+/// What a Prepare row can do now (pure, self-tested): only `.ready` is queued.
+enum PrepareRule {
+    enum Status: Equatable { case haveIt, queued, checking, needsDeclaration, unavailable(String), unknown(String), ready }
+
+    static func status(kind: JobKind, availability a: VideoAvailability, gate: DownloadGate.Decision?) -> Status {
+        if kind == .video ? a.videoFile != nil : a.audioFile != nil { return .haveIt }
+        if (kind == .video ? a.video : a.audio) == .queued || (kind == .video ? a.video : a.audio) == .running { return .queued }
+        switch gate {
+        case nil: return .checking
+        case let .blocked(r)?: return .unavailable(r)
+        case let .unknown(r)?: return .unknown(r)
+        case .needsDeclaration?: return .needsDeclaration
+        case .allowed?: return .ready
+        }
+    }
 }
 
 struct PlaylistImportState: Identifiable {

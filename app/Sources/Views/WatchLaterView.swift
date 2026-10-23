@@ -116,8 +116,10 @@ struct WatchLaterList: View {
                 Button("Show in Library") { model.open(v, tab: .video); model.section = .library }
             }
             Button("Copy Link") { FileOps.copy(item.url) }
+            Button("Prepare for Offline…") { model.prepareForOffline([(id: item.youtubeID, title: item.title)], from: "Watch Later") }
             Divider()
         } else if chosen.count > 1 {
+            Button("Prepare \(chosen.count) for Offline…") { model.prepareForOffline(chosen.map { (id: $0.youtubeID, title: $0.title) }, from: "Watch Later") }
             Button("Open \(chosen.count) in Tabs") { model.openInTabs(chosen) }.disabled(!model.network.isOnline)
             Divider()
         }
@@ -132,6 +134,12 @@ struct WatchLaterList: View {
         return HStack(spacing: 8) {
             Text("\(chosen.count) selected").font(.callout.weight(.semibold))
             Spacer()
+            // 4.0 Phase 4: each through the download checks, one video at a time; nothing starts until you queue it
+            Button { model.prepareForOffline(chosen.map { (id: $0.youtubeID, title: $0.title) }, from: "Watch Later") } label: {
+                Label("Prepare for Offline", systemImage: "arrow.down.circle")
+            }
+            .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout))
+            .testProbe("prepareSelected")
             Button { model.openInTabs(chosen) } label: { Label("Open in Tabs", systemImage: "plus.square.on.square") }
                 .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout)).disabled(!model.network.isOnline)
                 .help(model.network.isOnline ? "Opens each in a tab behind (asleep until you select it)" : "Needs internet")

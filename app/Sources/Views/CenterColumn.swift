@@ -338,7 +338,7 @@ struct PlaylistActions: View {
             Button("Continue Episode \(store.episode(id, in: playlist.id) ?? 1)") { model.continuePlaylist(playlist.id) }
         }
         Divider()
-        Button("Download Missing Videos…") { model.askDownloadMissing(playlist.id) }
+        Button("Prepare Missing for Offline…") { model.askDownloadMissing(playlist.id) }
         if playlist.sourceURL != nil { Button("Check Against YouTube…") { model.checkPlaylist(playlist) } }
         Divider()
         Button("Rename…") { model.namePrompt = .rename(playlist) }
@@ -559,9 +559,9 @@ struct DownloadsList: View {
             .buttonStyle(.plain)
             .accessibilityValue(open ? "expanded" : "collapsed")
             if ids.count > have {
-                Button { model.askDownloadMissing(pl.id) } label: { Label("Download Missing", systemImage: "arrow.down.circle") }
+                Button { model.askDownloadMissing(pl.id) } label: { Label("Prepare Missing for Offline", systemImage: "arrow.down.circle") }
                     .buttonStyle(SecondaryButtonStyle(height: 28, font: .caption.weight(.semibold), iconOnly: true))
-                    .help("Download the \(ids.count - have) missing videos (asks first; nothing you have is downloaded again)")
+                    .help("Prepare the \(ids.count - have) missing videos for offline (you choose; nothing you have is downloaded again)")
             }
         }
         .padding(8)
