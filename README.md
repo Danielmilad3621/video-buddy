@@ -120,7 +120,7 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
   - Deleting a playlist never touches its videos, summaries, history or files. Any video's ⋮ menu has *Add to Playlist ▸* and, inside a playlist, *Remove from This Playlist*.
 - **Keyboard (unchanged in 3.0):** ⌘L focus the link field · ⇧⌘V paste link · ⌘↩ Summarize (and Return in the link field) · ⇧⌘A Audio · ⇧⌘D Video · ⌘. Cancel · ⌘F search the library · ↑/↓ move through the list · **⌘K play/pause · ⌘[ back 10 s · ⌘] forward 10 s** (Playback menu; ⌘[ and ⌘] were chosen over ⌘←/⌘→ so the link field keeps its normal cursor keys).
 
-### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branches `feature/4.0-phase1-browser` → `feature/4.0-phase2-tabs` only)
+### Trying 4.0: `~/Applications/Video Buddy 4.0 Preview.app` (branches `feature/4.0-phase1-browser` → `phase2-tabs` → `phase3-watch-later` only)
 A separate app for trying the YouTube browser before it reaches the real one.
 - **Open it:** Finder → Applications, or Spotlight "Video Buddy 4.0". It opens straight into the **YouTube** section. Quit and reopen it like any app.
 - **Telling the two apart:**
@@ -145,6 +145,13 @@ A separate app for trying the YouTube browser before it reaches the real one.
   - **Sleeping tabs:** at most 4 tabs keep a web page loaded; the others sleep and reload where they were (history and scroll position) when you select them. Tabs opened behind and restored tabs start asleep. Idle tabs out of sight use no CPU.
   - **Restart:** your tabs come back after quitting or a crash (`browser/tabs.json` in the preview's data folder: addresses, titles and WebKit's saved history; no cookies). They wake one at a time as you select them.
   - **Background audio:** Settings → YouTube → *Keep YouTube audio playing in background tabs and other sections* (off by default). Either way only one thing plays at a time.
+- **Watch Later (Phase 3):**
+  - **Save:** on a YouTube video, **Save to Watch Later** (first in the bar) or ⌘D; right-click any tab, even one asleep, for Save / Remove. Nothing is downloaded; one video is never saved twice (watch, youtu.be, Shorts and `&list=` links are the same video).
+  - **Saved:** the bar then says **In Watch Later** (click: the page; right-click: remove).
+  - **The page** (sidebar → Watch Later): search, sort (newest, oldest, title, channel, longest), select several (⌘A, ⇧/⌘-click) for Open in Tabs or Remove, Delete to remove, right-click for more. Each row shows its thumbnail, channel, duration, when you added it, and what this Mac has (video, audio only, summary, queued, downloading, failed, file missing, not downloaded), with **Play Offline**, **Play Audio** or **Open in YouTube**.
+  - **Titles:** the page's own, the library's, or a lookup's (yt-dlp metadata, nothing downloaded); until then "Getting details…" or "Title unavailable", with the video's link.
+  - **Offline:** everything shows from the saved details and thumbnail copies; Open in YouTube waits for internet; Play Offline works.
+  - **Separate from the Library:** Clear All History, removing a library video and retention keep Watch Later; removing from Watch Later never touches files. To download a saved video, open it and use the bar (it asks for your authorization as before).
 - **Rebuild:** `app/tools/preview.sh` (on the branch). `app/tools/preview.sh --test DIR` builds the same app as *Video Buddy 4.0 Test*, under its own identity, for test runs.
 - **Remove:** `app/tools/preview.sh --remove` (its WebKit store through WebKit on a fresh launch, then its data folder and the app).
 
@@ -306,11 +313,11 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Models.swift` | `Video`, `Job`, `NewJob`, `VideoInfo`, `Segment`, `FileItem`, filters and sorts, the whisper JSON reader, `SummaryOutputs` (reads `<base>.summary.md/.transcript.*`), formatters |
 | `SQLite.swift` | Small wrapper over the SQLite C API: parameterised queries, `transaction {}` (BEGIN IMMEDIATE / COMMIT / ROLLBACK) |
 | `Database.swift` | `actor Database`, the single writer, off the main thread: schema and migrations, every query, stats, crash recovery, retention, corruption handling, rotating backups |
-| `HistoryStore.swift` | What the views show (list, recent, files, stats, selection, 3.0: *Continue watching* and the Failed list; 3.1: every entry, playlist memberships, video-offline vs any-offline sets, watch states, Continue per playlist), loaded asynchronously |
+| `HistoryStore.swift` | What the views show (list, recent, files, stats, selection, 3.0: *Continue watching* and the Failed list; 3.1: every entry, playlist memberships, video-offline vs any-offline sets, watch states, Continue per playlist), loaded asynchronously. **4.0 P3:** Watch Later and its saved keys, entries by key, and `FolderWatcher` (FSEvents, recursive) that reloads when media files change |
 | `JobController.swift` | **The queue runner (2.1):** enqueue from a link or an entry, `pump()` runs queued jobs one at a time (network jobs wait while offline), pause/resume/remove/clear, Cancel (pauses the queue). Per action: download/summarize via the scripts, *transcribe* via `transcribe.sh`, *resummarize* via `claude -p`. Steps, marker parsing, output checks, saving, metadata, thumbnails |
 | `NetworkMonitor.swift` | `NWPathMonitor` + captive-Wi-Fi check → `isOnline`; test override `VS_FORCE_OFFLINE` |
 | `Playback.swift` | One `AVPlayer` for the app: play/pause/seek/skip/speed/volume, resume positions per file, Play All list with next/previous (3.0), saves on pause/stop/quit |
-| `Thumbnails.swift` | Saves thumbnails to the app's cache (web image, or a frame of the local video via `AVAssetImageGenerator`) |
+| `Thumbnails.swift` | Saves thumbnails to the app's cache (web image, or a frame of the local video via `AVAssetImageGenerator`). **4.0 P3:** Watch Later's own copies in `watch-later/<id>.jpg` (kept only while the item is saved) |
 | `Playlists.swift` | `PlaylistLink` (playlist and watch-in-playlist links), `PlaylistImport` (`yt-dlp --flat-playlist -J` + parsing), playlist types; 3.1: `PlaylistOrder` (merge new members without moving existing ones, positions between neighbours, the Continue rule) and `Grouping` (grouped lists, queue runs) |
 | `ScriptRunner.swift` | `Paths` (where the bundled scripts are) and `RunningScript` (the bash **lifeline guard**, line streaming, cancel) |
 | `Metadata.swift` | `VideoRef` (link → identity), `FileNames` (cobalt/yt-dlp filename parsing), `MetadataFetcher` (`yt-dlp -j`, `ffprobe`) |
@@ -331,6 +338,7 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Browser/BrowserPolicy.swift` | **4.0 Phase 1 (branch `feature/4.0-phase1-browser`):** what a YouTube address is (home, video, Short, playlist, channel, search, sign-in, consent) from the URL alone, and the navigation rules (YouTube and Google's sign-in/consent pages stay in the app, other sites open in your browser, no downloads or `file://`) |
 | `Browser/BrowserTab.swift` | 4.0 P1: one tab owning its `WKWebView` (survives section switches), its state through KVO (so YouTube's in-page navigation is seen), the delegates, camera/mic refused, and releasing everything before its data is removed. **Phase 2 (branch `feature/4.0-phase2-tabs`):** sleep and wake (`interactionState`), ⌘-/middle-click and `_blank` into tabs, `window.close()`, page-crash handling, the right-click menu (`TabWebView`) |
 | `Browser/BrowserController.swift` | 4.0 P1: the YouTube section's browser: its own WebKit data store per data folder, the one-player rule (a read-only media check in a separate script world, since WebKit's own playback state is wrong on YouTube), Clear Browsing Data. **P2:** the tabs (order, active, closed), the pure tab rules, the 4-live-tab limit and memory pressure, background audio, `tabs.json` save/restore (`TabSession`) |
+| `Views/WatchLaterView.swift` | **4.0 Phase 3 (branch `feature/4.0-phase3-watch-later`):** the Watch Later page in the library column: search, sort, multi-selection and its bar, rows with live status and Play Offline / Play Audio / Open in YouTube; nothing on it downloads |
 | `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen). **P2:** the tab strip, one view identity per tab, the declaration sheet names its video |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
@@ -402,6 +410,20 @@ Other 3.0 reads:
 - **Continue (per playlist):** the member played last; if it's finished, the next member that's on this Mac and not finished (`PlaylistOrder.resume`).
 - **No duplicate downloads:** `insertJob` refuses a queued audio or video job when the same video already has one of that kind *queued or running* (it throws `AlreadyQueued`; the app says "Already in the queue"). Every path goes through it: Video/Audio, Download Missing, Make Available Offline, Download Again, playlist import, Retry.
 - **Playlist import / Check:** one transaction. Ticked entries get a video row and a queued job. With a target (new, or an existing playlist, whose empty `source_url` is then filled in), every entry of the YouTube playlist that's in the library is linked by `youtube:<id>`; `PlaylistOrder.merge` slots new members after their nearest YouTube predecessor that's already a member (else before the nearest later one, else at the end), and they get positions *between* their neighbours, so existing rows aren't rewritten.
+
+**4.0 (branches only; 3.1 stays at v3):** additive steps after v3, numbered in order (`Database.additive`). An existing database gets one verified backup before its first additive step (`history-pre-v4-…` from v3, `history-pre-v5-…` from v4), each step runs in a transaction, and creates only what doesn't exist.
+```sql
+-- v4 (Phase 1b): declarations you recorded, by video key
+authorizations(video_key PK, basis, reference, recorded)
+-- v5 (Phase 3): Watch Later, apart from the library (no link to videos)
+watch_later(video_key PK /*youtube:<id>, the key videos and authorizations use*/,
+            url NOT NULL /*the canonical watch link*/, title, channel, duration REAL,
+            thumbnail_url, added REAL NOT NULL)
+```
+- One row per video (the primary key), so duplicates are impossible; saving again reports "already saved" (`ON CONFLICT DO NOTHING`).
+- A lookup's details are written with an `UPDATE` only (an item removed meanwhile never comes back); its title replaces a guess, channel and duration fill only what's empty.
+- What's on this Mac for each item is never stored: it's read live from the library's files and the queue.
+- The thumbnail copy's path is worked out from the id (`watch-later/<id>.jpg`), not stored.
 
 ### 5.4 A job's life (`JobController`)
 1. Parse the link. If it's bad, show an inline error and run nothing. Playlist links open the playlist flow (§5.14).
@@ -717,6 +739,21 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
+### 2026-10-23: Video Buddy 4.0, Phase 3: native Watch Later (branch only)
+- **Request:** save videos while browsing, without copying links, downloading anything or a Google integration; a Watch Later that works offline and shows what you already have; the download authorization gate unchanged; ready for Phase 4's Offline Hub without building it. Branch `feature/4.0-phase3-watch-later` (from Phase 2); schema v5; `main` and 3.1 unchanged.
+- **Built, in two commits:**
+  - **3a:** the v5 table with seven columns (no index, no stored thumbnail path), its `Database` functions and rules;
+  - **3b+3c, one commit since "In Watch Later" opens the page:** the bar button, ⌘D, tab menus, titles, lookups and thumbnails tracked per video, the page, live status with a folder watcher, Open in Tabs under the 50-tab limit.
+- **Your three extra requirements:**
+  - Titles are never empty or another video's.
+  - Status updates live, including files added, moved or deleted in subfolders.
+  - Removing an item while its details or thumbnail are on their way leaves no row and no file behind.
+- **Found:**
+  - A failed download behind a queued retry shows as queued (the existing rule: the retry is what counts).
+  - System alerts draw blank in the app's own snapshots, as other separate windows do.
+  - A read-only `sqlite3` can't open a WAL database that has no `-wal`/`-shm` beside it, or make a `.backup` copy; copies of the three files are what the checks use.
+- **Phase 4 ready:** one key (`youtube:<id>`) joins Watch Later, the library and declarations; status is computed live; the selection bar is where "Prepare Offline" will go, one video at a time through the download checks.
+
 ### 2026-10-22: Video Buddy 4.0, Phase 2: YouTube tabs (branch only)
 - **Request:** Safari-style tabs in the YouTube section (new, close, reorder, duplicate, reopen; links in background tabs; restore after a restart; sleep inactive tabs; optional background audio), with the action bar correct for the active tab and no way to download from the wrong one. Branch `feature/4.0-phase2-tabs` (from Phase 1b); tested in the Preview's own test build; `main` and 3.1 unchanged.
 - **Built, in four commits:**
@@ -1016,7 +1053,32 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
   - **Installed:** the Preview was rebuilt at `66076e4` (241 self-tests inside its bundle), quit gracefully first, and opened normally in front in the YouTube section with 4 starter tabs (the labelled samples); it had no 3.1 file open. Its data folder, samples and WebKit store were kept; its own `queuePaused` setting was set back to on.
   - **Screenshots:** `design/screenshots/4.0-p2-*` (`03` is the installed Preview).
 
+- **4.0 Phase 3 (10-23), in the test build** (`preview.sh --test`, a temp data folder, the queue locked, signed out of YouTube; nothing downloaded, no AI; lookups are yt-dlp metadata only):
+  - **Self-tests:** 260 inside the bundle (241 + 19).
+    - **Migration:** v4 → v5 with one verified pre-v5 backup, the library, declarations and playlists kept, exactly the 7 columns and no index; v3 → latest with one pre-v4 backup.
+    - **Duplicates:** one key across watch, youtu.be, Shorts, mobile, music and `&list` links; saving twice keeps one row.
+    - **Details:** a lookup fills details but never overwrites existing ones; a late lookup after Remove adds nothing.
+    - **Independence:** Clear All History and pruning keep Watch Later.
+    - **Page rules:** search and sort (accents and case ignored, unknown values last), placeholder titles, the row's main button, the status words.
+  - **Saving:** the bar button (a real click) → saved with the page's title and a thumbnail copy; ⌘D again → "Already in Watch Later.", still 1 row; from asleep background tabs (the library's title, else "Getting details…" until the lookup filled the title, channel and duration); a click captured on one tab and delivered after switching → that tab's video with its own title.
+  - **Statuses:** every labelled sample showed its own (Play Offline, Play Audio, Summary ready, queued, failed, file missing, a Short).
+  - **Live, in one session, no restart:** queued (through the bar, with a declaration) → downloading → on this Mac → summary ready → failed. The file then deleted → File missing → put back → on this Mac; moved out → missing → moved back. A file two folders deep added, deleted and put back, and a file outside the downloads folder deleted, each caught by the watcher: the reload count went up and the sidebar stats changed in the snapshot.
+  - **Remove while busy:** during a lookup, and during a slowed thumbnail download (`VS_TEST_SLOW_THUMBS`) → no row, no `.jpg`, no yt-dlp left after 14 s.
+  - **Offline:** the page from the database and thumbnail copies, Open in YouTube greyed out; a video saved offline → "Title unavailable", no lookup or download; back online → title, channel, duration and thumbnail filled.
+  - **50 tabs:** with 48 open, Open in Tabs for 7 → 2 reused, 2 opened asleep, the 3 others named in the report; again with 50 open: 1 reused, 2 named.
+  - **The gate:** the queue and the library's row count were identical before and after save, open, play, show and remove; the page has no download buttons.
+  - **Restart:** the items and the bar's **In Watch Later** came back. ⌘F stayed on the page. At 980×660 the sidebar still fits.
+  - **Migration rehearsals on copies (deleted afterwards):**
+    - your Preview's database (v4: 7 videos, 8 jobs, 1 declaration, 2 meta) → v5 with identical counts and a healthy pre-v5 backup;
+    - your last full 3.1 backup (`history-before-fresh-start-…`, v3: 33 videos, 33 jobs, 3 resume points) → v5 with identical rows (keys, titles, job ids) and a healthy pre-v4 backup. The original backup's modified time was unchanged.
+  - **Afterwards:** the test build's leftovers were removed. Compared with a baseline taken before testing, identical: 3.1, production (from a copy), `~/Downloads/cobalt`, 3.1's settings, and your Preview's data folder, database counts, `tabs.json`, store id, WebKit store and settings.
+
 ### Not verified
+- **4.0 Phase 3:**
+  - your own mouse and keyboard on the page: ⇧/⌘-click selection, ⌘A, Delete, the right-click menu (driven through the same model calls instead);
+  - the tab-limit alert's look (system alerts draw blank in snapshots; its text was checked);
+  - a real download or summary finishing (the queue is locked; completions were recorded as the queue would record them);
+  - FSEvents on a network or external drive.
 - **4.0 Phase 2:**
   - your real keyboard and mouse: ⌃Tab while the page has keyboard focus, drag-to-reorder, a hardware middle click (the test used a real middle-button event and the menu with hardware-built key events);
   - plain clicks on `target=_blank` links (YouTube's page swallowed the synthetic click; the same path ran through `window.open` in a gesture);

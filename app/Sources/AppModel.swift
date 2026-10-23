@@ -126,7 +126,10 @@ final class AppModel {
         if let problem = browser.restore() { notice = problem }
         completeWatchLater()
         // the preview exists to try the YouTube browser (test runs pick their own section, so --remove can clear the store)
-        if AppSettings.isPreview, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" { section = .youtube }
+        // (a launch argument, -previewStartSection "Watch Later", can pick another section for that launch only)
+        if AppSettings.isPreview, ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] != "1" {
+            section = UserDefaults.standard.string(forKey: "previewStartSection").flatMap(AppSection.init) ?? .youtube
+        }
         ingestor.start()
         await jobs.refreshQueue()
         jobs.pump()
