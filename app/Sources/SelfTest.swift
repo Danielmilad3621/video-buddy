@@ -216,6 +216,15 @@ enum SelfTest {
         check(same.same && same.confirm == "Download Same Quality Again" && same.message.contains("same quality"), "copy prompt: the same quality is called a duplicate")
         check(CopyPrompt.wording(role: .video, names: ["a", "b", "c"], existing: [480, 720, 1080], coming: 1080, quality: "x").message.contains("at 480p, 720p and 1080p"),
               "copy prompt: several qualities read as a list")
+        // G1b-2: the test speed limit never reaches a normal run's scripts
+        let shell = ["PATH": "/bin", "VS_TEST_LIMIT_RATE": "250K", "VS_TEST_RUN": "1"]
+        check(ScriptEnv.testRules(shell, allowed: false)["VS_TEST_LIMIT_RATE"] == nil && ScriptEnv.testRules(shell, allowed: false)["VS_TEST_RUN"] == nil,
+              "scripts: outside a test run of an isolated build, the speed limit and its switch are removed")
+        check(ScriptEnv.testRules(["VS_TEST_LIMIT_RATE": "250K"], allowed: true)["VS_TEST_RUN"] == "1"
+              && ScriptEnv.testRules(["VS_TEST_RUN": "1"], allowed: true)["VS_TEST_RUN"] == nil,
+              "scripts: in a test run, the switch goes only with a speed limit")
+        check(!AppSettings.isolated || ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1" || !ScriptEnv.testRunsAllowed,
+              "scripts: this run allows the speed limit only if it's an isolated build with test hooks")
         let unknown = CopyPrompt.wording(role: .video, names: ["a.mp4"], existing: [nil], coming: nil, quality: "1080p (default)")
         check(!unknown.same && unknown.confirm == "Download Another Copy", "copy prompt: qualities unknown")
     }

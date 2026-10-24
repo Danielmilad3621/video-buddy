@@ -51,6 +51,20 @@ kill "$watcher" 2>/dev/null
 exit "$status"
 """#
 
+/// 4.0 G1b-2: the test-only speed limit (VS_TEST_LIMIT_RATE) reaches the scripts only from an isolated build (RC,
+/// Preview, test build) started with test hooks; then VS_TEST_RUN=1 goes with it, and the script needs both. Every other
+/// run has both removed, so a normal download can never be slowed down by them.
+enum ScriptEnv {
+    static let testKeys = ["VS_TEST_RUN", "VS_TEST_LIMIT_RATE"]
+    static let testRunsAllowed = AppSettings.isolated && ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
+
+    static func testRules(_ env: [String: String], allowed: Bool) -> [String: String] {
+        var e = env
+        if allowed, e["VS_TEST_LIMIT_RATE"]?.nilIfBlank != nil { e["VS_TEST_RUN"] = "1" } else { testKeys.forEach { e[$0] = nil } }
+        return e
+    }
+}
+
 final class RunningScript {
     private let process = Process()
     private let output = Pipe()
@@ -66,6 +80,7 @@ final class RunningScript {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = toolPATH
         env.merge(extra) { $1 }
+        env = ScriptEnv.testRules(env, allowed: ScriptEnv.testRunsAllowed)
         process.environment = env
         process.standardInput = lifeline
         process.standardOutput = output

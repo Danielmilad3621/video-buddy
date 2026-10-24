@@ -73,6 +73,9 @@ else
   # keep -t mp4's H.264/AAC preference (plays everywhere, including the app's player) and cap the height
   if [[ $quality =~ ^[0-9]+$ ]]; then fmt+=(-S "vcodec:h264,res:$quality,acodec:aac"); fi
 fi
+# 4.0 G1b-2, test runs only: a speed limit so a download can be interrupted on purpose. The app passes these two
+# variables only to an isolated build (RC or Preview) started with test hooks, and removes them otherwise.
+if [[ ${VS_TEST_RUN:-} == 1 && -n ${VS_TEST_LIMIT_RATE:-} ]]; then fmt+=(--limit-rate "$VS_TEST_LIMIT_RATE"); fi
 # ponytail: youtube 403s ~1 in 6 tries without a PO token, and a fresh extraction usually passes;
 # if retries stop being enough, add the bgutil-ytdlp-pot-provider plugin
 for attempt in 1 2 3; do
