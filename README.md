@@ -781,6 +781,19 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
+### 2026-10-24: Video Buddy 4.0, G1a: the first real download test (RC only)
+- **Request:** one video you're authorized to download (`lkm-WEHQtNc`, your channel; your own declaration in the RC), eight tests only, the RC locked again afterwards. First: no silent second copies, an accurate size estimate, and a live-download window the RC enforces itself.
+- **Built (before any download, the RC locked):**
+  - **A: another copy only after you confirm it.** The shared path behind the link field, Download Again, Make Available Offline and `videobuddy://` requests asks *Download another copy?*, as the bar already did.
+  - **B: the size estimate.** At the chosen height, it prefers a stream with a known size (what yt-dlp takes) over the highest bitrate.
+  - **C: the lock is checked before every job.**
+  - **D: `LiveGrant`.** `rc-live-window.sh grant|lock|status` opens a window of at most 90 minutes for one launch, with a safety timer.
+- **Your requirements kept:** you confirmed your rights in your own words and declared it yourself in the RC (nothing created a declaration). Every download was a real click on the bar, through the gate and the live-test list. AI stayed locked, and nothing else downloaded. 3.1, production and the Preview are unchanged.
+- **Found:**
+  - **The estimate's error:** YouTube lists a 720p H.264 HLS stream with no size at 1,154 kbit/s next to the DASH one yt-dlp downloads (17.9 MB at 238 kbit/s). Going by bitrate estimated ≈ 97 MB for a 28 MB file.
+  - **The window's end time:** `defaults write -float` rounds it by up to a minute, so it's stored as whole seconds.
+  - **Play Audio is hidden in the bar** when the video file is there too (only Play Offline shows); Downloads has it.
+
 ### 2026-10-23: Video Buddy 4.0, Phase 5a–5b: the release branch and the Release Candidate (branch only)
 - **Request:** consolidate Phases 1–4 into one release branch, and build a separate, locked *Video Buddy 4.0 RC* for the real-world tests, with safety locks, a live-test list and a Raycast handoff that can't start a download by itself. Stop at gate G1 before anything downloads.
 - **Where:**
@@ -1236,9 +1249,34 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - **Two more copies under 3.1's ID are still registered:** `~/.Trash/Video Summarizer.app` and the old try-out. They must be unregistered before the release (approval needed).
     - **The Desktop folder asks for permission:** the test build ran the fake downloader from the project folder on the Desktop, so macOS asked for Desktop access and the first download waited. The test now copies it into its temporary folder.
   - **Screenshots:** `design/screenshots/4.0-p5-*`.
+- **4.0 G1a (10-24), the first real download, in the RC only** (`0977d42`; video `lkm-WEHQtNc`, 10:03, your channel *Ahmed Nagdy*, declared by you as written permission "mine"; window 09:45–11:15, AI locked):
+  - **Before:**
+    - **Tests:** 342 self-tests in the RC, and `regression.sh` 58/58, now including the copy prompt and the window (claimed, expired, restart, over 90 minutes).
+    - **The baseline** of 3.1, production and the Preview was taken; the list held only `lkm-WEHQtNc`, and the quality was set to 720p.
+  - **The eight tests, all passed:**
+    1. **Download at 720p:** a real click on the bar's Download Video. cobalt failed, the yt-dlp fallback succeeded, in 15 s.
+    2. **The file:** it's in the RC's downloads folder and plays in the built-in player (Play Offline); seeking worked and the position (303.6 s) was saved.
+    3. **The real file:** 1280×720 H.264 Main, 30 fps, 235 kbit/s, plus AAC LC stereo 44.1 kHz, 128 kbit/s; 603.02 s; **27,975,552 bytes**.
+       - The fixed estimate is 27,681,077 bytes (−1.1%: the MP4 container is added when the streams are joined); the old one was ≈ 96.7 MB.
+       - The RC's check: "Opens and plays on this Mac". No partial file and no `cobalt-dl.*` temporary folder were left.
+    4. **With Wi-Fi off:** the RC had no network path from 09:59:49 to 10:00:37 (its own network monitor, sampled every 2 s) and played the MP4 from 0:00 to 0:34.9.
+    5. **MP3:** a real click on Download Audio; yt-dlp, 16 s.
+       - **The file:** MP3, 48 kHz stereo, about 100 kbit/s VBR, 602.98 s, **7,534,844 bytes**, against an estimate of ≈ 9.8 MB (−23%: yt-dlp's default MP3 quality from the Opus source is about 100 kbit/s, not 130).
+       - **Playback:** the RC's check said "Opens and plays". Playing it in the RC was confirmed by you; my sampler didn't catch it.
+    6. **Status everywhere:** bar video and audio "offline"; Library video and audio; Watch Later "Video available offline · Audio available offline"; Downloads Ready 2, Problems 0.
+    7. **Duplicates,** with the queue paused:
+       - the bar said "You already have this on this Mac";
+       - the link field (Video, Audio), Download Again (video, audio) and Make Available Offline each asked *Download another copy?*, and Cancel queued nothing;
+       - Prepare showed "have it, 27.7 MB";
+       - still 2 files and 2 jobs.
+    8. **Quit and reopen:** the library, both files, the statuses, Watch Later, the tab and the position were all kept. The reopen was a new launch, so it locked itself.
+  - **After:**
+    - **The RC:** `rc-live-window.sh lock` (`rcLiveDownloads = 0`, `queuePaused = 1`, the window removed, the safety timer stopped), then reopened normally. Its database is intact, and nothing is queued or running.
+    - **Unchanged against the G1a baseline:** 3.1, production, the Preview, their settings and WebKit stores, and `~/Downloads/cobalt`.
+  - **Screenshots:** `design/screenshots/4.0-g1a-*`.
 
 ### Not verified
-- **4.0 Phase 5 (waits for gate G1, your approval of the live tests):** every real download test (each quality, audio, sizes against estimates, playback, cancel and interruption of a real script, the network changes, the bounded low-storage test), direct non-YouTube Raycast downloads, a request confirmed with Download for a declared, listed video in the RC itself, memory and CPU figures (`measure.sh` only smoke-tested), and a full UI review. Paid summaries wait for G2.
+- **4.0 Phase 5, G1b (waits for your approval):** the other qualities (480p, 1080p, Best), cancel and interruption of a real script, the network changes, the bounded low-storage test, direct non-YouTube Raycast downloads and the real Raycast handoff confirmed with Download, memory and CPU figures (`measure.sh` only smoke-tested), and a full UI review. The MP3 estimate assumes 130 kbit/s where yt-dlp gave about 100. Paid summaries wait for G2.
 - **4.0 Phase 4 (needs real downloads, so Phase 5):**
   - real cobalt or yt-dlp downloads at a chosen quality, and whether the result has that resolution;
   - size estimates against real files;
