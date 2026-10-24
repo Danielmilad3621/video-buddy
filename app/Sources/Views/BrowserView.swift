@@ -287,9 +287,15 @@ private struct VideoActionBar: View {
                 .frame(width: 64, height: 36)
             VStack(alignment: .leading, spacing: 4) {
                 // 4.0 G1b: the library's (original) title, as everywhere else; the page's (often translated) one after it
+                // (two separate texts: one string mixing a right-to-left title with a left-to-right one gets reordered)
                 let t = WatchLater.titles(library: library?.title, shown: pageTitle)
-                (Text(t.main ?? "YouTube video") + Text(t.translation.map { "   \($0)" } ?? "").foregroundColor(p.secondary).font(.callout))
-                    .font(.callout.weight(.semibold)).lineLimit(1).help(t.translation.map { "YouTube shows: \($0)" } ?? t.main ?? "")
+                HStack(spacing: 10) {
+                    Text(t.main ?? "YouTube video").font(.callout.weight(.semibold)).lineLimit(1)
+                    if let translation = t.translation {
+                        Text(translation).font(.callout).foregroundStyle(p.secondary).lineLimit(1).layoutPriority(-1)
+                    }
+                }
+                .help(t.translation.map { "YouTube shows: \($0)" } ?? t.main ?? "")
                 HStack(spacing: 6) { ForEach(chips(a, g, checking), id: \.text) { chip($0) } }
             }
         }
