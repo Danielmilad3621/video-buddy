@@ -799,6 +799,25 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
+### 2026-10-24: Video Buddy 4.0, G1b-1: more qualities, cobalt's error, and fixes (RC only)
+- **Request:** cobalt's real failure; an MP3 estimate based on real encoder settings; Play Audio with both files here; singular labels; one title per video; real downloads at 480p, 1080p and Best of `lkm-WEHQtNc` only; duplicates across qualities; each copy shown and played as itself. G1b-2 prepared, not run.
+- **Built:**
+  - **cobalt:** its failure is now spelled out; YouTube goes straight to yt-dlp.
+  - **MP3:** a fixed 128 kbit/s on both paths, and the estimate follows.
+  - **The copy prompt** names the qualities that are here and the one that would come, and calls the same quality a duplicate.
+  - **"Best compatible (H.264)"** is the label; the stored value is unchanged, and "Highest available" is recorded as a release requirement.
+  - **Titles:** the original, with the translation as a second line.
+  - **The bar:** Play Audio stays, and plays the MP3.
+  - **Downloads:** each copy is named, and its Play opens exactly that file.
+  - **Labels:** `Fmt.count` gives the singular.
+  - **G1b-2:** `space-watchdog.sh` and the procedures.
+- **Found:**
+  - **cobalt:** it answers "tunnel" for YouTube, then streams **HTTP 200 with 0 bytes**, every time (upstream imputnet/cobalt#1455). It isn't a setting.
+  - **Best is 1080p for YouTube:** "Best available" was the same 1080p H.264 file as 1080p, because YouTube's H.264 stops at 1080p.
+  - **The bar's Play Audio** played the video when both files were there.
+  - **The test hooks:** a synthetic click on a link-style button hung the test app, because the button waited for a mouse-up that was only sent after it returned. The mouse-up is now queued first.
+  - **Mixed scripts:** an Arabic title and its English translation in one string were reordered; they're now two texts.
+
 ### 2026-10-24: Video Buddy 4.0, G1a: the first real download test (RC only)
 - **Request:** one video you're authorized to download (`lkm-WEHQtNc`, your channel; your own declaration in the RC), eight tests only, the RC locked again afterwards. First: no silent second copies, an accurate size estimate, and a live-download window the RC enforces itself.
 - **Built (before any download, the RC locked):**
@@ -1292,9 +1311,25 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - **The RC:** `rc-live-window.sh lock` (`rcLiveDownloads = 0`, `queuePaused = 1`, the window removed, the safety timer stopped), then reopened normally. Its database is intact, and nothing is queued or running.
     - **Unchanged against the G1a baseline:** 3.1, production, the Preview, their settings and WebKit stores, and `~/Downloads/cobalt`.
   - **Screenshots:** `design/screenshots/4.0-g1a-*`.
+- **4.0 G1b-1 (10-24), in the RC only** (`lkm-WEHQtNc`, your G1a declaration; two windows: `fb94338` 11:05–11:08, then `4368606` 11:19–11:21; AI locked):
+  - **Before:** 355 self-tests in the RC, and `regression.sh` 63/63 for each build. The two original files' checksums were recorded.
+  - **The tests, all passed:**
+    1. **480p:** link field → Video → "Download a 480p copy too? … at 720p" → confirmed. cobalt: *"tunnel, but its download failed (HTTP 200, 0 bytes, curl exit 0)"*, then yt-dlp in 7 s. **854×480 H.264 Main, 150 kbit/s + AAC 128 kbit/s, 603.02 s, 21,590,131 B** (estimate 21,296,828: +1.4%).
+    2. **1080p:** "Download a 1080p copy too? … at 480p and 720p" → confirmed. cobalt failed the same way; yt-dlp took 9 s. **1920×1080 H.264 High, 858 kbit/s + AAC 128, 603.02 s, 74,948,663 B** (estimate 74,654,212: +0.4%).
+    3. **Best compatible:** "Already on this Mac at 1080p … Best compatible (H.264) gives 1080p for this video, so another copy would be the same quality" → Cancel. Nothing queued.
+    4. **Duplicates:** 1080p again gave the same "same quality" prompt → Cancel. The bar said "You already have this on this Mac". Prepare said "have it". Still 4 files and 4 jobs.
+    5. **MP3** (second window, YouTube straight to yt-dlp): the step said "(yt-dlp)", with no cobalt attempt, 9 s. **CBR 128,000 bit/s, 48 kHz stereo, 602.98 s, 9,648,428 B** (estimate 9,648,000: +0.004%).
+    6. **Each copy played by its own row's Play** (real clicks): the player opened exactly that file, every time (720p, 480p, 1080p, both MP3s); positions are saved per file. Check Files names each copy's resolution. The bar shows Play Offline and Play Audio, and Play Audio plays an MP3.
+    7. **Quit and reopen:** all 5 files are there and pass Check Files, and every status is right. The reopen locked itself.
+  - **After:**
+    - **The RC:** `rc-live-window.sh lock` (`rcLiveDownloads = 0`, `queuePaused = 1`, no window, no timer). Its database is intact: 5 jobs, all succeeded, nothing queued.
+    - **The original MP4 and MP3** are byte-identical. No temporary folders or partial files.
+    - **Unchanged against the G1b baseline:** 3.1, production, the Preview, `~/Downloads/cobalt` and your original checkout.
+  - **Labels:** "1 video processed", "1 video offline", "1 video offline • 5 files".
+  - **Screenshots:** `design/screenshots/4.0-g1b-*`.
 
 ### Not verified
-- **4.0 Phase 5, G1b (waits for your approval):** the other qualities (480p, 1080p, Best), cancel and interruption of a real script, the network changes, the bounded low-storage test, direct non-YouTube Raycast downloads and the real Raycast handoff confirmed with Download, memory and CPU figures (`measure.sh` only smoke-tested), and a full UI review. The MP3 estimate assumes 130 kbit/s where yt-dlp gave about 100. Paid summaries wait for G2.
+- **4.0 Phase 5, G1b-2 (prepared, waits for your approval):** cancel and force-quit of a real download, network changes, the bounded low-storage test, Raycast (YouTube handoff confirmed with Download, and an authorized non-YouTube link), and queue recovery; also memory and CPU figures (`measure.sh` only smoke-tested) and a full UI review. A "Highest available" quality is a release requirement. Paid summaries wait for G2.
 - **4.0 Phase 4 (needs real downloads, so Phase 5):**
   - real cobalt or yt-dlp downloads at a chosen quality, and whether the result has that resolution;
   - size estimates against real files;
