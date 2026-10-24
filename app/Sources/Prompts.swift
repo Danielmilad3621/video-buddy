@@ -56,6 +56,10 @@ enum Prompts {
 enum VideoQuality: String, CaseIterable, Identifiable {
     case p480 = "480p (smallest)", p720 = "720p (smaller)", standard = "1080p (default)", best = "Best available"
     var id: String { rawValue }
+    /// What Settings and the app show. "Best available" is stored as before (3.1's setting), and shown as what it is: the
+    /// highest H.264, which plays everywhere (1080p on YouTube). A higher, "Highest available" choice is a release
+    /// requirement (4.0 G1b), not this one.
+    var label: String { self == .best ? "Best compatible (H.264)" : rawValue }
     var scriptValue: String? {
         switch self {
         case .p480: "480"

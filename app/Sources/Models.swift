@@ -286,6 +286,11 @@ enum Fmt {
 
     static func timestamp(_ seconds: Double) -> String { duration(max(seconds, 0.001)) ?? "0:00" }
 
+    /// "1 video", "2 videos" (plural: when it isn't just an added "s").
+    static func count(_ n: Int, _ singular: String, _ plural: String? = nil) -> String {
+        "\(n) \(n == 1 ? singular : plural ?? singular + "s")"
+    }
+
     static func watchTime(_ seconds: Double) -> String {
         if seconds > 0, seconds < 60 { return "\(Int(seconds.rounded())) sec" }
         let minutes = Int((seconds / 60).rounded())
@@ -393,9 +398,18 @@ enum WatchLater {
     }
 
     /// What a row shows as the title: never empty and never another video's. `pending`: its lookup hasn't answered yet.
-    static func displayTitle(_ item: WatchLaterItem, pending: Bool) -> (text: String, placeholder: Bool) {
-        if let t = item.title?.nilIfBlank { return (t, false) }
+    static func displayTitle(_ item: WatchLaterItem, library: String? = nil, pending: Bool) -> (text: String, placeholder: Bool) {
+        if let t = titles(library: library, shown: item.title).main { return (t, false) }
         return (pending ? "Getting details…" : "Title unavailable", true)
+    }
+
+    /// 4.0 G1b: one title for a video in every view: the library's (the original, as uploaded; it matches the file
+    /// names), with the one YouTube showed (often translated into your language) as a second line when it differs.
+    static func titles(library: String?, shown: String?) -> (main: String?, translation: String?) {
+        let lib = library?.nilIfBlank, other = shown?.nilIfBlank
+        guard let lib else { return (other, nil) }
+        let same = other.map { $0.compare(lib, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) == .orderedSame } ?? true
+        return (lib, same ? nil : other)
     }
 
     enum Primary: Equatable { case playVideo, playAudio, openInYouTube }

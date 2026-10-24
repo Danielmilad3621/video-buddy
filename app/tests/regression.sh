@@ -98,8 +98,18 @@ vs "libraryAction $A|again-video"
 check "another copy (Library's Download Again): asked first too" "s['pendingCopy'].startswith('video') and s['queueKeys'] == []"
 vs "copyDecision cancel"
 ok "…still one file of it" "$([[ $(ls "$T/out" | grep -c "$A") == 1 ]] && echo True || echo False)"
-vs "start video"; vs "copyDecision copy"
+vs "start video"
+# G1b: the prompt names what's here (the fake sample is 360p) and what would come (the fake formats' 1080p)
+check "the copy prompt says what's here and what would come" "'1080p copy' in s['copyPrompt'].get('title', '') and 'at 360p' in s['copyPrompt'].get('message', '')" 15 "s['copyPrompt']"
+vs "copyDecision copy"
 check "Download Another Copy: a second, separate file" "any('fake $A (2)' in m for m in s['media'])" 30 "s['media']"
+# G1b: each copy's Play button plays exactly that file
+vs "section Downloads"; sleep 1; vs "nativeClick play fake $A (2).mp4"
+check "Downloads: a copy's Play opens exactly that file" "s['playback']['path'].endswith('fake $A (2).mp4')" 10 "s['playback'], s['hookResult']"
+vs "nativeClick play fake $A.mp4"
+check "…and the other copy's, its own" "s['playback']['path'].endswith('fake $A.mp4')" 10 "s['playback']"
+vs "stopPlayer"; vs "section Library"; vs "link https://youtu.be/$A"; vs "start audio"
+check "the audio of the same video downloads (no copy question: no audio yet)" "any('fake $A.mp3' in m for m in s['media'])" 30 "s['media'], s['pendingCopy']"
 echo "$E slow" >> "$T/control"; vs "declareOnly $E|regression"; vs "link https://youtu.be/$E"; vs "start video"
 waitfor "s['running'] == 'youtube:$E'" > /dev/null; vs "cancel"
 check "cancel: stopped, no file left" "s['running'] == '' and not any('$E' in m for m in s['media'])"
@@ -119,6 +129,11 @@ vs "tabClose $n"; vs "tabReopen"
 check "tabs: close and reopen" "len(s['tabs']) == $n" 10
 vs "tabMove 1|$n"
 check "the bar follows the active tab's video" "s['bar'].get('id', '') == next((t['videoID'] for t in s['tabs'] if t['active']), 'none') or s['bar'].get('video') == 'none'" 15 "s['bar'], s['tabs']"
+# G1b: with the video and its audio both here, the bar still offers Play Audio, and it plays the MP3
+vs "browse https://www.youtube.com/watch?v=$A"; waitfor "s['bar'].get('id') == '$A' and s['bar'].get('audio') == 'offline'" 20 > /dev/null
+vs "nativeClick playAudio"
+check "the bar's Play Audio, with the video here too, plays the MP3" "s['playback']['path'].endswith('.mp3')" 10 "s['playback'], s['hookResult'], s['bar']"
+vs "stopPlayer"
 # external requests (videobuddy://): checked, then they only ask
 vs "section Library"
 open -g -a "$app" "$(request video "https://youtu.be/$E")"

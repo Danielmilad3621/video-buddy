@@ -282,7 +282,7 @@ struct PlaylistGroupRow: View {
                             .frame(width: 58, height: 58)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(pl.name).font(.callout.weight(.semibold)).lineLimit(2)
-                            Text(([shown < total ? "\(shown) of \(total) videos" : "\(total) videos",
+                            Text(([shown < total ? "\(shown) of \(Fmt.count(total, "video"))" : Fmt.count(total, "video"),
                                    "\(store.offlineCount(pl.id)) offline"]).joined(separator: " • "))
                                 .font(.caption).foregroundStyle(p.secondary).lineLimit(1)
                         }
@@ -368,7 +368,7 @@ struct PlaylistShelf: View {
                             .overlay(alignment: .bottomTrailing) { PlaylistPlayButton(playlist: pl, size: 32).padding(7) }
                             .accessibilityLabel("Open \(pl.name)")
                             Text(pl.name).font(.callout.weight(.semibold)).lineLimit(2).frame(width: 128, alignment: .leading)
-                            Text("\(store.members[pl.id]?.count ?? pl.count) videos • \(store.offlineCount(pl.id)) offline")
+                            Text("\(Fmt.count(store.members[pl.id]?.count ?? pl.count, "video")) • \(store.offlineCount(pl.id)) offline")
                                 .font(.caption).foregroundStyle(p.secondary).lineLimit(1)
                             if let id = store.resumeTarget(pl.id), let n = store.episode(id, in: pl.id) {
                                 Text("Continue: episode \(n)").font(.caption.weight(.medium)).foregroundStyle(p.accent).lineLimit(1)
@@ -509,7 +509,7 @@ struct DownloadsList: View {
             // what your saved audio and video take up, and what's left, for planning a trip
             HStack(spacing: 6) {
                 Image(systemName: "internaldrive").foregroundStyle(p.secondary)
-                Text((["\(store.videoOnMacIDs.count) videos offline", "\(onDisk.count) files", Fmt.bytes(usedBytes)]
+                Text(([Fmt.count(store.videoOnMacIDs.count, "video") + " offline", Fmt.count(onDisk.count, "file"), Fmt.bytes(usedBytes)]
                       + [model.freeDiskSpace.map { "\(Fmt.bytes(Int($0))) free" }, "keeping \(reserveGB) GB"]).compactMap { $0 }.joined(separator: " • "))
                 Spacer(minLength: 6)
                 Button { checker.check(onDisk.map(\.path)) } label: {
@@ -699,8 +699,9 @@ struct VideoFilesRow: View {
                 Spacer(minLength: 4)
                 if state.usable || state == .notChecked || state == .checking {
                     if f.isPlayable, !state.opensElsewhere {
-                        Button(f.role == .video ? "Play Offline" : "Play Audio") { model.playFile(f) }
+                        Button(f.role == .video ? "Play Offline" : "Play Audio") { model.playFile(f) }   // exactly this file
                             .buttonStyle(.link).tint(p.accent).font(.caption.weight(.semibold))
+                            .testProbe("play \(f.name)")
                     } else {
                         IconButton(icon: "arrow.up.forward.app", label: "Open \(f.name) in another app", size: 22) { FileOps.open(f.path) }
                     }
@@ -717,8 +718,10 @@ struct VideoFilesRow: View {
                         .buttonStyle(.link).tint(p.accent).font(.caption)
                 }
             }
-            Text(state == .missing && model.media.foundElsewhere[f.path] != nil
-                 ? "Missing here; a file of the same name is at \(model.media.foundElsewhere[f.path] ?? "")" : state.label)
+            // 4.0 G1b: several copies of the same kind (e.g. 720p and 1080p) each name their file
+            Text((state == .missing && model.media.foundElsewhere[f.path] != nil
+                  ? "Missing here; a file of the same name is at \(model.media.foundElsewhere[f.path] ?? "")" : state.label)
+                 + (files.filter { $0.role == f.role }.count > 1 ? " · \(f.name)" : ""))
                 .font(.caption2.weight(.semibold)).foregroundStyle(tone).lineLimit(2).padding(.leading, 22)
         }
         .help(f.path)

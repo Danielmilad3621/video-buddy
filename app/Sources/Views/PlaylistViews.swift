@@ -50,7 +50,7 @@ struct PlaylistListCard: View {
                 .frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 3) {
                 Text(playlist.name).font(.headline).lineLimit(2)
-                Text(([("\(playlist.count) videos"), "\(model.store.offlineCount(playlist.id)) offline"]
+                Text(([Fmt.count(playlist.count, "video"), "\(model.store.offlineCount(playlist.id)) offline"]
                       + [totalTime(playlist.totalDuration)].compactMap { $0 }).joined(separator: " • "))
                     .font(.callout).foregroundStyle(p.secondary)
             }
@@ -122,7 +122,7 @@ struct PlaylistDetailCard: View {
                 .shadow(color: .black.opacity(0.45), radius: 14, y: 6)
             Text(playlist.name).font(.title3.weight(.bold)).multilineTextAlignment(.center).lineLimit(3)
                 .accessibilityAddTraits(.isHeader)
-            Text((["\(total) videos"] + [totalTime(playlist.totalDuration)].compactMap { $0 }
+            Text(([Fmt.count(total, "video")] + [totalTime(playlist.totalDuration)].compactMap { $0 }
                   + ["\(total - missing) downloaded"] + (audioOnly > 0 ? ["\(audioOnly) audio only"] : [])).joined(separator: " • "))
                 .font(.callout).foregroundStyle(p.secondary).multilineTextAlignment(.center)
             HStack(spacing: 8) {
@@ -249,7 +249,7 @@ struct PlaylistImportSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(state.checking != nil ? "Check Against YouTube" : preview.title).font(.title2.weight(.semibold)).lineLimit(2)
                 if state.checking != nil { Text(preview.title).foregroundStyle(.secondary).lineLimit(1) }
-                Text((["\(preview.entries.count) videos on YouTube", "\(inLibrary.count) in your library", "\(onMac) on this Mac"]
+                Text(([Fmt.count(preview.entries.count, "video") + " on YouTube", "\(inLibrary.count) in your library", "\(onMac) on this Mac"]
                       + (unavailable > 0 ? ["\(unavailable) private or deleted"] : [])).joined(separator: " • "))
                     .foregroundStyle(.secondary)
                 if state.linkOnly {

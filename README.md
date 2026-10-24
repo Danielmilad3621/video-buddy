@@ -181,6 +181,24 @@ The whole of 4.0 (Phases 1–4) as a third, separate app, for the real-world tes
 - **Rebuild:** `app/tools/preview.sh --rc` in the release worktree (self-tests inside the bundle first; every install starts locked again). **Remove:** `app/tools/preview.sh --remove --rc` (its WebKit data, library, downloads and the app).
 - **Regression:** `app/tests/regression.sh` builds the test build, drives it through every phase with the fake downloader (first with the Preview's rules, then the RC's), and removes it again.
 
+### Release requirements recorded during the RC tests (must be met before 4.0 replaces 3.1)
+1. **A separate "Highest available" video quality** (G1b, your requirement). *Best compatible (H.264)* is the highest H.264, which plays everywhere, and that's 1080p on YouTube. It must not be the only way up: a distinct option must offer higher resolutions such as 4K (e.g. AV1, where the Mac can decode it), labelled with what it needs. Until then Settings says that higher resolutions aren't offered yet.
+2. **Size estimates of the stream actually downloaded** (G1a): checked against real files for every quality (G1a 720p: −1.1%).
+
+### G1b-2: reliability tests, prepared (each runs only with your approval)
+All in **Video Buddy 4.0 RC** only, on `lkm-WEHQtNc` (your declaration) unless a new video is declared and approved, inside a live-download window (`app/tools/rc-live-window.sh grant 90`; a restart or the end of the window locks it), and locked again afterwards (`rc-live-window.sh lock`, then `defaults read local.video-summarizer.rc` must show `rcLiveDownloads = 0`, `queuePaused = 1`).
+
+| Test | How | Passes if |
+|---|---|---|
+| **Cancel a real download** | start a 1080p copy (the copy prompt → confirm), Cancel at about 30% | the job is cancelled; no file appears; no `cobalt-dl.*` or yt-dlp temp folder is left; the queue pauses (as in 3.1); Retry gives one complete file |
+| **Force-quit during a download** | `kill -9` the RC mid-download | relaunch: the job shows *interrupted* with Retry; nothing partial in Downloads. Also checked: whether the orphaned script finishes on its own; a file that appears is offered under *Found in your downloads folder*, and Retry makes no duplicate. The relaunch also locks downloads (one launch per window) |
+| **Network drop and back** | you switch Wi-Fi off mid-download, then on (a local recorder logs the RC's state, as in G1a) | the job fails with the reason, or yt-dlp's retries carry it; nothing partial; after reconnecting, Retry completes |
+| **Bounded low storage** | a **fixed-size 8 GB** image (`hdiutil create -size 8g -type UDIF -fs APFS -volname VBTest`), created only if your disk has ≥ 100 GB free beyond it; the RC's downloads folder and `TMPDIR` pointed into it for that launch; a filler that writes only into the image with a byte cap; `app/tests/space-watchdog.sh` watching your real free space every second | below the reserve before a job: paused, nothing attempted; filled during a download: stopped, requeued once, failed the second time; the watchdog never aborts; afterwards your free space is back within 1 GB, the image is detached and deleted |
+| **Raycast** | the release worktree's scripts run as Raycast runs them: a YouTube link (`VB_BUNDLE_ID=local.video-summarizer.rc`) and **a non-YouTube link you authorize** (`VS_OUT_DIR`/`VS_DATA_DIR` = the RC's folders) | YouTube: the RC's confirmation, then the usual checks (Cancel queues nothing); non-YouTube: downloaded into the RC's folder and recorded by the RC; with 3.1 as the target, the script stops and downloads nothing |
+| **Queue recovery** | queue two downloads, force-quit, relaunch with a new window | interrupted jobs show Retry; nothing runs by itself after the relaunch; Retry and a second click make one job each; no duplicate files |
+
+`space-watchdog.sh` was checked on simulated free-space readings (20 GB under the start → abort; under 100 GB → abort; within limits → exit 0). No image has been created.
+
 ### Before a flight (2-minute checklist)
 1. Online: for each video you want, press **Video** (or *Make Available Offline*, or *Make All Available Offline* on a playlist). Tick **+ Transcript** first if you'll want to search what was said. Use **Summarize** too if you want to read the summary. Settings → Video quality → **720p** fits about twice as much.
 2. Check **Downloads**: the files are there, and the free space is enough.

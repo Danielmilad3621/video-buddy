@@ -212,10 +212,13 @@ enum SizeEstimate {
         return (total.0, total.1, best.height)
     }
 
-    /// Audio as MP3 (the script converts it): length × about 130 kbit/s, yt-dlp's default MP3 quality.
+    /// The MP3 bitrate both download paths use (cobalt's audioBitrate, yt-dlp's --audio-quality 128K in cobalt-dl.sh).
+    static let mp3Bitrate = 128_000.0
+
+    /// Audio as MP3 (the script converts it at a fixed 128 kbit/s): length × 128 kbit/s; tags and padding add a little.
     static func audio(_ f: MediaFacts) -> (bytes: Int64?, kind: SizeKind) {
         guard let d = f.duration, d > 0 else { return (nil, .unknown) }
-        return (Int64(d * 130_000 / 8), .approximate)
+        return (Int64(d * mp3Bitrate / 8), .approximate)
     }
 }
 

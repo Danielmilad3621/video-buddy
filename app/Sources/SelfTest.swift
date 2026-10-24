@@ -50,6 +50,7 @@ enum SelfTest {
         try await releaseCandidate(root.appendingPathComponent("rc"))
         externalRequests()
         g1aRules()
+        g1bRules()
         preview()
         rcIdentity()
     }
@@ -176,6 +177,45 @@ enum SelfTest {
         check(claim(true, 60, true) == (false, true), "window: already used by an earlier launch (a restart): locked again")
         check(claim(true, -1, false) == (false, true) && claim(true, nil, false) == (false, true), "window: expired or missing end: locked again")
         check(claim(true, 120, false) == (false, true), "window: more than 90 minutes ahead isn't accepted")
+    }
+
+    /// 4.0 G1b: estimates for every quality and the MP3, count labels, one title per video, and the copy prompt's words.
+    private static func g1bRules() {
+        // the G1b video's H.264 streams at 480p, 720p and 1080p (DASH with sizes, HLS without) and its audio, as yt-dlp lists them
+        let f = MediaFacts(duration: 603, formats: [
+            .init(height: 480, vcodec: "avc1.4D401F", acodec: "none", filesize: 11_536_762, tbr: 153.066),       // 135
+            .init(height: 480, vcodec: "avc1.4D401F", acodec: "none", tbr: 700.741),                              // 231
+            .init(height: 720, vcodec: "avc1.4D401F", acodec: "none", filesize: 17_921_011, tbr: 237.771),       // 136
+            .init(height: 720, vcodec: "avc1.4D401F", acodec: "none", tbr: 1153.957),                             // 232
+            .init(height: 1080, vcodec: "avc1.640028", acodec: "none", filesize: 64_894_146, tbr: 860.999),      // 137
+            .init(height: 1080, vcodec: "avc1.640028", acodec: "none", tbr: 2191.087),                            // 270
+            .init(height: 2160, vcodec: "av01.0.12M.08", acodec: "none", filesize: 200_654_735, tbr: 2662.086),  // 401
+            .init(vcodec: "none", acodec: "mp4a.40.2", filesize: 9_760_066, tbr: 129.482),                       // 140
+        ])
+        let at = { (q: String?) in SizeEstimate.video(f, quality: q) }
+        check(at("480").bytes == 21_296_828 && at("480").height == 480, "estimate: 480p = 135 + 140, what yt-dlp takes (got \(at("480")))")
+        check(at(nil).bytes == 74_654_212 && at(nil).height == 1080 && at("max").bytes == 74_654_212 && at("max").height == 1080,
+              "estimate: 1080p and Best compatible = 137 + 140 (H.264 stops at 1080p; the 2160p AV1 isn't chosen)")
+        check(SizeEstimate.audio(f).bytes == 9_648_000, "estimate: MP3 at the fixed 128 kbit/s × 603 s")
+        check(VideoQuality.best.label == "Best compatible (H.264)" && VideoQuality.best.rawValue == "Best available",
+              "Best is shown as Best compatible (H.264) and stored as before (3.1's setting)")
+
+        check(Fmt.count(1, "video") == "1 video" && Fmt.count(0, "video") == "0 videos" && Fmt.count(2, "file") == "2 files"
+              && Fmt.count(1, "summary", "summaries") == "1 summary" && Fmt.count(3, "summary", "summaries") == "3 summaries", "counts: one, or plural")
+
+        check(WatchLater.titles(library: "الموديل المجاني", shown: "The Free Model") == ("الموديل المجاني", "The Free Model"),
+              "titles: the library's original first, YouTube's translation second")
+        check(WatchLater.titles(library: "Me at the zoo", shown: "me at the ZOO") == ("Me at the zoo", nil), "titles: the same title isn't repeated")
+        check(WatchLater.titles(library: nil, shown: "Only the page's") == ("Only the page's", nil), "titles: not in the library, the page's")
+
+        let audio = CopyPrompt.wording(role: .audio, names: ["a.mp3"], existing: [nil], coming: nil, quality: "720p")
+        check(!audio.same && audio.confirm == "Download Another MP3", "copy prompt: audio")
+        let other = CopyPrompt.wording(role: .video, names: ["a.mp4"], existing: [720], coming: 480, quality: "480p (smallest)")
+        check(!other.same && other.confirm == "Download 480p Copy" && other.message.contains("at 720p"), "copy prompt: another quality (got \(other))")
+        let same = CopyPrompt.wording(role: .video, names: ["a.mp4", "a (3).mp4"], existing: [720, 1080], coming: 1080, quality: "Best compatible (H.264)")
+        check(same.same && same.confirm == "Download Same Quality Again" && same.message.contains("same quality"), "copy prompt: the same quality is called a duplicate")
+        let unknown = CopyPrompt.wording(role: .video, names: ["a.mp4"], existing: [nil], coming: nil, quality: "1080p (default)")
+        check(!unknown.same && unknown.confirm == "Download Another Copy", "copy prompt: qualities unknown")
     }
 
     /// Only inside Video Buddy 4.0 RC.app (preview.sh --rc runs this before installing): its own folders, never 3.1's,
@@ -892,7 +932,7 @@ enum SelfTest {
         check(SizeEstimate.video(rate, quality: "720") == (75 * mb, .approximate, 720), "only a bitrate: bitrate × length, approximate")
         var none = facts; none.duration = nil; none.formats = [F.init(height: 720, vcodec: "avc1", acodec: "none"), F.init(vcodec: "none", acodec: "mp4a")]
         check(SizeEstimate.video(none, quality: "720").kind == .unknown && SizeEstimate.audio(none).kind == .unknown, "no sizes, no length: unknown")
-        check(SizeEstimate.audio(facts) == (9_750_000, .approximate), "audio as MP3: length × 130 kbit/s, approximate")
+        check(SizeEstimate.audio(facts) == (9_600_000, .approximate), "audio as MP3: length × the fixed 128 kbit/s, approximate")
         check(facts.maxHeight == 1080 && SizeEstimate.video(facts, quality: "1080").height == 720, "a video's best resolution, and what 'up to' gives")
         // totals: everything before the last job plus twice the largest, keeping the reserve; unknown sizes don't count
         let t = PrepareTotals([(100 * mb, .known), (50 * mb, .approximate), (nil, .unknown)])

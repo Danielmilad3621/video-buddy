@@ -45,6 +45,8 @@ final class JobController {
     private(set) var queue: [QueueItem] = []
     private(set) var current: QueueItem?
     var onNotice: (String) -> Void = { _ in }
+    /// 4.0 G1b: the last download's script output (the end of it), for test runs: e.g. why cobalt fell back to yt-dlp.
+    private(set) var lastOutput: [String] = []
     /// 4.0 Phase 4: why the queue paused by itself (low disk space), shown with it.
     private(set) var pauseReason: String?
     /// 4.0 Phase 4: the last check before a YouTube download runs (a declaration on record, the technical checks
@@ -343,6 +345,7 @@ final class JobController {
             output.append("Could not start \(command[0]): \(error)")
         }
         watch.cancel()
+        lastOutput = Array(output.suffix(40))
         let info = await metadata.value
         // keep real metadata even when the job fails or is cancelled, so the entry isn't left untitled
         if let info { try? await db.applyInfo(video.id, info, override: true) }

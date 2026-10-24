@@ -274,7 +274,7 @@ private struct VideoActionBar: View {
             Button("Download Another Copy") { model.requestFromBrowser(.video, videoID: id, tabID: tab.id, anotherCopy: true) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This video is already on this Mac. Another copy is a second file, at your Video quality setting (\(AppSettings.videoQuality.rawValue)).")
+            Text("This video is already on this Mac. Another copy is a second file, at your Video quality setting (\(AppSettings.videoQuality.label)).")
         }
     }
 
@@ -286,7 +286,10 @@ private struct VideoActionBar: View {
             Thumbnail(url: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg", localPath: library?.thumbnailPath, cornerRadius: 6)
                 .frame(width: 64, height: 36)
             VStack(alignment: .leading, spacing: 4) {
-                Text(pageTitle ?? library?.title ?? "YouTube video").font(.callout.weight(.semibold)).lineLimit(1)
+                // 4.0 G1b: the library's (original) title, as everywhere else; the page's (often translated) one after it
+                let t = WatchLater.titles(library: library?.title, shown: pageTitle)
+                (Text(t.main ?? "YouTube video") + Text(t.translation.map { "   \($0)" } ?? "").foregroundColor(p.secondary).font(.callout))
+                    .font(.callout.weight(.semibold)).lineLimit(1).help(t.translation.map { "YouTube shows: \($0)" } ?? t.main ?? "")
                 HStack(spacing: 6) { ForEach(chips(a, g, checking), id: \.text) { chip($0) } }
             }
         }
@@ -321,7 +324,7 @@ private struct VideoActionBar: View {
         HStack(spacing: 8) {
             watchLaterSlot(mode)
             videoSlot(v, a, mode)
-            if !(au == .offline && v == .offline) { slot(.audio, au, mode) }
+            slot(.audio, au, mode)   // 4.0 G1b: Play Audio stays reachable when the video is here too
             slot(.summary, su, mode)
             Toggle(mode == .icons ? "+T" : "+ Transcript", isOn: $transcribe).toggleStyle(AccentCheckboxStyle()).font(.callout)
                 .help("Downloads also get a transcript made on this Mac (no summary)").fixedSize()
@@ -365,7 +368,11 @@ private struct VideoActionBar: View {
         let library = model.store.all.first { $0.key == "youtube:\(id)" }
         switch (slot, state) {
         case (.audio, .offline):
-            button("Play Audio", short: "Audio", icon: "headphones", mode: mode, probe: "playAudio") { if let v = library { model.play(v) } }
+            // the audio file itself (playing the entry would pick its video when both are here)
+            button("Play Audio", short: "Audio", icon: "headphones", mode: mode, probe: "playAudio") {
+                if let v = library, let path = model.availability(youtubeID: id).audioFile { model.store.select(v.id); model.playback.play(path: path, videoID: v.id) }
+                else if let v = library { model.play(v) }
+            }
         case (.summary, .offline):
             button("Open Summary", short: "Summary", icon: "doc.text", mode: mode, probe: "openSummary") {
                 if let v = library { model.open(v, tab: .summary); model.section = .library }
@@ -599,7 +606,7 @@ struct ExternalRequestSheet: View {
     }
 
     private func what(_ r: ExternalRequest) -> String {
-        let quality = AppSettings.videoQuality.rawValue
+        let quality = AppSettings.videoQuality.label
         switch (r.playlist != nil, r.kind) {
         case (true, _): return "Show the playlist, to choose videos to prepare for offline"
         case (false, .video): return "Download the video at \(quality)"

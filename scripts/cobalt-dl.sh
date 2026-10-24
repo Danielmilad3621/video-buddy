@@ -34,7 +34,7 @@ place() {
 
 quality=${VS_VIDEO_QUALITY:-}   # 720 | 1080 | max from the app's setting; unset = the defaults, exactly as before
 body=$(jq -n --arg url "$url" --arg mode "$mode" --arg q "$quality" \
-  '{url: $url, downloadMode: $mode, audioFormat: "mp3", filenameStyle: "pretty"} + (if $q != "" then {videoQuality: $q} else {} end)')
+  '{url: $url, downloadMode: $mode, audioFormat: "mp3", audioBitrate: "128", filenameStyle: "pretty"} + (if $q != "" then {videoQuality: $q} else {} end)')
 resp=$(curl -sS --max-time 60 http://localhost:9000/ \
   -H 'Accept: application/json' -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || resp='{}'
 reason=$(jq -r '.error.code // .status // "unreachable"' <<<"$resp" 2>/dev/null) || reason=unreachable
@@ -43,17 +43,19 @@ if [[ $reason == tunnel || $reason == redirect ]]; then
   name=$(jq -r .filename <<<"$resp")
   name=${name//\//_}
   # an empty file means the source refused the stream, so treat it as a failure too
-  if curl -fsSL -o "$tmp/$name" "$(jq -r .url <<<"$resp")" && [[ -s $tmp/$name ]]; then
+  got=$(curl -fsSL -o "$tmp/$name" -w '%{http_code} %{size_download}' "$(jq -r .url <<<"$resp")" 2> "$tmp/curl.err") && code=0 || code=$?
+  if [[ $code == 0 && -s $tmp/$name ]]; then
     place "$tmp/$name"
     exit 0
   fi
   rm -f "$tmp/$name"
-  reason="tunnel download failed"
+  # what actually happened, for the job's log (4.0 G1b)
+  reason="$reason, but its download failed (HTTP ${got%% *}, ${got##* } bytes, curl exit $code$(head -c 200 "$tmp/curl.err" | tr '\n' ' ' | sed 's/^curl/: curl/'))"
 fi
 
 echo "cobalt: $reason, falling back to yt-dlp" >&2
 if [[ $mode == audio ]]; then
-  fmt=(-x --audio-format mp3)
+  fmt=(-x --audio-format mp3 --audio-quality 128K)   # a fixed 128 kbit/s, like cobalt's, so sizes are predictable
 else
   fmt=(-t mp4)
   # keep -t mp4's H.264/AAC preference (plays everywhere, including the app's player) and cap the height

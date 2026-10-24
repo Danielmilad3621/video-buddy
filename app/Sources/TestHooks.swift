@@ -364,9 +364,15 @@ enum TestHooks {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     let loc = v.convert(NSPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
                     let t = ProcessInfo.processInfo.systemUptime
-                    for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, 0)] {
-                        if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [], timestamp: t, windowNumber: w.windowNumber,
-                                                      context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) { w.sendEvent(e) }
+                    let event = { (type: NSEvent.EventType, pressure: Float) in
+                        NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [], timestamp: t, windowNumber: w.windowNumber,
+                                           context: nil, eventNumber: 0, clickCount: 1, pressure: pressure)
+                    }
+                    // the mouse-up goes into the event queue first: a standard AppKit button (e.g. a link-style one) tracks
+                    // the mouse after its mouse-down until a mouse-up arrives from that queue (4.0 G1b)
+                    if let down = event(.leftMouseDown, 1), let up = event(.leftMouseUp, 0) {
+                        NSApp.postEvent(up, atStart: false)
+                        w.sendEvent(down)
                     }
                     webRead = "native click on \(arg) at \(Int(loc.x)),\(Int(loc.y)); window key before \(wasKey), at click \(w.isKeyWindow)"
                 }
@@ -619,7 +625,9 @@ enum TestHooks {
             },
             "watchLater": store.watchLater.map { i in
                 let a = model.availability(youtubeID: i.youtubeID)
-                return ["id": i.youtubeID, "title": i.title ?? "", "shown": WatchLater.displayTitle(i, pending: model.lookupPending.contains(i.key) && model.network.isOnline).text,
+                let library = store.byKey[i.key]?.title
+                return ["id": i.youtubeID, "title": i.title ?? "", "shown": WatchLater.displayTitle(i, library: library, pending: model.lookupPending.contains(i.key) && model.network.isOnline).text,
+                        "translation": WatchLater.titles(library: library, shown: i.title).translation ?? "",
                         "channel": i.channel ?? "", "duration": i.duration ?? -1, "url": i.url, "thumbnailURL": i.thumbnailURL ?? "",
                         "thumbFile": FileManager.default.fileExists(atPath: Thumbnails.watchLaterPath(i.youtubeID)),
                         "status": a.labels(nothing: "Not downloaded").map(\.text), "primary": "\(WatchLater.primary(a))",
@@ -695,7 +703,9 @@ enum TestHooks {
             "queueOptions": jobs.queue.map { q in "\(store.video(q.videoID)?.key ?? "?") \(q.options.map { "\($0.quality ?? "-") \($0.estimatedBytes.map(String.init) ?? "-") \($0.sizeKind.rawValue)" } ?? "none")" },
             "pauseReason": jobs.pauseReason ?? "", "downloadsAllowed": jobs.downloadsAllowed, "unmetered": model.network.isUnmetered,
             "hookResult": webRead,
-            "pendingCopy": model.pendingCopy.map { "\($0.request.action.rawValue) \($0.file.name)" } ?? "",
+            "pendingCopy": model.pendingCopy.map { "\($0.request.action.rawValue) \($0.files.map(\.name).joined(separator: ", "))" } ?? "",
+            "copyPrompt": model.pendingCopy.map { ["title": $0.title, "message": $0.message, "confirm": $0.confirm, "same": $0.sameQuality] as [String: Any] } ?? [:],
+            "lastOutput": model.jobs.lastOutput,
             // 4.0 Phase 5: which build this is, and what's locked
             "build": ["bundleID": Bundle.main.bundleIdentifier ?? "", "appName": AppSettings.appName, "isRC": AppSettings.isRC,
                       "isPreview": AppSettings.isPreview, "dataDir": AppSettings.dataDir.path, "downloadDir": AppSettings.downloadDir,

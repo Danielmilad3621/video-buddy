@@ -85,11 +85,11 @@ struct RootView: View {
         .sheet(item: $model.prepare) { PrepareSheet(state: $0).environment(model) }
         .sheet(item: $model.externalRequest) { ExternalRequestSheet(request: $0).environment(model) }
         // 4.0 G1a: a download of something already on this Mac only makes another copy when you say so
-        .alert("Download another copy?", isPresented: Binding(get: { model.pendingCopy != nil }, set: { if !$0 { model.pendingCopy = nil } })) {
-            Button("Download Another Copy") { model.confirmCopy() }
+        .alert(model.pendingCopy?.title ?? "Download another copy?", isPresented: Binding(get: { model.pendingCopy != nil }, set: { if !$0 { model.pendingCopy = nil } })) {
+            Button(model.pendingCopy?.confirm ?? "Download Another Copy") { model.confirmCopy() }
             Button("Cancel", role: .cancel) { model.pendingCopy = nil }
         } message: {
-            Text("“\(model.pendingCopy?.file.name ?? "")” is already on this Mac. Another copy is a second file; the one you have stays as it is.")
+            Text(model.pendingCopy?.message ?? "")
         }
         // Watch Later's Open in Tabs, when some didn't fit (it switches to YouTube, so the window shows it)
         .alert("Not every video was opened", isPresented: Binding(get: { model.openReport != nil }, set: { if !$0 { model.openReport = nil } })) {
@@ -314,7 +314,7 @@ struct PlaylistsShortcut: View {
                     .frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(pl.name).font(.callout.weight(.medium)).lineLimit(1)
-                    Text("\(pl.count) videos").font(.caption).foregroundStyle(p.secondary)
+                    Text(Fmt.count(pl.count, "video")).font(.caption).foregroundStyle(p.secondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -343,9 +343,9 @@ struct LearningStats: View {
                 Spacer()
                 Image(systemName: "chart.bar.fill").foregroundStyle(p.secondary)
             }
-            stat("play.fill", "\(s.videos)", "videos processed")
-            stat("doc.text.fill", "\(s.summaries)", "summaries generated")
-            stat("arrow.down", "\(model.store.videoOnMacIDs.count)", "videos offline")
+            stat("play.fill", "\(s.videos)", s.videos == 1 ? "video processed" : "videos processed")
+            stat("doc.text.fill", "\(s.summaries)", s.summaries == 1 ? "summary generated" : "summaries generated")
+            stat("arrow.down", "\(model.store.videoOnMacIDs.count)", model.store.videoOnMacIDs.count == 1 ? "video offline" : "videos offline")
             stat("clock.fill", Fmt.watchTime(s.watchSeconds), "learning time")
                 .help("The total length of the videos you've summarized")
         }

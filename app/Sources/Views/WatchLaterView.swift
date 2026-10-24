@@ -162,7 +162,9 @@ private struct WatchLaterRow: View {
 
     var body: some View {
         let a = model.availability(youtubeID: item.youtubeID)
-        let title = WatchLater.displayTitle(item, pending: model.lookupPending.contains(item.key) && model.network.isOnline)
+        let library = model.store.byKey[item.key]?.title
+        let title = WatchLater.displayTitle(item, library: library, pending: model.lookupPending.contains(item.key) && model.network.isOnline)
+        let translation = WatchLater.titles(library: library, shown: item.title).translation
         let local = Thumbnails.watchLaterPath(item.youtubeID)
         HStack(alignment: .top, spacing: 10) {
             Thumbnail(url: item.thumbnailURL, localPath: FileManager.default.fileExists(atPath: local) ? local : nil,
@@ -171,6 +173,9 @@ private struct WatchLaterRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title.text).font(.callout.weight(.semibold)).lineLimit(2)
                     .foregroundStyle(title.placeholder ? p.secondary : p.text).italic(title.placeholder)
+                if let translation {
+                    Text(translation).font(.caption).foregroundStyle(p.secondary).lineLimit(1).help("The title YouTube shows you")
+                }
                 // a placeholder title always comes with the video it stands for
                 Text(title.placeholder ? "youtube.com/watch?v=\(item.youtubeID)" : details)
                     .font(title.placeholder ? .caption.monospaced() : .caption).foregroundStyle(p.secondary).lineLimit(1)

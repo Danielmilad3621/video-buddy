@@ -736,9 +736,10 @@ final class AppModel {
             notice = "Not queued: \(refusal)."
             return
         }
-        // 4.0 G1a: never a second copy without asking (the bar asks the same way)
-        if !r.anotherCopy, let have = existingCopy(r) {
-            pendingCopy = (r, have)
+        // 4.0 G1a: never a second copy without asking (the bar asks the same way); G1b: saying which qualities are
+        // here and which one would come
+        if !r.anotherCopy, case let have = existingCopies(r), !have.isEmpty {
+            Task { pendingCopy = await copyPrompt(r, have) }
             return
         }
         guard r.action.downloadsMedia, let id = r.youtubeID else { enqueueNow(r); return }
@@ -763,19 +764,34 @@ final class AppModel {
 
     /// A download asked for while that video's (or audio's) file is already on this Mac, waiting for you to say whether
     /// you want another copy.
-    var pendingCopy: (request: DownloadRequest, file: FileItem)?
+    var pendingCopy: CopyPrompt?
 
-    /// The file of that kind this video already has on this Mac, if any (a video download for a video file, audio for audio).
-    func existingCopy(_ r: DownloadRequest) -> FileItem? {
+    /// The files of that kind this video already has on this Mac (a video download for video files, audio for audio).
+    func existingCopies(_ r: DownloadRequest) -> [FileItem] {
         let role: FileItem.Role
         switch r.action {
         case .video, .videoTranscript: role = .video
         case .audio, .audioTranscript: role = .audio
-        default: return nil
+        default: return []
         }
         let key = r.youtubeID.map { "youtube:\($0)" } ?? r.link.flatMap { VideoRef.parse($0)?.key }
-        guard let v = r.videoID.flatMap({ store.video($0) }) ?? key.flatMap({ store.byKey[$0] }) else { return nil }
-        return store.mediaFiles(for: v.id).first { $0.role == role && $0.exists && (DownloadsList.diskSize($0.path) ?? 0) > 0 }
+        guard let v = r.videoID.flatMap({ store.video($0) }) ?? key.flatMap({ store.byKey[$0] }) else { return [] }
+        return store.mediaFiles(for: v.id).filter { $0.role == role && $0.exists && (DownloadsList.diskSize($0.path) ?? 0) > 0 }
+    }
+
+    /// What's here (each copy's resolution, read with ffprobe) and what the request would bring (from the video's
+    /// formats at your quality setting), in words.
+    private func copyPrompt(_ r: DownloadRequest, _ have: [FileItem]) async -> CopyPrompt {
+        var heights: [Int?] = []
+        for f in have { heights.append(f.role == .video ? await MediaChecker.quickCheck(f.path).info?.height : nil) }
+        var coming: Int?
+        if have.first?.role == .video, let id = r.youtubeID {
+            if browser.checker.facts[id] == nil { _ = await browser.checker.fresh(id, maxAge: 30 * 60) }
+            coming = browser.checker.facts[id].flatMap { SizeEstimate.video($0, quality: AppSettings.videoQuality.scriptValue).height }
+        }
+        let w = CopyPrompt.wording(role: have.first?.role ?? .video, names: have.map(\.name), existing: heights, coming: coming,
+                                   quality: AppSettings.videoQuality.label)
+        return CopyPrompt(request: r, files: have, title: w.title, message: w.message, confirm: w.confirm, sameQuality: w.same)
     }
 
     /// Download Another Copy: the request goes on, through every usual check.
@@ -1169,6 +1185,40 @@ struct ExternalRequest: Identifiable, Equatable {
             return .success(ExternalRequest(kind: kind, link: playlist.url, youtubeID: nil, playlist: playlist))
         }
         return .failure(Refusal(reason: "only YouTube videos and playlists can be sent to Video Buddy"))
+    }
+}
+
+/// 4.0 G1b: "Download another copy?", saying what's on this Mac and what would come. Nothing happens without a click.
+struct CopyPrompt {
+    let request: DownloadRequest
+    let files: [FileItem]
+    let title: String, message: String, confirm: String
+    let sameQuality: Bool
+
+    /// existing: the resolution of each video copy here (nil when unknown); coming: the resolution the request would
+    /// get (nil when unknown); quality: the setting's name. Pure (self-tested).
+    static func wording(role: FileItem.Role, names: [String], existing: [Int?], coming: Int?, quality: String)
+        -> (title: String, message: String, confirm: String, same: Bool) {
+        let files = names.map { "“\($0)”" }.joined(separator: ", ")
+        guard role == .video else {
+            return ("Download another copy?", "This audio is already on this Mac (\(files)). Another MP3 is a separate file; the one you have stays.",
+                    "Download Another MP3", false)
+        }
+        let here = existing.compactMap { $0 }
+        let haveText = here.isEmpty ? "" : " at " + Array(Set(here)).sorted().map { "\($0)p" }.joined(separator: " and ")
+        if let c = coming, here.contains(c) {
+            return ("Already on this Mac at \(c)p",
+                    "This video is already on this Mac\(haveText) (\(files)). \(quality) gives \(c)p for this video, so another copy would be the same quality.",
+                    "Download Same Quality Again", true)
+        }
+        if let c = coming {
+            return ("Download a \(c)p copy too?",
+                    "This video is on this Mac\(haveText) (\(files)). A \(c)p copy is a separate file; the ones you have stay.",
+                    "Download \(c)p Copy", false)
+        }
+        return ("Download another copy?",
+                "This video is already on this Mac\(haveText) (\(files)). Another copy at your Video quality setting (\(quality)) is a separate file; the ones you have stay.",
+                "Download Another Copy", false)
     }
 }
 
