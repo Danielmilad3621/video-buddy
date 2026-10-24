@@ -1205,7 +1205,8 @@ struct CopyPrompt {
                     "Download Another MP3", false)
         }
         let here = existing.compactMap { $0 }
-        let haveText = here.isEmpty ? "" : " at " + Array(Set(here)).sorted().map { "\($0)p" }.joined(separator: " and ")
+        let qualities = Array(Set(here)).sorted().map { "\($0)p" }
+        let haveText = qualities.isEmpty ? "" : " at " + (qualities.count == 1 ? qualities[0] : qualities.dropLast().joined(separator: ", ") + " and " + qualities.last!)
         if let c = coming, here.contains(c) {
             return ("Already on this Mac at \(c)p",
                     "This video is already on this Mac\(haveText) (\(files)). \(quality) gives \(c)p for this video, so another copy would be the same quality.",

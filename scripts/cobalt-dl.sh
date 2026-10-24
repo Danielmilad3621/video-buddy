@@ -35,9 +35,17 @@ place() {
 quality=${VS_VIDEO_QUALITY:-}   # 720 | 1080 | max from the app's setting; unset = the defaults, exactly as before
 body=$(jq -n --arg url "$url" --arg mode "$mode" --arg q "$quality" \
   '{url: $url, downloadMode: $mode, audioFormat: "mp3", audioBitrate: "128", filenameStyle: "pretty"} + (if $q != "" then {videoQuality: $q} else {} end)')
-resp=$(curl -sS --max-time 60 http://localhost:9000/ \
-  -H 'Accept: application/json' -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || resp='{}'
-reason=$(jq -r '.error.code // .status // "unreachable"' <<<"$resp" 2>/dev/null) || reason=unreachable
+# 4.0 G1b: YouTube goes straight to yt-dlp. cobalt answers "tunnel" for YouTube but streams nothing (HTTP 200, 0 bytes,
+# measured in G1a and G1b; upstream imputnet/cobalt#1455), so asking it first only costs time. Other sites still try cobalt.
+shopt -s nocasematch
+if [[ $url =~ ^https?://([a-z0-9-]+\.)*(youtube\.com|youtu\.be|youtube-nocookie\.com)([/?#]|$) ]]; then
+  resp='{}'; reason=youtube
+else
+  resp=$(curl -sS --max-time 60 http://localhost:9000/ \
+    -H 'Accept: application/json' -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || resp='{}'
+  reason=$(jq -r '.error.code // .status // "unreachable"' <<<"$resp" 2>/dev/null) || reason=unreachable
+fi
+shopt -u nocasematch
 
 if [[ $reason == tunnel || $reason == redirect ]]; then
   name=$(jq -r .filename <<<"$resp")
@@ -53,7 +61,11 @@ if [[ $reason == tunnel || $reason == redirect ]]; then
   reason="$reason, but its download failed (HTTP ${got%% *}, ${got##* } bytes, curl exit $code$(head -c 200 "$tmp/curl.err" | tr '\n' ' ' | sed 's/^curl/: curl/'))"
 fi
 
-echo "cobalt: $reason, falling back to yt-dlp" >&2
+if [[ $reason == youtube ]]; then
+  echo "yt-dlp: a YouTube link, so straight to yt-dlp (cobalt's YouTube downloads come back empty)" >&2
+else
+  echo "cobalt: $reason, falling back to yt-dlp" >&2
+fi
 if [[ $mode == audio ]]; then
   fmt=(-x --audio-format mp3 --audio-quality 128K)   # a fixed 128 kbit/s, like cobalt's, so sizes are predictable
 else

@@ -214,6 +214,8 @@ enum SelfTest {
         check(!other.same && other.confirm == "Download 480p Copy" && other.message.contains("at 720p"), "copy prompt: another quality (got \(other))")
         let same = CopyPrompt.wording(role: .video, names: ["a.mp4", "a (3).mp4"], existing: [720, 1080], coming: 1080, quality: "Best compatible (H.264)")
         check(same.same && same.confirm == "Download Same Quality Again" && same.message.contains("same quality"), "copy prompt: the same quality is called a duplicate")
+        check(CopyPrompt.wording(role: .video, names: ["a", "b", "c"], existing: [480, 720, 1080], coming: 1080, quality: "x").message.contains("at 480p, 720p and 1080p"),
+              "copy prompt: several qualities read as a list")
         let unknown = CopyPrompt.wording(role: .video, names: ["a.mp4"], existing: [nil], coming: nil, quality: "1080p (default)")
         check(!unknown.same && unknown.confirm == "Download Another Copy", "copy prompt: qualities unknown")
     }

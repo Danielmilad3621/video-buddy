@@ -575,6 +575,8 @@ final class JobController {
         default:
             if line.hasPrefix("cobalt: "), line.contains("falling back to yt-dlp"), !steps[0].label.contains("yt-dlp") {
                 steps[0].label += " (yt-dlp fallback)"
+            } else if line.hasPrefix("yt-dlp: "), !steps[0].label.contains("yt-dlp") {
+                steps[0].label += " (yt-dlp)"      // 4.0 G1b: YouTube goes straight to yt-dlp
             }
         }
         return false
