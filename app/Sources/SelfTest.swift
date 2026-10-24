@@ -216,6 +216,11 @@ enum SelfTest {
         check(same.same && same.confirm == "Download Same Quality Again" && same.message.contains("same quality"), "copy prompt: the same quality is called a duplicate")
         check(CopyPrompt.wording(role: .video, names: ["a", "b", "c"], existing: [480, 720, 1080], coming: 1080, quality: "x").message.contains("at 480p, 720p and 1080p"),
               "copy prompt: several qualities read as a list")
+        // G1b-2: free space on volumes that don't report Finder's figure
+        check(DiskSpace.available(important: 0, plain: 4_307_324_928) == 4_307_324_928 && DiskSpace.available(important: 714_743_752_141, plain: 705_053_007_872) == 714_743_752_141
+              && DiskSpace.available(important: 0, plain: 0) == 0 && DiskSpace.available(important: nil, plain: nil) == nil,
+              "free space: Finder's figure where there is one, else the volume's own (an external drive or disk image reports 0)")
+        check(DiskSpace.temporaryFolder == (ProcessInfo.processInfo.environment["TMPDIR"]?.nilIfBlank ?? "/tmp"), "the temporary folder checked is the scripts' own ($TMPDIR, else /tmp)")
         // G1b-2: the test speed limit never reaches a normal run's scripts
         let shell = ["PATH": "/bin", "VS_TEST_LIMIT_RATE": "250K", "VS_TEST_RUN": "1"]
         check(ScriptEnv.testRules(shell, allowed: false)["VS_TEST_LIMIT_RATE"] == nil && ScriptEnv.testRules(shell, allowed: false)["VS_TEST_RUN"] == nil,

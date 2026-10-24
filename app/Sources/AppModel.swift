@@ -1293,14 +1293,23 @@ struct OfflineBatch: Identifiable {
 }
 
 enum DiskSpace {
-    /// Space macOS can free up for important files on the volume holding `path` (what Finder shows as available).
+    /// Free space on the volume holding `path`: what Finder shows as available where the volume gives that figure.
     static func free(at path: String) -> Int64? {
         if let test = FakeRunner.freeSpace(at: path) { return test }
-        return (try? existing(path).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
+        let v = try? existing(path).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        return available(important: v?.volumeAvailableCapacityForImportantUsage, plain: v?.volumeAvailableCapacity)
     }
 
-    /// Where downloads are put together before they're moved into place (the scripts make their temporary folder here).
-    static var temporaryFolder: String { NSTemporaryDirectory() }
+    /// Finder's figure (it counts what macOS can purge) where the volume has one. Other volumes (external drives, disk
+    /// images) report it as 0, so then their plain free space. (4.0 G1b-2: a disk image with 4.3 GB free read as 0.)
+    static func available(important: Int64?, plain: Int?) -> Int64? {
+        if let important, important > 0 { return important }
+        return plain.map(Int64.init)
+    }
+
+    /// Where downloads are put together before they're moved into place: the scripts' `mktemp` uses $TMPDIR, else /tmp,
+    /// so this does too (NSTemporaryDirectory() ignores TMPDIR; 4.0 G1b-2).
+    static var temporaryFolder: String { ProcessInfo.processInfo.environment["TMPDIR"]?.nilIfBlank ?? "/tmp" }
 
     /// Whether two folders are on the same volume (a download put together on one and kept on another needs room on both).
     static func sameVolume(_ a: String, _ b: String) -> Bool {

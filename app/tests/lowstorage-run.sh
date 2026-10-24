@@ -26,7 +26,9 @@ host_free() { df -k /System/Volumes/Data | awk 'NR == 2 {print $4 * 1024}'; }
 img_free() { df -k "$mnt" 2> /dev/null | awk 'NR == 2 {print $4 * 1024}'; }
 gb() { awk -v b="$1" 'BEGIN {printf "%.2f GB", b / 1e9}'; }
 get() { python3 -c 'import json, sys; v = json.load(open(sys.argv[1])).get(sys.argv[2]); print("" if v is None else v)' "$state" "$1"; }
-attached() { hdiutil info | grep -qF "$img"; }
+# (whole outputs compared: with pipefail, `| grep -q` can make a pipeline fail when grep stops reading early)
+attached() { local info; info=$(hdiutil info 2> /dev/null); [[ $info == *"$img"* ]]; }
+mounted() { local m; m=$(mount); [[ $m == *" on $mnt "* ]]; }
 rc_running() { pgrep -x VideoBuddyRC > /dev/null; }
 fail() { echo "lowstorage: STOPPED: $*"; echo "lowstorage: left as it is; finish later with: $0 --recover"; exit 2; }
 
@@ -72,7 +74,7 @@ point() {
 guard() {
   [[ -e $dir/watchdog-abort ]] && fail "the watchdog aborted: $(cat "$dir/watchdog-abort")"
   kill -0 "$(get watchdog)" 2> /dev/null || fail "the watchdog isn't running"
-  attached || fail "the image isn't attached"
+  attached && mounted || fail "the image isn't attached"
 }
 
 fill() {
@@ -95,7 +97,7 @@ unfill() {
 }
 
 status() {
-  echo "image: $(attached && echo "attached, $(gb "$(img_free)") free" || echo "not attached")"
+  echo "image: $(attached && echo "attached, $(gb "$(img_free)") free" || echo "not attached")$(mounted && echo "; $mnt mounted")"
   echo "your disk: $(gb "$(host_free)") free (start $(gb "$(get hostFreeAtStart)"))"
   echo "watchdog: $(kill -0 "$(get watchdog)" 2> /dev/null && echo running || echo stopped) $( [[ -e $dir/watchdog-abort ]] && cat "$dir/watchdog-abort")"
   defaults read "$id" 2> /dev/null | grep -E 'downloadDir|offlineReserveGB|rcLive|queuePaused'
@@ -122,12 +124,13 @@ cleanup() {
     [[ -z $(lsof +D "$mnt" 2> /dev/null | tail -n +2) ]] || fail "still open on $mnt: $(lsof +D "$mnt" 2> /dev/null | awk 'NR > 1 {print $1"("$2")"}' | sort -u | tr '\n' ' ')"
   fi
   # 3 detached, never forced
-  if attached; then
+  if attached || mounted; then
     for _ in 1 2 3 4 5; do hdiutil detach "$mnt" > /dev/null 2>&1 && break; sleep 2; done
-    attached && fail "the image couldn't be detached without forcing it"
+    { attached || mounted; } && fail "the image couldn't be detached without forcing it"
   fi
-  # 4 deleted only once it's no longer attached
+  # 4 deleted only once it's no longer attached (checked two ways)
   attached && fail "the image is still attached"
+  mounted && fail "$mnt is still mounted"
   rm -f "$img"
   # 5 the RC's settings as they were
   local d r; d=$(get downloadDir); r=$(get offlineReserveGB)
