@@ -146,7 +146,7 @@ ok "a second run changes nothing" "$(is "$(facts "$C/history.sqlite")|$(shasum "
 D="$work/production/with-declaration"; mkdir -p "$D"; sqlite3 "$C/history.sqlite" ".backup '$D/history.sqlite'"; sqlite3 "$D/history.sqlite" "DELETE FROM watch_later"
 "$carry" "$pv" "$D" --declaration > /dev/null 2>&1
 ok "--declaration: your gx7F8fg49QQ declaration only, not the Preview's sample one" "$(is "$(sqlite3 "$D/history.sqlite" "SELECT group_concat(video_key || ' ' || basis || ' ' || reference) FROM authorizations")" "youtube:gx7F8fg49QQ written_permission mine")"
-ok "the Preview backup is unchanged" "$(cd "$set_dir" && shasum -a 256 -c MANIFEST.txt > /dev/null 2>&1 && echo True || echo False)"
+ok "the backup set is untouched (it still verifies: same files, nothing added)" "$("$repo/app/tools/backup-before-4.0.sh" --verify "$set_dir" > /dev/null 2>&1 && echo True || echo False)"
 
 echo "rehearsal: $pass passed, $fail failed"
 ((fail == 0))

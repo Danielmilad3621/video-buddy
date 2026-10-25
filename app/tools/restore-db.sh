@@ -41,8 +41,13 @@ fi
 echo "saved the current state: $recovery"
 echo "  $saved"
 
-want=$(facts "$backup")
-sqlite3 "$db" ".restore '$backup'"
+# 4.0 G2: everything from a private copy (its -wal too, if it has one): SQLite opens a source read-write, which would
+# leave a -wal and -shm beside the backup (a backup set would no longer verify). The backup itself is only copied.
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/vb-restore.XXXXXX")
+for s in "" -wal; do [[ -e $backup$s ]] && cp -p "$backup$s" "$scratch/backup.sqlite$s"; done
+want=$(facts "$scratch/backup.sqlite")
+sqlite3 "$db" ".restore '$scratch/backup.sqlite'"
+rm -rf "$scratch"
 sqlite3 "$db" "PRAGMA wal_checkpoint(TRUNCATE);" > /dev/null
 got=$(facts "$db")
 IFS='|' read -r version integrity fk counts <<<"$got"
