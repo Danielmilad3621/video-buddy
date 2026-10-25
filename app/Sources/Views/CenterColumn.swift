@@ -75,11 +75,15 @@ struct LibraryList: View {
                 ? g.groups.flatMap { searching || store.expanded.contains($0.playlist.id) ? $0.videos.map(\.id) : [] } + g.individual.map(\.id)
                 : store.videos.map(\.id)
             if store.videos.isEmpty && !(continueWatching && !store.continueWatching.isEmpty) {
-                EmptyState(icon: store.search.isEmpty ? "tray" : "magnifyingglass",
-                           title: store.search.isEmpty ? "Nothing here yet" : "No matches",
-                           message: store.search.isEmpty
-                               ? "Paste a link above and press Video, Audio or Summarize. Everything you process is kept here."
-                               : "Nothing in titles, channels, links, summaries or transcripts matches “\(store.search)”.")
+                // 4.0 G2: an empty filter (Favorites, a chip) isn't an empty library
+                let filtered = store.search.isEmpty && !store.all.isEmpty
+                EmptyState(icon: !store.search.isEmpty ? "magnifyingglass" : store.filter == .favorites ? "heart" : "tray",
+                           title: !store.search.isEmpty ? "No matches" : store.filter == .favorites ? "No favorites yet" : filtered ? "Nothing here" : "Nothing here yet",
+                           message: !store.search.isEmpty
+                               ? "Nothing in titles, channels, links, summaries or transcripts matches “\(store.search)”."
+                               : store.filter == .favorites ? "Star a video (☆) to keep it here."
+                               : filtered ? "No video in your library matches \(store.filter.rawValue). Choose All to see everything."
+                               : "Paste a link above and press Video, Audio or Summarize. Everything you process is kept here.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {

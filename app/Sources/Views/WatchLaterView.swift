@@ -179,8 +179,11 @@ private struct WatchLaterRow: View {
                 // a placeholder title always comes with the video it stands for
                 Text(title.placeholder ? "youtube.com/watch?v=\(item.youtubeID)" : details)
                     .font(title.placeholder ? .caption.monospaced() : .caption).foregroundStyle(p.secondary).lineLimit(1)
-                HStack(spacing: 4) {
-                    ForEach(a.labels(nothing: "Not downloaded").prefix(2), id: \.text) { label($0) }
+                // 4.0 G2: side by side when they fit, else one under the other (never cut off)
+                let labels = Array(a.labels(nothing: "Not downloaded").prefix(2))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) { ForEach(labels, id: \.text) { label($0) } }
+                    VStack(alignment: .leading, spacing: 3) { ForEach(labels, id: \.text) { label($0) } }
                 }
                 primaryButton(a)
             }

@@ -82,8 +82,9 @@ struct DetailActions: View {
             .fixedSize()
             .disabled(playable == nil)
             .help(playable == nil ? "Not on this Mac yet: use Video above or ⋯ → Make Available Offline" : "Play on this Mac (works offline)")
-            tile("Show in Finder", "folder", disabled: media == nil) { if let m = media { FileOps.reveal(m.path) } }
+            tile("Show in Finder", "folder", short: "Finder", disabled: media == nil) { if let m = media { FileOps.reveal(m.path) } }
                 .help(media?.path ?? "No downloaded file is on this Mac")
+                .accessibilityLabel("Show in Finder")
             tile("Copy Link", "link", disabled: video.url == nil) { model.copyLink(video) }
             tile("Favorite", video.favorite ? "heart.fill" : "heart", tint: video.favorite ? p.accent : nil) { model.toggleFavorite(video) }
                 .accessibilityLabel(video.favorite ? "Remove from favorites" : "Add to favorites")
@@ -102,11 +103,16 @@ struct DetailActions: View {
         }
     }
 
-    private func tile(_ title: String, _ icon: String, tint: Color? = nil, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+    /// 4.0 G2: `short` is shown when the title doesn't fit (it was cut to "Show in Fi…").
+    private func tile(_ title: String, _ icon: String, short: String? = nil, tint: Color? = nil, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: icon).font(.body.weight(.medium)).foregroundStyle(tint ?? p.text)
-                Text(title).font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+                ViewThatFits(in: .horizontal) {
+                    Text(title).lineLimit(1)
+                    Text(short ?? title).lineLimit(1).minimumScaleFactor(0.8)
+                }
+                .font(.caption)
             }
             .frame(maxWidth: .infinity)
         }

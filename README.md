@@ -39,8 +39,8 @@ There's a problem with learning from long videos: watching takes time, and the k
 
 | Feature | Details |
 |---|---|
-| Download | Audio (mp3) or video (mp4), from YouTube and the other ~20 sites cobalt supports (TikTok, X, Instagram, SoundCloud, Vimeo, Reddit…). Video quality setting: 720p / 1080p / Best |
-| Transcribe | **On your Mac**, with OpenAI's Whisper *large-v3-turbo* through whisper.cpp on the GPU. Free, offline, auto-detects the language, keeps timestamps |
+| Download | Audio (mp3) or video (mp4), from YouTube and the other ~20 sites cobalt supports (TikTok, X, Instagram, SoundCloud, Vimeo, Reddit…). Video quality setting: 480p / 720p / 1080p / Best compatible (H.264) / **Highest available (up to 4K, AV1, 4.0)** |
+| Transcribe | **On your Mac**, with OpenAI's Whisper *large-v3-turbo* through whisper.cpp on the GPU. Free, offline, keeps timestamps. The language is detected at three points of the audio (4.0), so a music intro no longer decides it |
 | Summarize | **Claude Sonnet 5.5** through the Claude Code CLI, using your Claude account login (no API key). Formats: Standard, Brief, Detailed, Bullets, ADHD-Friendly. Languages: English, same as video, **Egyptian Arabic (Masri)**, Arabic (MSA), French, Spanish, German |
 | History | SQLite database: every video, every summary version, transcript and file. Search, filters, sorting, favorites, stats |
 | Never destructive | Re-downloading never overwrites (`… (2).mp3`), removing history never deletes files, failed regenerations never touch saved summaries |
@@ -108,7 +108,7 @@ Open it from the Dock, Spotlight, Launchpad or Raycast. The layout follows `desi
 - **The mini-player** (bottom, in every section while something is loaded): thumbnail, title and channel, or for a playlist **"4 of 36 • playlist"** (3.1) (click to show that entry), ⏮ (back to the start, or in the first 3 seconds to the previous Play All item), ⏯, ⏭ (the next Play All item), a red position slider, the times, **volume**, **Up Next** (the Play All list) and ✕. It drives the same player as the video column, so only one thing ever plays.
 - **Queue section:** *Running now* (stages and Cancel), *Waiting* (numbered, remove one, **Pause/Resume**, **Clear**; 3.1: consecutive jobs from one playlist sit under a header such as *"Series • 1 downloading • 5 queued • 2 failed • 34 of 36 offline"*, rows say "Episode 8 • Download video", and the numbers stay the real queue order) and **Failed** (the latest failed or interrupted job of each kind per entry, with **Retry**; it leaves the list once it's retried or done again).
 - **Downloads section (3.1):** *"N videos offline • N files • size • free space"*, search (also by playlist name), **All · Available · Missing**, then the files **grouped by playlist** (then *Individual Downloads*). A playlist's header: *"34 of 36 videos downloaded • 2 missing • 22.9 GB"*, *Available offline / Partly offline*, and ⬇ **Download Missing**. Inside, **one row per video** with each of its files as a line (MP4 • 692.8 MB • Available, MP3 • Missing → *Download Again*), so two downloads of one video are still one video. Counts are unique videos, and an mp3 never counts as the video being offline.
-- **Settings:** summary language and format, download folder, **video quality**, history retention, *Import from Downloads Folder…*, *Show Database in Finder*, theme (Dark / System / Light).
+- **Settings:** summary language and format, download folder, **video quality** (4.0: *Best compatible (H.264)* plays everywhere and is 1080p on YouTube; *Highest available (up to 4K, AV1)* is several times larger and offered only on Macs that decode AV1 in hardware), history retention, *Import from Downloads Folder…*, *Show Database in Finder*, theme (Dark / System / Light).
 - **Offline (2.1):** with no internet a strip says what still works. Video / Audio / Summarize still accept links: they go into the queue and start when you're back online. *Transcribe on this Mac* works offline for any entry with a local mp3 or mp4, and a summary of a saved transcript can be requested offline and runs later.
 - **Queue (2.1):** the buttons never block; extra jobs wait their turn. **Cancel** stops the current job and pauses the queue; **Resume** continues.
 - **Playlists (2.1, collections since 3.1):**
@@ -198,6 +198,28 @@ All in **Video Buddy 4.0 RC** only, on `lkm-WEHQtNc` (your declaration) unless a
 | **Queue recovery** | queue two downloads, force-quit, relaunch with a new window | interrupted jobs show Retry; nothing runs by itself after the relaunch; Retry and a second click make one job each; no duplicate files |
 
 `space-watchdog.sh` was checked on simulated free-space readings (20 GB under the start → abort; under 100 GB → abort; within limits → exit 0). No image has been created.
+
+### Video Buddy 4.0: what's new (release notes)
+4.0 is 3.1 plus everything the Preview and the RC tested, in the same app (`Video Buddy.app`, bundle ID `local.video-summarizer`, the same library):
+- **YouTube inside the app** (Phase 1–2): a real YouTube in tabs (⌘T, ⌘W, ⌘⇧T, ⌘1–9), at most 4 awake, the rest asleep; your tabs come back after a restart; one thing plays at a time; optional background audio. The bar above the page always talks about the active tab's video: Save to Watch Later, Video, Audio, Summarize, Play Offline.
+- **Watch Later** (Phase 3): saved without downloading, separate from the library, with what this Mac has for each video.
+- **Offline Hub** (Phase 4) in Downloads: Ready / Problems / Preparing / All, Check Files (quick and deep checks), Relink… and Locate… for moved files, **Prepare for Offline** with size estimates, a keep-free reserve and *Wi-Fi or Ethernet only*.
+- **Your declaration before a YouTube download:** every YouTube download asks that you own the video or have permission, once per video; the database refuses one without it.
+- **Another copy only when you say so:** a video you already have is downloaded again only after *Download another copy?*, which names what's here and what would come.
+- **Qualities:** 480p, 720p, 1080p, *Best compatible (H.264)* and the new ***Highest available (up to 4K, AV1)***, with estimates of the stream actually downloaded (checked: −1.1% to +0.07%).
+- **Raycast hands YouTube links to the app** (`videobuddy://request`), which asks you first; other sites download as before.
+- **Transcripts:** the language from three points of the audio, by majority, so a music intro doesn't make an Arabic video "English".
+- **Safety:** cancel, quit or a crash stops a job's whole process tree; low disk space pauses or stops a download before the reserve; queued jobs survive anything.
+
+### Upgrading from 3.1 to 4.0 (the G3 procedure, rehearsed on copies in G2)
+Nothing here has been run on your real apps or data; each step was rehearsed on copies (§11).
+1. **Quit Video Buddy 3.1 and the Preview** yourself (the tools refuse while they run and never quit them).
+2. **Back up:** `app/tools/backup-before-4.0.sh ~/Documents/"Video Buddy backup before 4.0"`, then `app/tools/backup-before-4.0.sh --verify` on it. It copies 3.1's database with its `-wal` and `-shm` together (checked byte for byte), makes one consolidated copy with SQLite's `.backup` (from a scratch copy; your files are never opened by SQLite), zips both apps, exports the settings, lists the media, and writes `MANIFEST.txt` (SHA-256 of every file). Media files aren't copied.
+3. **Install:** `VB_BACKUP_SET=<that folder> app/build.sh` (from the 4.0 code). It refuses without a backup set that verifies, refuses while the app runs, moves 3.1 aside as `~/Applications/Video Buddy 3.1.app.disabled`, installs 4.0 and puts 3.1 back if anything fails. Nothing is deleted.
+4. **First launch** upgrades the library v3 → v6, after a verified `backups/history-pre-v4-*.sqlite`; only new, empty tables are added (authorizations, Watch Later, job options).
+5. **Carry over from the Preview (optional):** with 4.0 quit, `app/tools/carry-over.sh <backup>/preview "$HOME/Library/Application Support/Video Summarizer"` adds exactly the Watch Later videos GV1MWu7crNk and DYPJcnnhvQE with their thumbnails, and the tabs (address and title only; YouTube signs in afresh). Add `--declaration` only if you want your gx7F8fg49QQ declaration carried. Nothing else, and never anything from before Fresh Start.
+6. **Raycast:** nothing to repoint. Raycast runs the scripts in `~/Desktop/Dev/video-summarizer`; once 4.0 is merged into `main` there, they hand YouTube links to the installed app (`local.video-summarizer`), which then takes `videobuddy://` requests. Until then they keep downloading as 3.1's do.
+7. **Rollback** (§9): quit 4.0; rename `Video Buddy.app` → `Video Buddy 4.0.app.disabled` and `Video Buddy 3.1.app.disabled` → `Video Buddy.app`; `app/tools/restore-db.sh "$HOME/Library/Application Support/Video Summarizer" <backup>/production/history.sqlite` (it keeps the v6 state as a recovery copy, and the same script puts that back).
 
 ### Before a flight (2-minute checklist)
 1. Online: for each video you want, press **Video** (or *Make Available Offline*, or *Make All Available Offline* on a playlist). Tick **+ Transcript** first if you'll want to search what was said. Use **Summarize** too if you want to read the summary. Settings → Video quality → **720p** fits about twice as much.
@@ -292,14 +314,16 @@ It prints the saved file's path as its last stdout line, and progress on stderr.
    - **A 0-byte result counts as a failure.** For most YouTube videos cobalt says "tunnel" but streams nothing.
 3. **yt-dlp fallback.** On any failure it prints `cobalt: <reason>, falling back to yt-dlp`, then:
    - runs `yt-dlp -x --audio-format mp3` (audio) or `-t mp4` (video) with `-P <temp>` and `--print after_move:filepath`;
-   - with a quality setting, video also gets `-S "vcodec:h264,res:<720|1080>,acodec:aac"` (keeps H.264/AAC so the built-in player can play it);
+   - with a quality setting, video also gets `-S "vcodec:h264,res:<480|720|1080>,acodec:aac"` (keeps H.264/AAC so the built-in player can play it);
+   - 4.0 G2, `highest`: `-f 'bv*[vcodec^=av01]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b' -S res --merge-output-format mp4 --remux-video mp4`: the highest AV1 stream, else H.264, with AAC, in MP4; never VP9 (AVFoundation doesn't reliably play it). For other sites cobalt gets `max`;
+   - 4.0 G2: the first line of the job's log names the streams yt-dlp chose (`yt-dlp: format 401+140 (3840x2160, av01.0.12M.08 + mp4a.40.2)`);
    - tries **3 times**, because YouTube randomly returns 403 on about 1 in 6 tries;
    - prints `yt-dlp attempt N failed` after each failed try.
 4. **Never overwrite.** `place()` moves the finished file into the output folder under a free name.
    - A name counts as taken if `<stem>.<ext>`, `.summary.md`, `.summary.md.part`, `.transcript.txt` or `.transcript.json` already exists.
    - If it's taken, the file becomes `<stem> (2).<ext>`, `(3)`, and so on.
 
-**Video quality (2.1):** the app passes `VS_VIDEO_QUALITY=720|max` (nothing for the 1080p default). cobalt gets `"videoQuality"` in its request, yt-dlp the `-S` above. **When it's unset, as from Raycast, the request is byte-for-byte what it always was.**
+**Video quality (2.1):** the app passes `VS_VIDEO_QUALITY=480|720|max|highest` (nothing for the 1080p default; `highest` only where this Mac decodes AV1, else `max`). cobalt gets `"videoQuality"` in its request, yt-dlp the `-S` above. **When it's unset, as from Raycast, the request is byte-for-byte what it always was.**
 
 Filenames: cobalt "pretty" names look like `Me at the zoo - jawed (youtube).mp3` and `… (240p, h264, youtube).mp4`; yt-dlp names look like `Title.mp3`.
 
@@ -334,8 +358,9 @@ The on-device transcript, used by `summarize.sh` and by the app's *Transcribe on
 1. Prints `🎙️  Transcribing on-device…`.
 2. If `<base>.transcript.txt` already exists, it's **reused, never overwritten**, and its path is printed.
 3. mp3/wav/flac/ogg go straight to whisper. Video files (mp4…) are first converted with `ffmpeg -vn -ac 1 -ar 16000` to a WAV in a private temp folder.
-4. `whisper-cli -np -l auto -m <model> -otxt -oj` writes into the temp folder, and the results are **moved next to the media only when complete**. A cancelled run leaves nothing half-written. `VS_WHISPER_MODEL` overrides the model.
-5. The last line is the path of `<base>.transcript.txt`.
+4. **The language (4.0 G2):** for audio over 30 s, three 30-second windows at 10%, 40% and 70% are cut with ffmpeg and each goes through `whisper-cli -dl` (detect only); the majority wins (the middle one if all three differ), and the votes are printed (`Language: ar (at 10%, 40%, 70%: ar 0.996,…)`) and saved in the JSON as `languageVotes`. whisper.cpp itself decides from the first 30 s only, and its `-ot` offset doesn't move that, hence the cuts. 30 s or shorter, or fewer than three answers: `-l auto`, as before. It adds about 2–3 s.
+5. `whisper-cli -np -l <language> -m <model> -otxt -oj` writes into the temp folder, and the results are **moved next to the media only when complete**. A cancelled run leaves nothing half-written. `VS_WHISPER_MODEL` overrides the model.
+6. The last line is the path of `<base>.transcript.txt`.
 
 Temp folder plus `EXIT`/`TERM` traps, the same safety as `cobalt-dl.sh`. A 19-second mp4 took 2.8 s.
 
@@ -390,7 +415,7 @@ Everything else stays local. Both containers listen only on 127.0.0.1, and the c
 | `Views/BrowserView.swift` | 4.0 P1: the YouTube section: toolbar (back, forward, reload, address, open in your browser), the Video Buddy bar (library status; Video → Audio → Summarize → + Transcript; Play on this Mac; Save playlist), offline and error screens, the web view container (re-attaches after full screen). **P2:** the tab strip, one view identity per tab, the declaration sheet names its video |
 | `Views/PlaylistViews.swift` | My Playlists list, the album-style playlist page (Play All, Continue, Download Missing, Add Videos, reorder), the Add Videos sheet (incl. From Folder), the YouTube playlist preview / Check Against YouTube sheet |
 
-Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 3.1), `make-icon.swift` (draws the red gradient tile with a white `play.fill`; `preview` adds the amber PREVIEW band), `tests/vsctl.swift`, `tools/preview.sh` (4.0 branch: builds and installs the isolated *Video Buddy 4.0 Preview.app*; `--remove` deletes it and its data; 4.0 Phase 5: `--rc` the same for *Video Buddy 4.0 RC.app*, `make-icon.swift rc` its blue RC band), `tests/regression.sh` (4.0 Phase 5: every phase in the test build with the fake downloader), `tests/measure.sh` (4.0 Phase 5: memory and CPU of the app and its YouTube pages, every 5 s). `scripts/send-to-app.sh` (4.0 Phase 5): Raycast hands a YouTube link to the app as a `videobuddy://request`, and stops if the app isn't a 4.0 build; `Info.plist` registers `videobuddy://`.
+Other app files: `build.sh` (installs `~/Applications/Video Buddy.app`; 4.0: only over a verified backup set, moving the old app aside as `.disabled`), `Info.plist` (name Video Buddy, id `local.video-summarizer`, version 4.0 on the release branch), `tools/backup-before-4.0.sh`, `tools/carry-over.sh`, `tools/restore-db.sh`, `tests/migration-rehearsal.sh`, `tests/ui-review.sh` (4.0 G2), `make-icon.swift` (draws the red gradient tile with a white `play.fill`; `preview` adds the amber PREVIEW band), `tests/vsctl.swift`, `tools/preview.sh` (4.0 branch: builds and installs the isolated *Video Buddy 4.0 Preview.app*; `--remove` deletes it and its data; 4.0 Phase 5: `--rc` the same for *Video Buddy 4.0 RC.app*, `make-icon.swift rc` its blue RC band), `tests/regression.sh` (4.0 Phase 5: every phase in the test build with the fake downloader), `tests/measure.sh` (4.0 Phase 5: memory and CPU of the app and its YouTube pages, every 5 s). `scripts/send-to-app.sh` (4.0 Phase 5): Raycast hands a YouTube link to the app as a `videobuddy://request`, and stops if the app isn't a 4.0 build; `Info.plist` registers `videobuddy://`.
 
 ### 5.2 Video identity: one entry per video
 `VideoRef.parse` turns a link into a **key**:
@@ -626,6 +651,9 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 | 4.0 Preview (Phase 1–4 branches): app, library, downloads, WebKit data | `~/Applications/Video Buddy 4.0 Preview.app`, `~/Library/Application Support/Video Buddy 4.0 Preview/`, `~/Library/WebKit/local.video-summarizer.preview/` |
 | 4.0 Release Candidate (Phase 5): app, library and live-test list, downloads, WebKit data | `~/Applications/Video Buddy 4.0 RC.app`, `~/Library/Application Support/Video Buddy 4.0 RC/` (downloads in its `Downloads/`), `~/Library/WebKit/local.video-summarizer.rc/` |
 | The release worktree (branch `release/4.0-candidate`) | `~/Desktop/Dev/video-summarizer-rc` (this folder stays on `main` until the release) |
+| 4.0 upgrade backup set (G3; made by `app/tools/backup-before-4.0.sh`) | a new folder you choose, e.g. `~/Documents/Video Buddy backup before 4.0/` (`MANIFEST.txt`, `production/`, `preview/`, `apps/`, `settings/`, `media.txt`). G2's rehearsal set was in the job's temporary folder only |
+| 3.1 after the upgrade | `~/Applications/Video Buddy 3.1.app.disabled` (renamed back to roll back) |
+| A 4.0 transcript's language votes | `languageVotes` in `<media>.transcript.json` |
 | Raycast script directory + Quicklink | Raycast's own settings |
 | Claude login | handled by the Claude Code CLI (`claude`) |
 
@@ -798,6 +826,15 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **Why:** the try-out only lived in `~/Library/Caches`, started from a script, and had 3.1's bundle ID, so it couldn't be found.
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
+
+### 2026-10-26: Video Buddy 4.0, G2: Highest available, transcripts, rehearsals, UI review (RC and copies only)
+The parts of G2 that cost nothing, with paid AI, the network test and the release itself still waiting for approval.
+- **Per-job locks:** the RC's single queue lock became one per kind of job. Downloads need a live-download window, AI needs its own approval, and an on-device transcript of a file already here needs neither (your requirement: transcription without unlocking downloads or AI).
+- **Highest available (up to 4K, AV1)** beside *Best compatible (H.264)*. It's offered only where macOS says it decodes AV1 in hardware; this Mac (asked at run time) does. VP9 is left out because AVFoundation doesn't reliably play it. One real 4K copy of `lkm-WEHQtNc` in a fresh window: yt-dlp chose 401 + 140, 3840×2160 AV1 + AAC, 291,903,514 bytes against an estimate of 291,697,416 (+0.07%).
+- **Transcript language:** whisper.cpp decides from the first 30 s, and its `-ot` doesn't move that (checked), so three 30-second cuts at 10/40/70% vote. Synthetic clips (40 s of generated music, then `say` speech) went from English to Arabic; the real Arabic video was right before and after.
+- **Rehearsals on copies:** a verified backup set, `--migrate-copy`, the Preview carry-over (force-quit mid-transaction included), the database and app rollback, and a `build.sh` that never deletes an installed app. Two tool defects were found and fixed (below).
+- **UI review:** 101 screenshots plus targeted checks. Three small layout and wording defects fixed.
+- **Why some figures waited:** the Mac slept on battery (maintenance wakes about every 16 minutes), so the playback and UI checks were redone once you were back with the screen unlocked.
 
 ### 2026-10-25: Video Buddy 4.0, G1b-2: reliability tests in the RC
 - **Request:** cancel, force-quit, network drop, bounded low storage, Raycast and queue recovery on the approved video only; narrow fixes allowed. Wi-Fi changes only after asking; the five original files preserved; the RC locked again on every path. The non-YouTube Raycast download stays pending until you approve a URL.
@@ -994,6 +1031,11 @@ All commands run from this folder.
 | Unpause a queue from Terminal | `defaults write local.video-summarizer queuePaused -bool false`, then reopen the app |
 | Restore from the pre-upgrade copy | As above, using `backups/history-pre-v3-*.sqlite` (or `pre-v2`). An older app can't open a newer schema; 3.0 simply upgrades the copy again, which is fine |
 | Go back to the 2.1 app | `git checkout checkpoint-before-video-buddy -- app` and `bash app/build.sh` installs *Video Summarizer.app* again; restore `history-before-video-buddy-20261021-102939.sqlite` (§9 above), because 2.1 doesn't know schema v3. Then `git checkout main -- app` |
+| **4.0: back up before the upgrade** | `app/tools/backup-before-4.0.sh <new folder>`; check one with `--verify <folder>` (every file against `MANIFEST.txt`, nothing added, both databases intact) |
+| **4.0: install over 3.1** | `VB_BACKUP_SET=<verified set> app/build.sh` (§2, *Upgrading*). `VB_INSTALL_DIR=<folder>` installs elsewhere (the rehearsal) |
+| **4.0: roll back** | Quit the app; rename `Video Buddy.app` → `Video Buddy 4.0.app.disabled`, `Video Buddy 3.1.app.disabled` → `Video Buddy.app`; `app/tools/restore-db.sh <data folder> <backup>/production/history.sqlite`. Undo: the same script with the recovery copy it names |
+| **4.0: check a migration on a copy** | `"…/VideoBuddyRC" --migrate-copy <folder with a copy of history.sqlite>` (refuses anything in Application Support); the whole rehearsal: `app/tests/migration-rehearsal.sh <backup set> <new folder> <4.0 binary>` |
+| **4.0: carry over from the Preview** | `app/tools/carry-over.sh <backup>/preview <4.0 data folder> [--declaration]` |
 | Save your work | `git add -A && git commit -m "…"` |
 
 ---
@@ -1026,6 +1068,11 @@ All commands run from this folder.
 | A playlist shows fewer videos than it has on YouTube, or one episode sits under *Individual Videos* | It was downloaded before (or apart from) the playlist import. Open the playlist → ⋯ → **Check Against YouTube…** → **Link N Library Videos** (metadata only, nothing downloads). Without a YouTube link: **Add Videos** → tick it, or **From Folder…** |
 | "Already in the queue" | That video already has a download of the same kind waiting or running; nothing was queued twice. See the **Queue** section |
 | An episode shows ✓ but you didn't finish it | You stopped within its last 5% (at most 10 s), which counts as finished. Play it again to start over |
+| **Highest available is greyed out** (4.0) | This Mac doesn't decode AV1 in hardware (macOS is asked at launch; Macs before M3 don't). Best compatible (H.264) works everywhere |
+| **A transcript is in the wrong language** (4.0) | The three votes are in the job's log and in `languageVotes` in the transcript's JSON. Music for most of the audio, or two languages, can still mislead it (§12). Remove the `.transcript.*` files next to the media and transcribe again |
+| **A YouTube download says "(yt-dlp)"** | Normal from 4.0: YouTube goes straight to yt-dlp, because cobalt's YouTube streams come back empty (HTTP 200, 0 bytes) |
+| **Downloads stop with "Paused: … free on …"** (4.0) | Your keep-free reserve (Settings → Downloads) would be used up on the downloads disk or where the download is put together (`$TMPDIR`). Free space or lower the reserve, then Resume. External and network drives count their own free space |
+| **Tests or long jobs crawl, with gaps of about 16 minutes** | The Mac is asleep and only wakes briefly for maintenance (`pmset -g log`). Keep it awake (plugged in, lid open) during long runs |
 | Arabic shows left-to-right | Right-to-left is detected from the first letter. Regenerate, or check the summary actually starts with Arabic text |
 
 ---
@@ -1363,11 +1410,104 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - **Its database:** intact, with no broken references. 16 jobs: 12 succeeded, each with its file at the recorded size, no file without a job, nothing queued or running. 12 files: the 5 originals byte-identical, plus 7 complete test copies.
     - **Unchanged against the baseline:** 3.1, production, the Preview and your checkout.
 
+### 4.0 G2 results (10-25 and 10-26; the RC, the test build and copies only)
+- **Builds:**
+  - **self-tests:** 368 in the RC bundle, 366 in the test build, 362 in the release build;
+  - **regression:** 66 of 66 (`app/tests/regression.sh`), including a real Whisper transcript while downloads are locked and the download still waiting; run again after the UI fixes, 66 of 66.
+- **Highest available, one real 4K copy** (`lkm-WEHQtNc`, your declaration, a 30-minute window that was closed right after, AI locked):
+  - **the stream:** yt-dlp's log line `format 401+140 (3840x2160, av01.0.12M.08 + mp4a.40.2)`, downloaded in 32 s;
+  - **the file:** ffprobe 3840×2160 AV1 (yuv420p) + AAC, 603 s, 291,903,514 bytes; the estimate 291,697,416 (+0.07%);
+  - **native playback:** AVFoundation playable, video track 3840×2160 av01 at 30 fps; `VTIsHardwareDecodeSupported(AV1)` = true on this Mac; Check Files "Opens and plays on this Mac", 2160p;
+  - **playing it** by a real click on its row in Downloads: 60 s of position in 60 s of real time, 3840×2160 decoded; dropped frames aren't available for local files (AVPlayer keeps no access log for them);
+  - **duplicates:** Highest again → *Already on this Mac at 2160p*; Best compatible → *Already on this Mac at 1080p*; both cancelled, nothing queued;
+  - **afterwards:** the 14 earlier files (12 media, 2 transcript files) byte-identical, the RC locked, quality back to 1080p.
+- **Transcript language** (`transcribe.sh` before → after; whisper large-v3-turbo on this Mac):
+
+| Audio | Before (`-l auto`) | After: votes at 10 / 40 / 70% → language |
+|---|---|---|
+| 40 s music + Arabic speech, 61 s | en; the speech became "Thank you." | en 0.71 / ar 0.997 / ar 0.998 → **ar** |
+| 40 s music + Arabic, 190 s | en; "Thank you." ×7, no Arabic at all | ar / ar / ar → **ar**, the speech transcribed |
+| 40 s music + English, 53 s and 175 s | en | en / en / en → en |
+| music only, 40 s | en ("Thank you.") | en / en / en (p 0.74–0.85) → en |
+| `lkm-WEHQtNc`, the real video (Egyptian Arabic, 10 min) | ar | ar 0.996 / 0.995 / 0.994 → ar; the same transcript |
+
+  - **The real video in the RC**, with downloads and AI locked: *Transcribe on this Mac* → 136 timestamped lines, Arabic, in 43 s. It follows playback (at 1:50 the line spoken is highlighted and in view), and clicking a line jumps there.
+  - **Quality, spot-checked against the title and description:** Egyptian Arabic with English terms kept (open router, open code, space bunny, stealth mode, MiniMax ×7, DeepSeek ×16, Claude ×6). Small mishearings ("يا مسائل فول" for "يا مساء الفل", GLM-5 as "جيليم فايف"), and some 30-second segments in fast stretches.
+- **Performance in the RC** (`measure.sh`, every 5 s; *response* = a test command's round trip to the app's main thread):
+
+| Scenario | App memory | App CPU | YouTube pages | Response p50 / p95 |
+|---|---|---|---|---|
+| 4K AV1 playback, 60 s (display on) | 173 MB | 7.4% (max 10.9) | – | 20 / 21 ms |
+| 1080p H.264 playback, 60 s (display on) | 216 MB | 6.3% (max 10.8) | – | 20 / 20 ms |
+| during an on-device transcript (test build, a 3-minute Arabic sample; `whisper-cli` active in 6 of 25 samples) | 190 MB | 2.9% (max 7.2) | – | 20 / 21 ms |
+| the test video's YouTube page loaded, display on (it stayed paused: a scripted play doesn't start YouTube's player, as in Phase 1) | 186 MB | 2.5% | 1.56 GB, 6.6% | 22 / 27 ms (max 56) |
+| idle, 2 min* | 120 MB | 2.3% | – | 29 / 33 ms |
+| 1 YouTube tab* (the video didn't start) | 154 MB | 2.0% | 1.45 GB, 4.1% | 22 / 24 ms |
+| 10 tabs*, 4 live | 154 MB | 2.0% | 2.88 GB, 2.1% | 23 / 25 ms |
+| 30 tabs*, 4 live | 169 MB | 2.0% | 2.93 GB, 4.0% | 22 / 23 ms |
+| after a memory warning*, 1 live | 156 MB | 2.0% | 0.72 GB, 1.2% | 23 / 24 ms |
+
+  \* With the display off (it slept at 18:22, during these runs), so pages may have been throttled. The tab limit held (never more than 4 live of 30), and memory matches Phase 2 (3.1 GB with 4 live, 0.75 GB with 1). The RC's own tabs were put back as they were.
+- **Rehearsals** (copies in the job folder; production only read, its files unchanged by hash, size and date):
+  - **the backup set:** 76 files, `--verify` ok; a changed file and an added file are both reported;
+  - **`app/tests/migration-rehearsal.sh`: 30 of 30.**
+    - 3.1 Test was built from `main` with its own identity.
+    - Production's copy (v3, 0 videos) and a synthetic v3 database (3 made-up videos, 4 jobs, playback, a playlist; nothing from before Fresh Start) both went v3 → v6, with every v3 row identical, empty new tables and a pre-v4 backup.
+    - The rollback with `restore-db.sh` gave identical rows; 3.1 Test opened it, showed the library and ran nothing; the undo brought v6 back.
+    - The carry-over gave exactly the two Watch Later videos, their thumbnails and the tabs (address and title only). A force-quit mid-transaction changed nothing, a second run changed nothing, `--declaration` carried only yours, and the backup set still verified;
+  - **`build.sh` into a temporary Applications folder:**
+    - it refused without a backup set and with one that didn't verify;
+    - a failure after moving 3.1 aside put 3.1 back, identical;
+    - the install left `Video Buddy 3.1.app.disabled`, identical to the zip, plus a signed 4.0;
+    - renaming back restored 3.1;
+    - no rehearsal app was left registered with LaunchServices.
+- **Defects found and fixed in G2:**
+  1. `build.sh` ran `rm -rf` on the installed app before replacing it. It now needs a verified backup set, moves the old app aside and puts it back on failure.
+  2. `restore-db.sh` left a `-wal` and a `-shm` beside the backup it restored from (SQLite opens a source read-write), so a backup set no longer verified after a rollback. It now restores from a private copy.
+  3. `backup-before-4.0.sh --verify` stopped at its first problem; it now reports them all.
+  4. `regression.sh` reused `$out` (the downloads folder) for a message, so later launches created empty "Sent to Video Buddy 4.0 Test: confirm it there." folders. 3 were found, all empty, and removed.
+  5. UI: Watch Later's two status chips were cut off side by side ("Audio available of…"); they now go one under the other when needed.
+  6. UI: Favorites (or any filter) with nothing in it said "Paste a link above…"; it now says *No favorites yet: Star a video (☆) to keep it here*, or which filter is empty.
+  7. UI: the detail panel's "Show in Finder" was cut to "Show in Fi…" at the RC's window width; it now shows "Finder" when the full label doesn't fit (VoiceOver still reads "Show in Finder").
+- **UI review: checked and fine:**
+  - **covered:** Home, Library (grouped and all), the detail tabs, Favorites, Playlists and a playlist page, Downloads (Ready, Problems, Preparing, All, Relink), Queue, Watch Later, Settings, YouTube with its bar;
+  - **dialogs:** declaration, Prepare, request, copy prompt;
+  - **appearances and sizes:** dark and light, 980×660 and 1800×1100, plus 1440×868;
+  - **Follow playback:** left-to-right and right-to-left.
+- **Seen, not changed:** the RC test build's own badge and rules (expected). Two older app copies are registered with LaunchServices under 3.1's bundle ID: `~/.Trash/Video Summarizer.app` and a Phase 1 prototype in `~/Library/Caches/video-buddy-try-browser/`. They aren't touched; they're for G3 (see below).
+
+### 4.0 release readiness (after G2)
+| Area | Requirement | Status | Evidence |
+|---|---|---|---|
+| Isolation | RC, Preview and 3.1 each keep their own identity, data and settings | **PASSED** | Phase 5, regression, baselines unchanged |
+| Locks | downloads only in a window; AI only when approved; on-device work needs neither | **PASSED** | G1a, G2 regression, the RC transcript with both locked |
+| Declaration | no YouTube download without your declaration; the database refuses one | **PASSED** | G1a, regression |
+| Qualities | 480/720/1080/Best compatible (H.264) real files at the right resolution | **PASSED** | G1b-1 |
+| Highest available | 4K AV1, a separate choice, the stream, file, playback and decoder verified; disabled without AV1 decoding | **PASSED** | G2 above; self-tests for both cases |
+| Size estimates | the stream actually downloaded | **PASSED** | −1.1% (720p, G1a) to +0.07% (4K) |
+| Duplicates | never silent; the prompt names what's here and what would come | **PASSED** | G1a, G1b-1, G2 |
+| Cancel, force-quit, queue recovery | nothing partial, nothing orphaned, Retry once | **PASSED** | G1b-2 |
+| Low storage | paused before, stopped during, your disk never filled | **PASSED** | G1b-2 (bounded image) |
+| On-device transcripts | right language with a music intro; the real video in the RC | **PASSED** (limits in §12) | G2 above |
+| Performance | playback, tabs, memory warning, responsiveness | **PASSED**: local 4K/1080p playback, a transcript, the tab limit, the memory warning; the app answers in ≤ 33 ms (p95) everywhere. **PENDING:** a YouTube video playing (needs one play by hand) and during a download | G2 table |
+| UI review | every section and dialog, dark and light, small and wide | **PASSED** (3 defects fixed); **PENDING** by hand: system alerts and the Settings window (blank in snapshots), real hover and drag | G2 above |
+| Backups | SQLite-consistent, verified, production only read | **PASSED** (rehearsed) | backup set, `--verify` |
+| Migration v3 → v6 | rows identical, new tables empty, verified pre-v4 backup | **PASSED** (copies) | rehearsal 30/30 |
+| Carry-over | exactly the two Watch Later videos and the tabs; the declaration only by choice | **PASSED** (copies) | rehearsal |
+| Rollback | database and app, with an undo | **PASSED** (copies) | rehearsal, `build.sh` rehearsal |
+| Raycast | YouTube links handed to the app, which asks first | **PASSED** | G1b-2 |
+| Raycast, another site | a non-YouTube download through the RC | **PENDING** | needs a URL you approve |
+| Network drop | a download through Wi-Fi off and back | **PENDING** (not verified twice) | needs your go-ahead to switch Wi-Fi |
+| Paid AI | a real summary in the RC | **PENDING** | needs your approval (cost) |
+| G3 | the real backup, merge into `main`, install over 3.1, LaunchServices clean-up of the two stray copies, the Raycast cutover | **PENDING** | needs your approval |
+
+No requirement has **FAILED**.
+
 ### Not verified
-- **4.0 Phase 5, after G1b-2:**
-  - **Not verified:** the network drop (the Wi-Fi switch wasn't captured), and the non-YouTube Raycast download (no URL approved yet).
-  - **Still to do:** memory and CPU figures (`measure.sh` only smoke-tested), a full UI review, and the "Highest available" quality (a release requirement).
-  - **Paid summaries** wait for G2.
+- **4.0 Phase 5, after G2:**
+  - **Not verified:** the network drop (the Wi-Fi switch wasn't captured in G1b-2), and the non-YouTube Raycast download (no URL approved yet).
+  - **Not measured:** performance during a download (the 4K copy downloaded while the Mac slept), and with a YouTube video actually playing (a scripted play doesn't start YouTube's player; press play by hand while `measure.sh` runs).
+  - **Paid summaries** wait for your approval.
 - **4.0 Phase 4 (needs real downloads, so Phase 5):**
   - real cobalt or yt-dlp downloads at a chosen quality, and whether the result has that resolution;
   - size estimates against real files;
@@ -1417,7 +1557,10 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 - **YouTube through cobalt mostly fails** (0-byte tunnels), and yt-dlp is throttled and occasionally gets 403. It works, but it's slow.
 - **Ad-hoc signing** means macOS re-asks for folder permissions after every rebuild.
 - **Summaries can mention your Claude Code skills.** `--bare` needs an API key.
-- **Player formats:** mp4/m4v/mov/mp3/m4a/aac/wav play inside the app; webm/mkv open outside. "Best available" via yt-dlp is still H.264, so usually 1080p at most on YouTube.
+- **Player formats:** mp4/m4v/mov/mp3/m4a/aac/wav play inside the app; webm/mkv open outside. *Best compatible* is H.264, so 1080p at most on YouTube; *Highest available* (AV1, up to 4K) needs a Mac that decodes AV1 in hardware, and its files are several times larger (this video: 292 MB at 4K against 75 MB at 1080p).
+- **Transcript language (4.0):** three 30-second samples decide. Still limited: music for most of the length (each sample hears music), two languages in one video (one is chosen for all of it), and clips of 30 s or less (one sample, as before). Whisper also hallucinates over music (e.g. a subtitle credit, "ترجمة نانسي قنقر", instead of silence), and speech in the 30 s window right after a music intro can be lost; a voice-activity filter (whisper.cpp's `--vad`, an extra free model) would help.
+- **Long transcript lines:** Whisper sometimes returns 30-second segments in fast speech, so following playback moves in bigger steps there.
+- **Dropped frames aren't reported** for local files: AVPlayer keeps its access log only for streams. Playback is checked by its position keeping pace with real time.
 - **Big playlists** run one video at a time, so 100 videos summarized takes hours. The preview shows the total time.
 - **Offline is detected, not predicted:** a job that loses the connection halfway fails, with Retry. It isn't paused.
 - **No notes of your own.** Tags come from the platform (3.0), not from you.
@@ -1440,6 +1583,5 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 5. **Chapters** (yt-dlp has them for many videos): a Chapters tab that jumps the player, as in the reference design.
 6. Shuffle and repeat in the mini-player, also in the reference design.
 7. *Just This Video* on a `watch?v=…&list=…` link could join the video to that playlist when you already have it (3.1 doesn't).
-8. Whisper picks the wrong language when a video opens with music (episode 1's transcript is "Music playing."): detect the language from a later part, or let you choose it.
-7. **Whisper picks the wrong language when a video starts with music** (episode 1's transcript is "Music playing." throughout): detect the language from the middle of the file, and let a stuck transcript be redone.
-5. A Raycast command to search the history.
+8. A transcript language choice of your own, and Whisper's voice-activity filter against hallucinations over music (4.0 detects the language at three points, which fixes the music-intro case).
+9. A Raycast command to search the history.
