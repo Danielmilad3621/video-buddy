@@ -217,6 +217,7 @@ struct IndeterminateBar: View {
 /// Jobs are waiting but nothing runs: the queue is paused, the Mac is offline, or it's on a network the Wi-Fi-only
 /// setting doesn't allow.
 struct WaitingStrip: View {
+    static let lockedNote = "Downloads wait for a live-download window. Transcribing on this Mac still runs."
     static let meteredNote = "Wi-Fi or Ethernet only is on, and this network doesn't qualify. If a connection switches to a metered network during a download, that download may finish; the next one waits."
 
     @Environment(AppModel.self) private var model
@@ -229,6 +230,8 @@ struct WaitingStrip: View {
             ? ("pause.circle.fill", "Queue paused • \(n) waiting",
                !JobController.canRun ? "Locked: \(AppSettings.jobsLockReason ?? "the queue can't run in this build")."
                    : jobs.pauseReason ?? "Press Resume to continue with the next job.")
+            : JobController.downloadsLock != nil
+            ? ("lock.fill", "Downloads wait for a live-download window • \(n) in the queue", Self.lockedNote)
             : !model.network.isOnline
             ? ("wifi.slash", "Waiting for internet • \(n) in the queue", "They start by themselves when you're back online.")
             : !jobs.downloadsAllowed
@@ -265,26 +268,33 @@ struct QueueColumn: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "Queue", icon: "slider.horizontal.3") {
                 if !JobController.canRun {
-                    Label(AppSettings.isRC ? "RC: downloads locked" : "Preview: downloads off", systemImage: "lock.fill").font(.callout).foregroundStyle(p.secondary)
-                } else if jobs.paused {
-                    Button { jobs.resumeQueue() } label: { Label("Resume", systemImage: "play.fill") }
-                        .buttonStyle(PrimaryButtonStyle(height: 30, font: .callout.weight(.semibold)))
+                    Label("Preview: downloads off", systemImage: "lock.fill").font(.callout).foregroundStyle(p.secondary)
                 } else {
-                    Button { jobs.pauseQueue() } label: { Label("Pause", systemImage: "pause.fill") }
-                        .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout))
-                        .help("Finish the current job, then wait")
+                    if JobController.downloadsLock != nil {
+                        Label("RC: downloads locked", systemImage: "lock.fill").font(.callout).foregroundStyle(p.secondary)
+                    }
+                    if jobs.paused {
+                        Button { jobs.resumeQueue() } label: { Label("Resume", systemImage: "play.fill") }
+                            .buttonStyle(PrimaryButtonStyle(height: 30, font: .callout.weight(.semibold)))
+                    } else {
+                        Button { jobs.pauseQueue() } label: { Label("Pause", systemImage: "pause.fill") }
+                            .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout))
+                            .help("Finish the current job, then wait")
+                    }
                 }
                 Button("Clear", role: .destructive) { jobs.clearQueue() }
                     .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout))
                     .disabled(jobs.queue.isEmpty)
                     .help("Remove everything waiting (nothing already saved is touched)")
             }
-            if jobs.paused || !model.network.isOnline || !jobs.downloadsAllowed {
+            if jobs.paused || !jobs.downloadsAllowed {
+                let locked = JobController.downloadsLock != nil
                 Label(jobs.paused ? (!JobController.canRun ? "Nothing is downloaded or summarized: \(AppSettings.jobsLockReason ?? "the queue can't run in this build")."
                                                            : jobs.pauseReason ?? "Paused: nothing new starts until you press Resume.")
+                                  : locked ? WaitingStrip.lockedNote
                                   : !model.network.isOnline ? "Offline: jobs that need the internet wait; transcribing on this Mac still runs."
                                   : WaitingStrip.meteredNote,
-                      systemImage: jobs.paused ? "pause.circle" : "wifi.slash")
+                      systemImage: jobs.paused ? "pause.circle" : locked ? "lock" : "wifi.slash")
                     .font(.callout).foregroundStyle(p.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -344,7 +354,7 @@ struct QueueColumn: View {
     /// A prepared download's " • 720p • ≈ 412 MB" (or "size unknown").
     static func options(_ o: JobOptions?) -> String {
         guard let o else { return "" }
-        let q = o.quality.map { $0 == "max" ? " • best quality" : " • up to \($0)p" } ?? ""
+        let q = o.quality.map { $0 == "max" ? " • best compatible" : $0 == "highest" ? " • highest (AV1)" : " • up to \($0)p" } ?? ""
         return q + " • " + SizeEstimate.text(o.estimatedBytes, o.sizeKind)
     }
 

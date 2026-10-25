@@ -118,8 +118,8 @@ final class JobController {
 
     private func queued(_ action: JobAction) async {
         await refreshQueue()
-        if !Self.canRun {
-            onNotice("Added to the queue, where it waits: \(AppSettings.jobsLockReason ?? "the queue is locked").")
+        if let lock = Self.canRun ? (action.downloadsMedia ? Self.downloadsLock : nil) : AppSettings.jobsLockReason {
+            onNotice("Added to the queue, where it waits: \(lock).")
         } else if paused {
             onNotice("Added to the queue. The queue is paused; press Resume to continue.")
         } else if action.needsNetwork, !network.isOnline {
@@ -139,13 +139,14 @@ final class JobController {
         isRunning = true            // claimed before any await, so two calls can't start two runners
         Task {
             while !paused, let job = try? await db.nextQueued(networkAvailable: network.isOnline, downloadsAllowed: downloadsAllowed) {
-                // 4.0 G1a: the build's lock is checked before every job, not only at launch (the RC's live-download
-                // window can end while it's open): locked now, nothing more starts and the queue pauses
+                // the Preview runs nothing, whatever is pressed
                 if !Self.canRun {
-                    if AppSettings.isRC { LiveGrant.relock() }
                     setPaused(true)
                     break
                 }
+                // 4.0 G2: each kind of job has its own lock, checked before every job. A download picked just as the RC's
+                // live-download window ended isn't started: the next pick leaves it waiting, and other work carries on
+                if job.action.downloadsMedia, !downloadsAllowed { continue }
                 // the network looked fine but nothing answers (captive Wi-Fi): now offline, look for on-device work
                 if job.action.needsNetwork, !FakeRunner.enabled, !(await network.verifyInternet()) { continue }
                 await execute(job)
@@ -156,8 +157,13 @@ final class JobController {
         }
     }
 
-    /// Downloads may run now: online, and on Wi-Fi or Ethernet if you asked for that (checked when each job starts).
-    var downloadsAllowed: Bool { network.isOnline && (!AppSettings.downloadsUnmeteredOnly || network.isUnmetered) }
+    /// Downloads may run now: online, on Wi-Fi or Ethernet if you asked for that, and not locked in this build (checked
+    /// when each job starts).
+    var downloadsAllowed: Bool { network.isOnline && (!AppSettings.downloadsUnmeteredOnly || network.isUnmetered) && Self.downloadsLock == nil }
+
+    /// 4.0 G2: why downloads wait in this build, or nil: the Preview never downloads, the RC only inside a live-download
+    /// window (the test build's fake runner aside). AI has its own lock (queueRefusal); on-device transcripts need neither.
+    nonisolated static var downloadsLock: String? { FakeRunner.enabled ? nil : AppSettings.jobsLockReason ?? AppSettings.downloadsLockReason }
 
     func pauseQueue() { setPaused(true) }
 
@@ -207,11 +213,10 @@ final class JobController {
         }
     }
 
-    /// The Preview never runs jobs (downloads, transcripts, AI summaries), and the RC not before you've approved live
-    /// downloads: the queue stays paused whatever is pressed. (The test build's fake runner, which never downloads
-    /// anything, is the one exception.)
+    /// The Preview never runs jobs (downloads, transcripts, AI summaries): the queue stays paused whatever is pressed.
+    /// (The test build's fake runner, which never downloads anything, is the one exception.) The RC's locks are per job.
     nonisolated static func locked(_ paused: Bool) -> Bool { paused || (AppSettings.jobsLockReason != nil && !FakeRunner.enabled) }
-    /// The queue can run at all in this build (not the Preview, nor the RC before you've approved live downloads).
+    /// The queue can run at all in this build (not the Preview).
     nonisolated static var canRun: Bool { !locked(false) }
 
     private func setPaused(_ on: Bool) {
@@ -313,7 +318,7 @@ final class JobController {
         var env = ["VS_FROM_APP": "1", "VS_OUT_DIR": outDir]
         if kind == .summary { env["VS_SUMMARY_PROMPT"] = Prompts.build(format, language) }
         // a prepared download keeps the quality it was queued with; others use the setting
-        if kind == .video, let q = job.quality ?? AppSettings.videoQuality.scriptValue { env["VS_VIDEO_QUALITY"] = q }
+        if kind == .video, let q = VideoQuality.usable(script: job.quality ?? AppSettings.videoQuality.scriptValue) { env["VS_VIDEO_QUALITY"] = q }
 
         // the reserve, watched while it downloads (a size can be unknown or wrong): below it, the download stops
         lowSpace = nil

@@ -1,6 +1,7 @@
 // Summary prompt options and app settings. Standard + English is exactly the prompt summarize.sh uses by default.
 import Foundation
 import SwiftUI
+import VideoToolbox
 
 enum SummaryFormat: String, CaseIterable, Identifiable {
     case standard = "Standard", brief = "Brief", detailed = "Detailed", bullets = "Bullets", adhd = "ADHD-Friendly"
@@ -54,20 +55,37 @@ enum Prompts {
 
 /// Video downloads from the app. "1080p (default)" sends nothing, so the scripts behave exactly as they always have.
 enum VideoQuality: String, CaseIterable, Identifiable {
-    case p480 = "480p (smallest)", p720 = "720p (smaller)", standard = "1080p (default)", best = "Best available"
+    case p480 = "480p (smallest)", p720 = "720p (smaller)", standard = "1080p (default)", best = "Best available",
+         highest = "Highest available"
     var id: String { rawValue }
     /// What Settings and the app show. "Best available" is stored as before (3.1's setting), and shown as what it is: the
-    /// highest H.264, which plays everywhere (1080p on YouTube). A higher, "Highest available" choice is a release
-    /// requirement (4.0 G1b), not this one.
-    var label: String { self == .best ? "Best compatible (H.264)" : rawValue }
+    /// highest H.264, which plays everywhere (1080p on YouTube). 4.0 G2: "Highest available" is the separate, higher choice.
+    var label: String {
+        switch self {
+        case .best: "Best compatible (H.264)"
+        case .highest: "Highest available (up to 4K, AV1)"
+        default: rawValue
+        }
+    }
     var scriptValue: String? {
         switch self {
         case .p480: "480"
         case .p720: "720"
         case .standard: nil
         case .best: "max"
+        case .highest: "highest"
         }
     }
+
+    /// 4.0 G2: whether this Mac decodes AV1 in hardware, asked at run time (not assumed from the chip). YouTube's streams
+    /// above 1080p are AV1 or VP9; AV1 plays in AVFoundation where it's decoded in hardware, VP9 isn't reliable there.
+    static let av1Decodes = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
+    static let noAV1 = "Highest available needs AV1 decoding in hardware, which this Mac doesn't have"
+    /// What a download uses: Highest available only where AV1 decodes in hardware, otherwise Best compatible (H.264),
+    /// which is always available.
+    func usable(av1: Bool = av1Decodes) -> VideoQuality { self == .highest && !av1 ? .best : self }
+    /// A stored script value made usable on this Mac ("highest" → "max" without AV1 decoding).
+    static func usable(script q: String?, av1: Bool = av1Decodes) -> String? { q == "highest" && !av1 ? "max" : q }
 }
 
 enum Appearance: String, CaseIterable, Identifiable {
@@ -89,7 +107,7 @@ enum AppSettings {
     static var format: SummaryFormat { SummaryFormat(rawValue: defaults.string(forKey: "summaryFormat") ?? "") ?? .standard }
     static var downloadDir: String { defaults.string(forKey: "downloadDir")?.nilIfBlank ?? defaultDownloadDir }
     static var retentionDays: Int { defaults.integer(forKey: "retentionDays") }
-    static var videoQuality: VideoQuality { VideoQuality(rawValue: defaults.string(forKey: "videoQuality") ?? "") ?? .standard }
+    static var videoQuality: VideoQuality { (VideoQuality(rawValue: defaults.string(forKey: "videoQuality") ?? "") ?? .standard).usable() }
     /// 4.0 Phase 4: free space to keep on the download volumes (best effort for downloads of unknown size).
     static var offlineReserveBytes: Int64 { Int64(defaults.object(forKey: "offlineReserveGB") as? Int ?? 10) * 1_000_000_000 }
     /// 4.0 Phase 4: downloads only on Wi-Fi or Ethernet that macOS doesn't mark as expensive or Low Data Mode.
@@ -121,16 +139,16 @@ enum AppSettings {
     static var buildBadge: String? {
         if isPreview { return "4.0 Preview · downloads off" }
         guard isRC else { return nil }
-        return "4.0 RC · " + (jobsLockReason == nil ? "live downloads on until \(LiveGrant.until?.formatted(date: .omitted, time: .shortened) ?? "?")" : "downloads locked")
+        return "4.0 RC · " + (downloadsLockReason == nil ? "live downloads on until \(LiveGrant.until?.formatted(date: .omitted, time: .shortened) ?? "?")" : "downloads locked")
             + (defaults.bool(forKey: "rcAISummaries") ? " · AI on" : " · AI locked")
     }
 
-    /// Why this build may not run downloads or AI jobs at all, or nil (then only the Pause button stops the queue).
-    static var jobsLockReason: String? {
-        if isPreview { return "\(appName) never downloads or runs AI jobs" }
-        if isRC, !LiveGrant.active() { return "live downloads aren't approved in \(appName) right now" }
-        return nil
-    }
+    /// Why this build may not run any job at all (the Preview), or nil (then only the Pause button stops the queue).
+    static var jobsLockReason: String? { isPreview ? "\(appName) never downloads or runs AI jobs" : nil }
+
+    /// 4.0 G2: why downloads wait in this build, or nil. The RC downloads only inside a live-download window you approved.
+    /// Its AI lock is separate (queueRefusal), and on-device transcripts of files already here need neither.
+    static var downloadsLockReason: String? { isRC && !LiveGrant.active() ? "live downloads aren't approved in \(appName) right now" : nil }
 
     /// Why this job may not be queued in this build, or nil. Only the RC refuses anything: AI summaries until you've
     /// approved them, and YouTube downloads of videos that aren't on its live-test list. The database asks this

@@ -12,7 +12,7 @@ struct PrepareSheet: View {
     @AppStorage("offlineReserveGB") private var reserveGB = 10
     @AppStorage("transcribeDownloads") private var transcript = false
 
-    private static let qualities = [("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("max", "Best")]
+    private static let qualities = [("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("max", "Best compatible"), ("highest", "4K (AV1)")]
 
     var body: some View {
         let statuses = rows.map { model.prepareStatus($0) }
@@ -39,9 +39,12 @@ struct PrepareSheet: View {
             .testProbe("prepareList")
             HStack(spacing: 14) {
                 Picker("Video quality", selection: $quality) {
-                    ForEach(Self.qualities, id: \.0) { Text("up to \($0.1)").tag($0.0) }
+                    ForEach(Self.qualities, id: \.0) {
+                        Text("up to \($0.1)").tag($0.0).disabled(VideoQuality.usable(script: $0.0) != $0.0)
+                    }
                 }
                 .fixedSize()
+                .help(VideoQuality.av1Decodes ? "4K (AV1) is the highest stream there is, in AV1: much larger files" : VideoQuality.noAV1)
                 Toggle("+ Transcript on this Mac", isOn: $transcript).toggleStyle(.checkbox)
                 Spacer()
                 Picker("Keep free", selection: $reserveGB) {
@@ -59,8 +62,8 @@ struct PrepareSheet: View {
                     Label("Doesn't fit: \(shortfall). Choose fewer videos, a lower quality, or a smaller reserve.", systemImage: "externaldrive.badge.exclamationmark")
                         .font(.caption.weight(.semibold)).foregroundStyle(p.orange)
                 }
-                if !JobController.canRun {
-                    Label("Queued videos wait: \(AppSettings.jobsLockReason ?? "the queue can't run in this build").", systemImage: "lock.fill").font(.caption).foregroundStyle(p.secondary)
+                if let lock = JobController.downloadsLock {
+                    Label("Queued videos wait: \(lock).", systemImage: "lock.fill").font(.caption).foregroundStyle(p.secondary)
                 }
             }
             HStack {
@@ -142,8 +145,8 @@ private struct PrepareRowView: View {
         guard status == .ready || status == .needsDeclaration || status == .checking else { return "" }
         var t = SizeEstimate.text(estimate.bytes, estimate.kind)
         if row.kind == .video, let h = estimate.height {
-            let cap = quality == "max" ? Int.max : Int(quality) ?? 1080
-            t += h < cap && quality != "max" ? " • \(h)p (its best)" : " • \(h)p"
+            let cap = Int(quality) ?? Int.max
+            t += h < cap ? " • \(h)p (its best)" : " • \(h)p"
         }
         return t
     }

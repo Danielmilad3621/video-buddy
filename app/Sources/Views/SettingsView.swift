@@ -70,10 +70,11 @@ struct SettingsContent: View {
                 .buttonStyle(SecondaryButtonStyle(height: 30, font: .callout))
                 row("Video quality") {
                     Picker("Video quality", selection: $videoQuality) {
-                        ForEach(VideoQuality.allCases) { Text($0.label).tag($0.rawValue) }
+                        ForEach(VideoQuality.allCases) { Text($0.label).tag($0.rawValue).disabled($0.usable() != $0) }
                     }
                 }
-                note("For Video downloads from the app. 720p is roughly half the size, handy for filling a laptop before a flight. Prepare for Offline can choose per batch. Best compatible is the highest H.264, which plays everywhere (1080p on YouTube); higher resolutions such as 4K aren't offered yet.")
+                note("For Video downloads from the app. 720p is roughly half the size, handy for filling a laptop before a flight. Prepare for Offline can choose per batch. Best compatible is the highest H.264, which plays everywhere (1080p on YouTube). Highest available is the highest stream there is, up to 4K, in AV1: several times larger, and it plays on Macs that decode AV1 in hardware. "
+                     + (VideoQuality.av1Decodes ? "This Mac does." : VideoQuality.noAV1 + "."))
                 row("Keep free") {
                     Picker("Keep free", selection: $reserveGB) {
                         ForEach([5, 10, 20, 50], id: \.self) { Text("\($0) GB").tag($0) }

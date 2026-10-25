@@ -32,8 +32,9 @@ place() {
   echo "$out/$dest.$ext"
 }
 
-quality=${VS_VIDEO_QUALITY:-}   # 720 | 1080 | max from the app's setting; unset = the defaults, exactly as before
-body=$(jq -n --arg url "$url" --arg mode "$mode" --arg q "$quality" \
+quality=${VS_VIDEO_QUALITY:-}   # 480 | 720 | 1080 | max | highest from the app's setting; unset = the defaults, exactly as before
+# cobalt has no AV1 choice: for other sites, highest is its max
+body=$(jq -n --arg url "$url" --arg mode "$mode" --arg q "${quality/#highest/max}" \
   '{url: $url, downloadMode: $mode, audioFormat: "mp3", audioBitrate: "128", filenameStyle: "pretty"} + (if $q != "" then {videoQuality: $q} else {} end)')
 # 4.0 G1b: YouTube goes straight to yt-dlp. cobalt answers "tunnel" for YouTube but streams nothing (HTTP 200, 0 bytes,
 # measured in G1a and G1b; upstream imputnet/cobalt#1455), so asking it first only costs time. Other sites still try cobalt.
@@ -72,6 +73,11 @@ else
   fmt=(-t mp4)
   # keep -t mp4's H.264/AAC preference (plays everywhere, including the app's player) and cap the height
   if [[ $quality =~ ^[0-9]+$ ]]; then fmt+=(-S "vcodec:h264,res:$quality,acodec:aac"); fi
+  # 4.0 G2, Highest available: the highest AV1 stream (YouTube's 1440p and 4K), else H.264, with AAC, in MP4; never VP9,
+  # which AVFoundation doesn't reliably play. The app offers it only where AV1 decodes in hardware.
+  if [[ $quality == highest ]]; then
+    fmt=(-f 'bv*[vcodec^=av01]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b' -S res --merge-output-format mp4 --remux-video mp4)
+  fi
 fi
 # 4.0 G1b-2, test runs only: a speed limit so a download can be interrupted on purpose. The app passes these two
 # variables only to an isolated build (RC or Preview) started with test hooks, and removes them otherwise.
@@ -79,8 +85,11 @@ if [[ ${VS_TEST_RUN:-} == 1 && -n ${VS_TEST_LIMIT_RATE:-} ]]; then fmt+=(--limit
 # ponytail: youtube 403s ~1 in 6 tries without a PO token, and a fresh extraction usually passes;
 # if retries stop being enough, add the bgutil-ytdlp-pot-provider plugin
 for attempt in 1 2 3; do
-  if file=$(yt-dlp -q --no-warnings --no-playlist "${fmt[@]}" -P "$tmp/dl" -o '%(title)s.%(ext)s' \
-    --print after_move:filepath -- "$url") && [[ -s $file ]]; then
+  # 4.0 G2: the streams yt-dlp chose go into the job's log (first line), the saved file's path stays the last
+  if got=$(yt-dlp -q --no-warnings --no-playlist "${fmt[@]}" -P "$tmp/dl" -o '%(title)s.%(ext)s' \
+    --print 'before_dl:yt-dlp: format %(format_id)s (%(resolution)s, %(vcodec)s + %(acodec)s)' --print after_move:filepath -- "$url") \
+    && file=${got##*$'\n'} && [[ -s $file ]]; then
+    echo "${got%%$'\n'*}" >&2
     place "$file"
     exit 0
   fi

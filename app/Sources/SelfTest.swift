@@ -51,6 +51,7 @@ enum SelfTest {
         externalRequests()
         g1aRules()
         g1bRules()
+        g2Rules()
         preview()
         rcIdentity()
     }
@@ -180,6 +181,45 @@ enum SelfTest {
     }
 
     /// 4.0 G1b: estimates for every quality and the MP3, count labels, one title per video, and the copy prompt's words.
+    /// 4.0 G2: Highest available (AV1 up to 4K) beside Best compatible (H.264), the AV1 check, the per-job locks, the
+    /// migration rehearsal's refusal of live data.
+    private static func g2Rules() {
+        // lkm-WEHQtNc's streams on 10-25 as yt-dlp lists them (sizes change when YouTube re-encodes), plus an Opus with a
+        // higher bitrate than the AAC, which neither download path takes
+        let all: [MediaFacts.Format] = [
+            .init(height: 1080, vcodec: "avc1.640028", acodec: "none", filesize: 64_889_852, tbr: 860.942),       // 137
+            .init(height: 1080, vcodec: "avc1.640028", acodec: "none", tbr: 2191.087),                            // 270 (HLS)
+            .init(height: 1080, vcodec: "av01.0.08M.08", acodec: "none", filesize: 64_560_561, tbr: 856.573),     // 399
+            .init(height: 1440, vcodec: "av01.0.12M.08", acodec: "none", filesize: 142_455_418, tbr: 1890.062),   // 400
+            .init(height: 2160, vcodec: "vp9", acodec: "none", filesize: 591_742_739, tbr: 7851.092),             // 313
+            .init(height: 2160, vcodec: "vp09.00.50.08", acodec: "none", tbr: 16452.666),                         // 625 (HLS)
+            .init(height: 2160, vcodec: "av01.0.12M.08", acodec: "none", filesize: 281_937_350, tbr: 3740.673),   // 401
+            .init(height: nil, vcodec: "none", acodec: "mp4a.40.2", filesize: 9_760_066, tbr: 129.482),           // 140
+            .init(height: nil, vcodec: "none", acodec: "opus", filesize: 9_999_999, tbr: 160),
+        ]
+        let f = MediaFacts(duration: 603, formats: all)
+        let hi = SizeEstimate.video(f, quality: "highest")
+        check(hi.bytes == 281_937_350 + 9_760_066 && hi.kind == .known && hi.height == 2160,
+              "Highest available: the 4K AV1 stream and the AAC, 401 + 140 = 291,697,416 bytes, what yt-dlp picks (got \(hi))")
+        let best = SizeEstimate.video(f, quality: "max")
+        check(best.bytes == 64_889_852 + 9_760_066 && best.height == 1080, "Best compatible stays the 1080p H.264 (137 + 140), never VP9 or AV1 (got \(best))")
+        let noAV1 = MediaFacts(duration: 603, formats: all.filter { !($0.vcodec ?? "").hasPrefix("av01") })
+        check(SizeEstimate.video(noAV1, quality: "highest").bytes == best.bytes, "Highest available without AV1 streams: the best H.264, like the script")
+        check(VideoQuality.highest.usable(av1: true) == .highest && VideoQuality.highest.usable(av1: false) == .best
+              && VideoQuality.best.usable(av1: false) == .best && VideoQuality.usable(script: "highest", av1: false) == "max"
+              && VideoQuality.usable(script: "720", av1: false) == "720" && VideoQuality.usable(script: "highest", av1: true) == "highest",
+              "a Mac without AV1 decoding gets Best compatible (H.264) instead of Highest available; Best compatible is always there")
+        check(VideoQuality.highest.scriptValue == "highest" && VideoQuality.highest.label.contains("4K") && VideoQuality.best.label == "Best compatible (H.264)",
+              "two separate choices: Highest available and Best compatible (H.264)")
+        check(AppSettings.isRC || AppSettings.downloadsLockReason == nil, "only the RC has a separate download lock")
+        let home = "/Users/someone"
+        check(MigrateCopy.refusal("/Users/someone/Library/Application Support/Video Summarizer/history.sqlite", home: home) != nil
+              && MigrateCopy.refusal("/Users/someone/library/application support/Video Buddy 4.0 RC/history.sqlite", home: home) != nil
+              && MigrateCopy.refusal("/Users/someone/Library/Application Support/x/../Video Summarizer/history.sqlite", home: home) != nil
+              && MigrateCopy.refusal("/Users/someone/rehearsal/history.sqlite", home: home) == nil,
+              "the migration rehearsal refuses the apps' live data (any case, any ..), and takes a copy elsewhere")
+    }
+
     private static func g1bRules() {
         // the G1b video's H.264 streams at 480p, 720p and 1080p (DASH with sizes, HLS without) and its audio, as yt-dlp lists them
         let f = MediaFacts(duration: 603, formats: [
@@ -242,7 +282,9 @@ enum SelfTest {
               && AppSettings.dataDir.lastPathComponent != "Video Summarizer", "RC: its own data folder")
         check(AppSettings.defaultDownloadDir == AppSettings.dataDir.appendingPathComponent("Downloads").path, "RC: downloads inside its own data folder")
         let ai = UserDefaults.standard.bool(forKey: "rcAISummaries")
-        check(JobController.locked(false) || FakeRunner.enabled, "RC: no live downloads without this launch's window (a self-test never claims one)")
+        check(JobController.downloadsLock != nil || FakeRunner.enabled, "RC: no live downloads without this launch's window (a self-test never claims one)")
+        check(!JobController.locked(false) && AppSettings.queueRefusal(.transcribe, key: "url:example.com/x") == nil,
+              "RC: the locks are per job: an on-device transcript needs neither a window nor the AI approval")
         check((AppSettings.queueRefusal(.summarize, key: "url:example.com/x") != nil) == !ai, "RC: AI summaries locked until approved")
         check(Bundle.main.bundleIdentifier != "local.video-summarizer.rc" || !FakeRunner.enabled, "the RC never runs the fake runner")
     }

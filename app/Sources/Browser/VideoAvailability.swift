@@ -192,21 +192,24 @@ enum SizeEstimate {
     }
 
     /// Video at `quality` ("480"…"1080", "max", nil = 1080): the best video at or below it, H.264 first (as the
-    /// download script asks for), plus the best audio unless the format already has it.
+    /// download script asks for), plus the best audio unless the format already has it, AAC first (both paths take it).
     /// At that height, a stream with a known size comes first, then an approximate one, then the highest bitrate: what
     /// yt-dlp actually picks. (4.0 G1a: a video had a 720p H.264 HLS stream with no size at 1,154 kbit/s beside the DASH
     /// one yt-dlp downloads, 17.9 MB at 238 kbit/s; going by bitrate estimated ≈ 97 MB for a 27.7 MB download.)
+    /// 4.0 G2: "highest" is the highest AV1 stream, at any height, else the H.264 rule (the script's order).
     static func video(_ f: MediaFacts, quality: String?) -> (bytes: Int64?, kind: SizeKind, height: Int?) {
-        let cap = quality == "max" ? Int.max : Int(quality ?? "") ?? 1080
+        let cap = quality == "max" || quality == "highest" ? Int.max : Int(quality ?? "") ?? 1080
         let fit = f.formats.filter { $0.hasVideo && ($0.height ?? 0) <= cap }
-        let h264 = fit.filter { ($0.vcodec ?? "").hasPrefix("avc1") }
-        let pool = h264.isEmpty ? fit : h264
+        let codec = { (prefix: String) in fit.filter { ($0.vcodec ?? "").hasPrefix(prefix) } }
+        let av1 = quality == "highest" ? codec("av01") : []
+        let pool = !av1.isEmpty ? av1 : !codec("avc1").isEmpty ? codec("avc1") : fit
         let sized = { (x: MediaFacts.Format) in x.filesize != nil ? 2 : x.filesizeApprox != nil ? 1 : 0 }
         guard let best = pool.max(by: { (($0.height ?? 0), sized($0), $0.tbr ?? 0) < (($1.height ?? 0), sized($1), $1.tbr ?? 0) })
         else { return (nil, .unknown, nil) }
         var total = size(best, duration: f.duration)
         if !best.hasAudio {
-            let audio = f.formats.filter { $0.hasAudio && !$0.hasVideo }.max { ($0.tbr ?? 0) < ($1.tbr ?? 0) }
+            let aac = { (x: MediaFacts.Format) in (x.acodec ?? "").hasPrefix("mp4a") ? 1 : 0 }
+            let audio = f.formats.filter { $0.hasAudio && !$0.hasVideo }.max { (aac($0), $0.tbr ?? 0) < (aac($1), $1.tbr ?? 0) }
             total = audio.map { sum(total, size($0, duration: f.duration)) } ?? (nil, .unknown)
         }
         return (total.0, total.1, best.height)

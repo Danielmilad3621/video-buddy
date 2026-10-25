@@ -55,7 +55,8 @@ trap cleanup EXIT
 echo "Building the test builds and samples in $T"
 swiftc "$repo/app/tests/vsctl.swift" -o "$T/vsctl" 2> /dev/null
 mkdir -p "$T/samples"
-ffmpeg -v error -f lavfi -i testsrc=duration=4:size=640x360:rate=25 -f lavfi -i sine=duration=4 -c:v libx264 -c:a aac -shortest "$T/samples/sample.mp4"
+say -o "$T/samples/speech.aiff" "This is a short test of transcription on this Mac."
+ffmpeg -v error -f lavfi -i testsrc=duration=4:size=640x360:rate=25 -i "$T/samples/speech.aiff" -af apad -t 4 -c:v libx264 -c:a aac "$T/samples/sample.mp4"
 ffmpeg -v error -f lavfi -i sine=duration=4 "$T/samples/sample.mp3"
 echo 100000000000 > "$T/free-final"; echo 100000000000 > "$T/free-temp"; : > "$T/control"
 # the fake downloader runs from here: the project folder is on the Desktop, which macOS guards with a permission prompt
@@ -147,14 +148,14 @@ check "request: anything but YouTube is refused with a notice" "'Ignored a reque
 open -g -a "$app" "videobuddy://request?action=video&url=https%3A%2F%2Fyoutu.be%2F$A&queue=now"
 check "request: an extra parameter is refused" "'Ignored a request' in s['notice'] and s['external'] == {}"
 vs "wlRemove $A"
-out=$(VB_APP=$app "$repo/raycast/download-video.sh" "https://www.youtube.com/watch?v=$E" 2>&1)
-ok "Raycast: a YouTube link is handed over, not downloaded" "$([[ $out == "Sent to Video Buddy 4.0 Test"* ]] && echo True || echo False)" "$out"
+said=$(VB_APP=$app "$repo/raycast/download-video.sh" "https://www.youtube.com/watch?v=$E" 2>&1)
+ok "Raycast: a YouTube link is handed over, not downloaded" "$([[ $said == "Sent to Video Buddy 4.0 Test"* ]] && echo True || echo False)" "$said"
 check "Raycast: the app shows it for you to confirm" "s['external'].get('youtubeID') == '$E' and s['external'].get('kind') == 'video'"
 sleep 1; vs "nativeClick externalDownload"
 check "request: Download goes on, and it's downloaded once declared" "any('fake $E' in m for m in s['media'])" 30
-out=$(VB_BUNDLE_ID=local.video-summarizer "$repo/raycast/download-audio.sh" "https://youtu.be/$A" 2>&1); code=$?
-ok "Raycast: with 3.1 as the target (no videobuddy://) it stops and downloads nothing" "$([[ $code != 0 && $out == *"isn't installed"* ]] && echo True || echo False)" "$code $out"
-out=$(VB_APP=$app "$repo/raycast/summarize.sh" "https://youtu.be/$A" 2>&1)
+said=$(VB_BUNDLE_ID=local.video-summarizer "$repo/raycast/download-audio.sh" "https://youtu.be/$A" 2>&1); code=$?
+ok "Raycast: with 3.1 as the target (no videobuddy://) it stops and downloads nothing" "$([[ $code != 0 && $said == *"isn't installed"* ]] && echo True || echo False)" "$code $said"
+said=$(VB_APP=$app "$repo/raycast/summarize.sh" "https://youtu.be/$A" 2>&1)
 check "Raycast Summarize: handed over too (as a summary)" "s['external'].get('kind') == 'summary'"
 vs "nativeClick externalCancel"
 # 3.1 features
@@ -175,7 +176,7 @@ grep -o 'selftest: .*' "$T/build-rc.log"
 R="$T/data-rc"; out="$T/out-rc"; mkdir -p "$R"; printf '%s\n' "# regression" "$A" > "$R/live-test-videos.txt"
 defaults write "$id" queuePaused -bool false; defaults write "$id" rcLiveDownloads -bool false; defaults write "$id" rcAISummaries -bool false
 launch "$R"
-check "identity: RC rules, both locks off" "s['build']['isRC'] and not s['build']['canRun'] and 'live downloads' in s['build']['jobsLock'] and s['build']['liveTestList'] == ['youtube:$A']" 10 "s['build']"
+check "identity: RC rules, both locks off (per job: downloads and AI, not the queue)" "s['build']['isRC'] and s['build']['canRun'] and s['build']['jobsLock'] == '' and 'live downloads' in s['build']['downloadsLock'] and s['build']['liveTestList'] == ['youtube:$A']" 10 "s['build']"
 check "the sidebar says what's locked" "s['build']['badge'] == '4.0 RC · downloads locked · AI locked'"
 vs "declareOnly $A|regression"; vs "link https://youtu.be/$A"; vs "start video"
 check "live downloads not approved: queued, and it waits" "any('$A' in k for k in s['queueKeys']) and 'approved' in s['notice']"
@@ -204,28 +205,37 @@ open -g -a "$app" "$(request video "https://youtu.be/$C")"; waitfor "s['external
 check "a request for an unlisted video: refused after Download" "\"isn't on\" in s['notice'] and s['queueKeys'] == []"
 quit_app
 
+echo "== RC rules: the locks are separate (no fake downloader, no window, AI locked)"
+defaults write "$id" queuePaused -bool false; launch "$R"
+vs "enqueueOptions $A|video|720|-|unknown"
+check "a listed, declared download outside a window: queued, and it waits" "s['hookResult'].startswith('queued $A') and any(k.startswith('video') for k in s['queueKeys']) and s['running'] == ''" 10 "s['hookResult'], s['queueKeys']"
+vs "selectKey youtube:$A"; vs "transcribe"
+check "…while an on-device transcript of a file already here runs and is saved (real Whisper)" "any(j['kind'] == 'transcript' and j['status'] == 'succeeded' and j['segments'] > 0 for j in s['selectedJobs'])" 120 "s['selectedJobs'], s['failed'], s['banner']"
+check "…and the download still waits" "any(k.startswith('video') for k in s['queueKeys']) and s['running'] == ''" 5 "s['queueKeys'], s['running']"
+vs "clearQueue"; quit_app
+
 echo "== RC rules: the live-download window (no fake downloader; an empty, paused queue, so nothing can run)"
 G="$T/data-window"; out="$T/out-window"
 grant() { defaults write "$id" rcLiveDownloads -bool true; defaults write "$id" rcLiveGrantUntil -int $(($(date +%s) + $1))
           defaults write "$id" rcLiveGrantClaimed -bool false; defaults write "$id" queuePaused -bool true; }
 setting() { defaults read "$id" "$1" 2> /dev/null || echo none; }
 grant 25; launch "$G"
-check "a window: this launch claims it and may download" "s['build']['canRun'] and s['queueKeys'] == [] and s['running'] == ''" 10 "s['build']"
+check "a window: this launch claims it and may download" "s['build']['downloadsLock'] == '' and s['queueKeys'] == [] and s['running'] == ''" 10 "s['build']"
 ok "…claimed, so no other launch can use it" "$([[ $(setting rcLiveGrantClaimed) == 1 ]] && echo True || echo False)"
-check "when it ends: locked again, the queue paused" "not s['build']['canRun'] and s['build']['paused']" 40 "s['build']"
+check "when it ends: locked again, the queue paused" "s['build']['downloadsLock'] != '' and s['build']['paused']" 40 "s['build']"
 written_back() { local end=$((SECONDS + 10)); while ((SECONDS < end)); do
   [[ $(setting rcLiveDownloads) == 0 && $(setting queuePaused) == 1 && $(setting rcLiveGrantUntil) == none ]] && { echo True; return; }; sleep 0.5; done; echo False; }
 ok "…and written back: rcLiveDownloads 0, queuePaused 1, no window" "$(written_back)" "rcLiveDownloads $(setting rcLiveDownloads), queuePaused $(setting queuePaused), until $(setting rcLiveGrantUntil)"
 quit_app
 grant 600; launch "$G"
-check "a new window: allowed in this launch" "s['build']['canRun']" 10 "s['build']"
+check "a new window: allowed in this launch" "s['build']['downloadsLock'] == ''" 10 "s['build']"
 quit_app; launch "$G"
-check "after a restart: locked again" "not s['build']['canRun'] and s['build']['paused']" 10 "s['build']"
+check "after a restart: locked again" "s['build']['downloadsLock'] != '' and s['build']['paused']" 10 "s['build']"
 ok "…and written back" "$([[ $(setting rcLiveDownloads) == 0 && $(setting rcLiveGrantUntil) == none ]] && echo True || echo False)"
 quit_app
 defaults write "$id" rcLiveDownloads -bool true; defaults write "$id" rcLiveGrantUntil -int $(($(date +%s) + 7200)); defaults write "$id" rcLiveGrantClaimed -bool false
 launch "$G"
-check "a window longer than 90 minutes isn't accepted" "not s['build']['canRun']" 10 "s['build']"
+check "a window longer than 90 minutes isn't accepted" "s['build']['downloadsLock'] != ''" 10 "s['build']"
 quit_app
 
 echo "regression: $pass passed, $fail failed"

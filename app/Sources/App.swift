@@ -7,6 +7,7 @@ import WebKit
 enum Entry {
     static func main() {
         if CommandLine.arguments.contains("--selftest") { exit(SelfTest.runBlocking()) }
+        if let i = CommandLine.arguments.firstIndex(of: "--migrate-copy") { exit(MigrateCopy.run(CommandLine.arguments.dropFirst(i + 1).first)) }
         VideoSummarizerApp.main()
     }
 }

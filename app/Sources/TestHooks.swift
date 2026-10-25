@@ -1,6 +1,7 @@
 // Test-only remote control, active only when launched with VS_TEST_HOOKS=1 (and VS_SNAPSHOT_DIR for output).
 // It calls the same AppModel methods the buttons call, and dumps state as JSON for the end-to-end checks.
 import AppKit
+import AVFoundation
 import Foundation
 import SwiftUI
 import WebKit
@@ -71,6 +72,7 @@ enum TestHooks {
         case "cancel": model.jobs.cancel()
         case "select":
             if let v = store.videos.first(where: { $0.displayTitle.localizedCaseInsensitiveContains(arg) }) { model.open(v, tab: model.detailTab) }
+        case "selectKey": if let v = store.videos.first(where: { $0.key == arg }) { model.open(v, tab: model.detailTab) }
         case "favorite": if let v = store.selectedVideo { model.toggleFavorite(v) }
         case "search": store.search = arg
         case "filter": store.filter = HistoryFilter(rawValue: arg) ?? .all
@@ -581,6 +583,10 @@ enum TestHooks {
         case .cancelled?: banner = ["kind": "cancelled"]
         case nil: break
         }
+        // 4.0 G2: the 4K playback check: the decoded size, and AVPlayer's own log where it keeps one (-1: none)
+        let item = model.playback.player?.currentItem
+        let playerSize = item.map { "\(Int($0.presentationSize.width))x\(Int($0.presentationSize.height))" } ?? ""
+        let playerLog = item?.accessLog()?.events.last
         let state: [String: Any] = [
             "section": model.section.rawValue, "filter": store.filter.rawValue, "sort": store.sort.rawValue, "search": store.search,
             "tab": model.detailTab.rawValue, "isRunning": jobs.isRunning, "notice": model.notice ?? "",
@@ -709,7 +715,7 @@ enum TestHooks {
             // 4.0 Phase 5: which build this is, and what's locked
             "build": ["bundleID": Bundle.main.bundleIdentifier ?? "", "appName": AppSettings.appName, "isRC": AppSettings.isRC,
                       "isPreview": AppSettings.isPreview, "dataDir": AppSettings.dataDir.path, "downloadDir": AppSettings.downloadDir,
-                      "canRun": JobController.canRun, "paused": jobs.paused, "jobsLock": AppSettings.jobsLockReason ?? "",
+                      "canRun": JobController.canRun, "paused": jobs.paused, "jobsLock": AppSettings.jobsLockReason ?? "", "downloadsLock": JobController.downloadsLock ?? "",
                       "rcLiveDownloads": UserDefaults.standard.bool(forKey: "rcLiveDownloads"),
                       "rcAISummaries": UserDefaults.standard.bool(forKey: "rcAISummaries"),
                       "liveTestList": LiveTestList.ids(in: AppSettings.dataDir).sorted(), "badge": AppSettings.buildBadge ?? ""] as [String: Any],
@@ -721,6 +727,7 @@ enum TestHooks {
             "playback": ["path": model.playback.currentPath ?? "", "time": model.playback.currentTime,
                          "duration": model.playback.duration, "playing": model.playback.isPlaying, "rate": model.playback.rate,
                          "volume": model.playback.volume, "hasPrevious": model.playback.hasPrevious,
+                         "size": playerSize, "dropped": playerLog?.numberOfDroppedVideoFrames ?? -1, "stalls": playerLog?.numberOfStalls ?? -1,
                          "line": (model.playback.currentVideoID == selected?.id ? store.transcriptJob?.segments.index(at: model.playback.currentTime) : nil) ?? -1],
         ]
         if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {

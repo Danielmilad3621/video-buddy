@@ -426,7 +426,7 @@ enum SizeKind: String { case known, approximate, unknown }
 
 /// What a prepared download is queued with (the job_options table): its quality and size estimate.
 struct JobOptions: Equatable {
-    var quality: String?            // "480" | "720" | "1080" | "max"; nil = the Video quality setting when it runs
+    var quality: String?            // "480" | "720" | "1080" | "max" | "highest"; nil = the Video quality setting when it runs
     var estimatedBytes: Int64?
     var sizeKind: SizeKind = .unknown
 }

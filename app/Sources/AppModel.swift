@@ -935,7 +935,7 @@ final class AppModel {
             await jobs.refreshQueue()
             jobs.pump()
             notice = "Queued \(queued) \(queued == 1 ? "download" : "downloads")" + (skipped > 0 ? "; \(skipped) not queued (already here, queued or not allowed)" : "")
-                + (JobController.canRun ? "." : ". They wait: \(AppSettings.jobsLockReason ?? "the queue is locked").")
+                + (JobController.downloadsLock.map { ". They wait: \($0)." } ?? ".")
         }
     }
 

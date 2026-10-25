@@ -838,3 +838,36 @@ actor Database {
             sizeKind: r.string("size_kind").flatMap(SizeKind.init), lowSpaceStops: r.int("low_space_stops") ?? 0)
     }
 }
+
+/// 4.0 G2, rehearsals only: `--migrate-copy <folder>` upgrades a copy of a database (<folder>/history.sqlite) exactly as
+/// the app does at launch (verified pre-vN backups in <folder>/backups, then each step), then prints its version, integrity
+/// and foreign-key check. It refuses anything in ~/Library/Application Support, so it can't touch a live app's data.
+enum MigrateCopy {
+    static func run(_ folder: String?) -> Int32 {
+        guard let folder else { print("usage: --migrate-copy <folder with a copy of history.sqlite>"); return 2 }
+        let file = URL(fileURLWithPath: folder).appendingPathComponent("history.sqlite").resolvingSymlinksInPath()
+        if let why = refusal(file.path) { print("migrate-copy: refused: \(why)"); return 2 }
+        guard FileManager.default.fileExists(atPath: file.path) else { print("migrate-copy: no history.sqlite in \(folder)"); return 2 }
+        do {
+            let db = try SQLite(path: file.path)
+            try db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
+            let before = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
+            try Database.migrate(db, backupDir: file.deletingLastPathComponent().appendingPathComponent("backups"))
+            let after = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
+            let integrity = try db.query("PRAGMA integrity_check").first?.string("integrity_check") ?? "?"
+            let fk = try db.query("PRAGMA foreign_key_check").count
+            print("migrate-copy: v\(before) → v\(after), integrity \(integrity), foreign key problems \(fk)")
+            return after == Database.latestVersion && integrity == "ok" && fk == 0 ? 0 : 1
+        } catch {
+            print("migrate-copy: failed: \(error)")
+            return 1
+        }
+    }
+
+    /// Why this database path may not be used (a live app's data), or nil. Compared without case: APFS ignores it.
+    static func refusal(_ path: String, home: String = NSHomeDirectory()) -> String? {
+        let support = (home as NSString).appendingPathComponent("Library/Application Support").lowercased()
+        let p = (path as NSString).standardizingPath.lowercased()
+        return p == support || p.hasPrefix(support + "/") ? "\(path) is in Application Support, where the apps keep their live data" : nil
+    }
+}
