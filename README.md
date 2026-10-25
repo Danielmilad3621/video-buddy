@@ -185,7 +185,7 @@ The whole of 4.0 (Phases 1–4) as a third, separate app, for the real-world tes
 1. **A separate "Highest available" video quality** (G1b, your requirement). *Best compatible (H.264)* is the highest H.264, which plays everywhere, and that's 1080p on YouTube. It must not be the only way up: a distinct option must offer higher resolutions such as 4K (e.g. AV1, where the Mac can decode it), labelled with what it needs. Until then Settings says that higher resolutions aren't offered yet.
 2. **Size estimates of the stream actually downloaded** (G1a): checked against real files for every quality (G1a 720p: −1.1%).
 
-### G1b-2: reliability tests, prepared (each runs only with your approval)
+### G1b-2: reliability tests (run on 10-24/25; results in §11; the network drop and the non-YouTube Raycast download still open)
 All in **Video Buddy 4.0 RC** only, on `lkm-WEHQtNc` (your declaration) unless a new video is declared and approved, inside a live-download window (`app/tools/rc-live-window.sh grant 90`; a restart or the end of the window locks it), and locked again afterwards (`rc-live-window.sh lock`, then `defaults read local.video-summarizer.rc` must show `rcLiveDownloads = 0`, `queuePaused = 1`).
 
 | Test | How | Passes if |
@@ -799,6 +799,17 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
+### 2026-10-25: Video Buddy 4.0, G1b-2: reliability tests in the RC
+- **Request:** cancel, force-quit, network drop, bounded low storage, Raycast and queue recovery on the approved video only; narrow fixes allowed. Wi-Fi changes only after asking; the five original files preserved; the RC locked again on every path. The non-YouTube Raycast download stays pending until you approve a URL.
+- **Built:**
+  - a test-only speed limit (`VS_TEST_LIMIT_RATE`, honoured only with `VS_TEST_RUN=1`, which the app passes only from an isolated build with test hooks);
+  - `space-watchdog.sh` (never forces a detach);
+  - `lowstorage-run.sh`, with a state file and `--recover`.
+- **Found and fixed:**
+  - **Free space on other volumes:** it was read as **0** on any volume other than the startup disk, so downloads to a disk image or an external drive would always pause. A 4.31 GB image read "Zero KB". Finder's figure is now used where there is one, else the volume's own.
+  - **The temporary folder:** the space check watched `NSTemporaryDirectory()`, which ignores `TMPDIR`, while the scripts use `${TMPDIR:-/tmp}`. It now watches the scripts' folder.
+  - **The harness:** its attach check (`| grep -q` under `pipefail`) said a mounted image wasn't attached, which would have let the cleanup delete a mounted image. It was caught before any cleanup ran; deletion now also requires the volume to be gone from `mount`.
+
 ### 2026-10-24: Video Buddy 4.0, G1b-1: more qualities, cobalt's error, and fixes (RC only)
 - **Request:** cobalt's real failure; an MP3 estimate based on real encoder settings; Play Audio with both files here; singular labels; one title per video; real downloads at 480p, 1080p and Best of `lkm-WEHQtNc` only; duplicates across qualities; each copy shown and played as itself. G1b-2 prepared, not run.
 - **Built:**
@@ -1327,9 +1338,36 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
     - **Unchanged against the G1b baseline:** 3.1, production, the Preview, `~/Downloads/cobalt` and your original checkout.
   - **Labels:** "1 video processed", "1 video offline", "1 video offline • 5 files".
   - **Screenshots:** `design/screenshots/4.0-g1b-*`.
+- **4.0 G1b-2 (10-24/25), in the RC only** (`lkm-WEHQtNc`, your declaration; every download a confirmed "Download Same Quality Again" copy at 480p, or an MP3; a fresh window per launch; RC `130644c`, then `1c13314` after the fixes):
+  - **Before:** `regression.sh` 63/63 for each build. The watchdog was simulated: it aborts at 20 GB under the start and below 100 GB, and exits 0 within the limits.
+  - **1 Cancel:** at 250 KB/s, cancelled at 6.66 MB (31%). Within 5 s: no yt-dlp, ffmpeg or guard process, no `cobalt-dl.*` folder, no partial file, still 5 files; *cancelled*, with the queue paused. Retry (the banner's code path) asked again; a deliberate second confirm made no second job; exactly **one** complete new file (21,590,101 B).
+  - **2 Force-quit and queue recovery:** two jobs queued (480p and MP3); `kill -9` went only to the RC's pid (its path checked) at 5.1 MB.
+    - **Right after:** the guard had ended the downloader tree; no temporary folder, no partial file.
+    - **On relaunch:** the RC was **locked** (window revoked); job 8 *interrupted* ("The app closed while this was running.") with Retry; job 9 still queued; nothing ran.
+    - **After a fresh window, Resume and Retry:** each finished **once** (MP3 9,648,428 B, 480p 21,590,101 B), and the old "interrupted" entry left the problems list.
+  - **4b Low storage, on a fixed 8 GB image** (your disk 713.67 GB free at the start, 705 GB with the image; the watchdog **never aborted**):
+    - **(a)** below the 5 GB reserve: paused, nothing attempted. First "Zero KB free" (the defect above), after the fix "4.31 GB free … reserve 5 GB".
+    - **(b)** pushed under the reserve mid-download: stopped within a second; requeued and paused (1 stop); the second time **failed**, "Not enough space: stopped twice for low disk space" (2 stops). No loop, no partial file, no temporary folder.
+    - **(c)** the temporary folder on the image: "4.83 GB free on the disk with the temporary folder"; mid-download it stopped with "4.83 GB in the temporary folder"; the leftover queued job was cleared.
+    - **Cleanup:** filler and watchdog stopped; the RC locked and quit; nothing open on the volume; detached unforced; deleted once absent from `hdiutil info` and `mount`; downloads folder and reserve restored (default); 8 media files byte-identical; your disk back to 713.80 GB.
+  - **5 Raycast** (the worktree's scripts, on the locked RC):
+    - the listed video gave the RC's confirmation, and Cancel queued nothing;
+    - Download gave the copy prompt, and Cancel queued nothing;
+    - a video that isn't listed (Me at the zoo): "isn't on … live-test list";
+    - Summarize: "AI summaries aren't approved yet";
+    - 3.1 as the target: "isn't installed", 3.1 not launched.
+    - **The non-YouTube direct download is pending** (no URL approved).
+  - **3 Network drop: not verified.** With Wi-Fi-only on and a slowed download, two recordings (08:05–08:25 and 08:46–09:16, every 2 s) showed the RC **online on Wi-Fi (`en0`) throughout**. Both downloads finished normally, and the switch you made wasn't captured. Wi-Fi-only was put back (unset).
+  - **After:**
+    - **The RC:** locked (`rcLiveDownloads = 0`, `queuePaused = 1`, no window or timer), quality back to 1080p, Wi-Fi-only, downloads folder and reserve as before.
+    - **Its database:** intact, with no broken references. 16 jobs: 12 succeeded, each with its file at the recorded size, no file without a job, nothing queued or running. 12 files: the 5 originals byte-identical, plus 7 complete test copies.
+    - **Unchanged against the baseline:** 3.1, production, the Preview and your checkout.
 
 ### Not verified
-- **4.0 Phase 5, G1b-2 (prepared, waits for your approval):** cancel and force-quit of a real download, network changes, the bounded low-storage test, Raycast (YouTube handoff confirmed with Download, and an authorized non-YouTube link), and queue recovery; also memory and CPU figures (`measure.sh` only smoke-tested) and a full UI review. A "Highest available" quality is a release requirement. Paid summaries wait for G2.
+- **4.0 Phase 5, after G1b-2:**
+  - **Not verified:** the network drop (the Wi-Fi switch wasn't captured), and the non-YouTube Raycast download (no URL approved yet).
+  - **Still to do:** memory and CPU figures (`measure.sh` only smoke-tested), a full UI review, and the "Highest available" quality (a release requirement).
+  - **Paid summaries** wait for G2.
 - **4.0 Phase 4 (needs real downloads, so Phase 5):**
   - real cobalt or yt-dlp downloads at a chosen quality, and whether the result has that resolution;
   - size estimates against real files;
