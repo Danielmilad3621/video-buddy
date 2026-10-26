@@ -650,9 +650,10 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 | Docker VM | `~/.colima/` (the VM disk lives here; images and containers are inside it) |
 | Colima autostart | `~/Library/LaunchAgents/sh.brew.colima.plist` (`brew services`) |
 | Docker CLI config (compose plugin dir, context) | `~/.docker/config.json` |
-| 4.0 Preview (Phase 1–4 branches): app, library, downloads, WebKit data | `~/Applications/Video Buddy 4.0 Preview.app`, `~/Library/Application Support/Video Buddy 4.0 Preview/`, `~/Library/WebKit/local.video-summarizer.preview/` |
-| 4.0 Release Candidate (Phase 5): app, library and live-test list, downloads, WebKit data | `~/Applications/Video Buddy 4.0 RC.app`, `~/Library/Application Support/Video Buddy 4.0 RC/` (downloads in its `Downloads/`), `~/Library/WebKit/local.video-summarizer.rc/` |
-| The release worktree (branch `release/4.0-candidate`) | `~/Desktop/Dev/video-summarizer-rc` (this folder stays on `main` until the release) |
+| 4.0 Preview (Phase 1–4 branches): app, library, downloads, WebKit data. **G4: the app is in the Trash; its data is kept** | `~/Applications/Video Buddy 4.0 Preview.app`, `~/Library/Application Support/Video Buddy 4.0 Preview/`, `~/Library/WebKit/local.video-summarizer.preview/` |
+| 4.0 Release Candidate (Phase 5): app, library and live-test list, downloads, WebKit data. **G4: the app is in the Trash; its data is kept** | `~/Applications/Video Buddy 4.0 RC.app`, `~/Library/Application Support/Video Buddy 4.0 RC/` (downloads in its `Downloads/`), `~/Library/WebKit/local.video-summarizer.rc/` |
+| The release worktree (branch `release/4.0-candidate`) | **G4: removed** (in the Trash; every commit is in `main`; the branch and the merged `feature/4.0-phase*` branches deleted, the tags kept) |
+| G3 evidence and the G4 archive | `~/Video Buddy backups/G3-evidence-20261026/` (moved out of the backup set so it verifies), `~/Video Buddy backups/G4-archive-20261026/` (the test identities' settings files, the G4 log and verification) |
 | 4.0 upgrade backup set (G3; made by `app/tools/backup-before-4.0.sh`) | `~/Video Buddy backups/before-4.0-20261026-152140` (`MANIFEST.txt`, `production/`, `preview/`, `apps/`, `settings/`, `media.txt`, `evidence/`), outside the folders that sync to your work Drive |
 | 4.0's AI usage log | `~/Library/Logs/Video Buddy/ai-usage.log` (one line per request: time, model, cost, tokens, ok / failed / refused); it appears with the first request |
 | 3.1 after the upgrade | `~/Applications/Video Buddy 3.1.app.disabled` (renamed back to roll back) |
@@ -829,6 +830,18 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **Why:** the try-out only lived in `~/Library/Caches`, started from a script, and had 3.1's bundle ID, so it couldn't be found.
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
+
+### 2026-10-26: G4, one Video Buddy (cleanup)
+- **Moved to the Trash** (recoverable until you empty it), each unregistered from LaunchServices first:
+  - `Video Buddy 4.0 RC.app`, `Video Buddy 4.0 Preview.app`;
+  - the Phase 1 prototype's folder `~/Library/Caches/video-buddy-try-browser/`;
+  - the release worktree `~/Desktop/Dev/video-summarizer-rc`;
+  - the two test identities' empty settings files.
+- **Unregistered only:** the 2.1 copy already in the Trash. macOS re-registered the moved apps at their places in the Trash, so those were unregistered again.
+- **Now registered:** only `~/Applications/Video Buddy.app`, which is also the `videobuddy://` handler and what Raycast finds.
+- **Kept:** the RC's and the Preview's data (deleting it needs your separate approval), both pre-4.0 backup sets (both verify "ok"), `Video Buddy 3.1.app.disabled`, production's own backups.
+- **Unchanged, file by file:** production's data, browser data and settings.
+- **A slip, put right at once:** a zsh variable named `path` broke the command lookup, and my Trash tool, given an empty path, moved its working folder (this checkout) to the Trash. I moved it back within a minute, unchanged: git clean on `main`, `fsck` ok, Raycast's scripts in place, cobalt still running. The tool now refuses empty, relative and protected paths, and the rest ran as bash scripts.
 
 ### 2026-10-26: Video Buddy 4.0 released (G3)
 - **4.0 is installed** as `~/Applications/Video Buddy.app` (`local.video-summarizer`, 4.0 (6), commit `f4dc3b9`, fast-forwarded onto `main`). 3.1 is kept, non-launchable, as `~/Applications/Video Buddy 3.1.app.disabled`.
