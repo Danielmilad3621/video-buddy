@@ -725,7 +725,8 @@ actor Database {
     /// verifies it, and only then rotates: backup → backup.prev, temp → backup. A bad copy never replaces a good one.
     @discardableResult
     func backupIfDue(now: Date = Date(), force: Bool = false,
-                     verify: (URL) -> Bool = Database.isHealthy) throws -> Bool {
+                     verify: (URL) -> Bool = Database.isHealthy,
+                     discard: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) throws -> Bool {
         guard let directory else { return false }
         let last = meta("last_backup").flatMap(Double.init) ?? 0
         guard force || now.timeIntervalSince1970 - last > 86_400 else { return false }
@@ -735,18 +736,18 @@ actor Database {
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         // leftovers from an interrupted backup are our own temp copies
         for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasPrefix("history-") && name.hasSuffix(".tmp") {
-            try? fm.removeItem(at: dir.appendingPathComponent(name))
+            try? discard(dir.appendingPathComponent(name))
         }
         let tmp = dir.appendingPathComponent("history-\(Int(now.timeIntervalSince1970 * 1000)).tmp")
         try db.exec("VACUUM INTO '\(tmp.path.replacingOccurrences(of: "'", with: "''"))'")
         guard verify(tmp) else {
-            try? fm.removeItem(at: tmp)
+            try? discard(tmp)
             throw SQLiteError(message: "backup copy failed its integrity check; existing backups were kept")
         }
         let current = dir.appendingPathComponent("history-backup.sqlite")
         let previous = dir.appendingPathComponent("history-backup.prev.sqlite")
         if fm.fileExists(atPath: current.path), rename(current.path, previous.path) != 0 {
-            try? fm.removeItem(at: tmp)
+            try? discard(tmp)
             throw SQLiteError(message: "could not rotate backups (\(String(cString: strerror(errno))))")
         }
         guard rename(tmp.path, current.path) == 0 else {

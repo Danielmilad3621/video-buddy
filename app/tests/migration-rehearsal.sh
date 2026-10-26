@@ -15,6 +15,11 @@ set_dir=${1:?backup set} work=${2:?new work folder} binary=${3:?4.0 binary with 
 [[ ! -e $work ]] || { echo "refused: $work already exists"; exit 2; }
 case "$work" in "$HOME/Library/Application Support"*) echo "refused: not inside Application Support"; exit 2 ;; esac
 mkdir -p "$work"; work=$(cd "$work" && pwd)
+# A 4.0 patch keeps schema v6: check every row and rollback on retained copies, without the historical 3.1 UI/import.
+version=$(sqlite3 "file:$set_dir/production/history.sqlite?immutable=1" 'PRAGMA user_version')
+if [[ $version == 6 ]]; then
+  exec python3 "$repo/app/tests/current-version-rehearsal.py" "$set_dir" "$work" "$binary"
+fi
 id=local.video-summarizer.rollback-test
 app="$work/apps/Video Buddy 3.1 Test.app"
 pass=0 fail=0

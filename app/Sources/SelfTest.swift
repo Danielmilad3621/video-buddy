@@ -53,7 +53,10 @@ enum SelfTest {
     private static func run() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("vs-selftest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer {
+            if ProcessInfo.processInfo.environment["VS_KEEP_TEST_FILES"] == "1" { print("selftest files retained: \(root.path)") }
+            else { try? FileManager.default.removeItem(at: root) }
+        }
         parsing()
         try await database(root.appendingPathComponent("db"))
         try await backups(root.appendingPathComponent("backup"))
@@ -533,7 +536,13 @@ enum SelfTest {
         check(try await !db.backupIfDue(), "not due again within a day")
         let before = try Data(contentsOf: current), beforePrev = try Data(contentsOf: prev)
         var threw = false
-        do { try await db.backupIfDue(force: true, verify: { _ in false }) } catch { threw = true }
+        do {
+            try await db.backupIfDue(force: true, verify: { _ in false }, discard: { file in
+                if ProcessInfo.processInfo.environment["VS_KEEP_TEST_FILES"] == "1" {
+                    try FileManager.default.moveItem(at: file, to: dir.appendingPathComponent("retained-rejected-copy.sqlite"))
+                } else { try FileManager.default.removeItem(at: file) }
+            })
+        } catch { threw = true }
         check(threw, "bad copy is rejected")
         check(try Data(contentsOf: current) == before && Data(contentsOf: prev) == beforePrev, "bad copy leaves both backups untouched")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: b.path).filter { $0.hasSuffix(".tmp") }

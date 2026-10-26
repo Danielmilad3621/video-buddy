@@ -63,7 +63,7 @@ database() {
   # the media paths it names, for the inventory
   sqlite3 "$scratch/history.sqlite" "SELECT DISTINCT file_path FROM jobs WHERE file_path IS NOT NULL ORDER BY 1" > "$scratch/paths"
   { echo "## media paths in ${src##*/}'s database"; while IFS= read -r p; do echo "$([[ -e $p ]] && echo here || echo missing)  $p"; done < "$scratch/paths"; } >> "$out/media.txt"
-  rm -rf "$scratch"
+  if [[ ${VB_KEEP_TEST_FILES:-} == 1 ]]; then echo "  retained backup scratch: $scratch"; else rm -rf "$scratch"; fi
   IFS='|' read -r _ integrity fk _ <<<"$got"
   [[ $got == "$want" && $integrity == ok && $fk == 0 ]] || { echo "stopped: the consolidated copy of $db doesn't check out ($got; wanted $want)"; exit 5; }
   echo "  ${src##*/}: raw files identical to the originals; consolidated copy v$got" | sed 's/|/, integrity /; s/|/, foreign key problems /; s/|/, /'
@@ -76,14 +76,15 @@ out=${1:-}
 [[ -n $out ]] || { sed -n 2,14p "$0"; exit 2; }
 [[ ! -e $out ]] || { echo "refused: $out already exists; give a new folder"; exit 2; }
 for p in VideoSummarizer VideoBuddyPreview; do
-  pgrep -x "$p" > /dev/null && { echo "refused: $p is running. Quit it yourself first (this script never quits an app); nothing was copied."; exit 3; }
+  code=0; pgrep -x "$p" > /dev/null || code=$?
+  [[ $code == 1 ]] || { echo "refused: $p is running or its process status could not be checked (exit $code). Quit it yourself first; nothing was copied."; exit 3; }
 done
 case "$out" in "$support"*) echo "refused: not inside Application Support"; exit 2 ;; esac
 mkdir -p "$out/apps" "$out/settings"
 out=$(cd "$out" && pwd)
 echo "backup set: $out"
 
-database "$prod" "$out/production" backups thumbnails
+database "$prod" "$out/production" backups thumbnails browser watch-later
 database "$preview" "$out/preview" backups thumbnails browser watch-later
 
 for a in "Video Buddy" "Video Buddy 4.0 Preview"; do
