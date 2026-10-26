@@ -669,19 +669,20 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 
 ## 7. How it was built
 
-### 2026-10-26: approved installation preparation for the YouTube fix
+### 2026-10-26: YouTube fix installed as Video Buddy 4.0 build 7
 - **Approved:** a fresh verified backup, rehearsal and installation over the current 4.0 app; preserve it as `Video Buddy 4.0.app.disabled`. No merge or push was approved.
 - **Current-version rehearsal:** the historical v3 upgrade/import is no longer the right test for a v6 production library. The v6 path compares every table and row, restores and undoes a synthetic change on a copy, and checks the previous backed-up 4.0 binary with an isolated identity. It retains all evidence and never starts an app UI.
 - **Retained checks:** `VB_KEEP_TEST_FILES=1` keeps backup/build scratch folders; `VS_KEEP_TEST_FILES=1` keeps self-test fixtures, including the rejected backup copy through an injected discard operation. Normal database backup behavior is unchanged. Build self-tests run under an isolated identity, never at the production path; the candidate is then signed, and its signature and executable hash are checked after moving. The hash is taken after signing because signing changes executable metadata. Process-list errors stop replacement, and a second check catches the app reopening during compilation.
-- **Identity:** version 4.0, build 7, with `VBCommit` identifying the source. Production installation remains pending the checks in §11.
+- **Installed:** version 4.0, build 7, `VBCommit=39f23b6`, at `~/Applications/Video Buddy.app`, after the fresh 81-file backup, 396 self-tests and 35-check v6 rehearsal. Signature and executable verification passed. The previous 4.0 app is preserved byte-for-byte at `~/Applications/Video Buddy 4.0.app.disabled`; the 3.1 rollback is unchanged.
+- **After installation:** production data, settings, downloads and browser files match the pre-install baseline; the backup still verifies. No production app launch, new download, paid AI request, import, registration change, merge or push occurred. The user's normal-app retry and full GUI acceptance remain pending. The feature branch contains this installed fix; the original `main` checkout remains unchanged.
 
-### 2026-10-26: YouTube format-details fix (feature branch only, not installed)
+### 2026-10-26: YouTube format-details diagnosis and fix (now installed in build 7)
 - **Reported:** `SRtAjiCeit4` failed from Home and the YouTube browser with *The video's details couldn't be read*, before a job was queued.
 - **Confirmed:** one explicitly approved metadata-only check succeeded. Its response contained both `has_drm: false` and `has_drm: "maybe"`. The old Swift reader expected only a Boolean; replaying that response offline reproduced the exact error at `formats[3].has_drm`. No media was downloaded.
 - **Changed:** the shared reader understands protected, unprotected and unknown formats. It requires an explicitly unprotected audio/video format; protected-only, unknown-only and malformed responses do not pass. Existing sign-in, age, live-video and declaration checks remain.
 - **Selection and estimates:** YouTube downloads filter every format-selection branch, including merged streams and fallbacks, with `[has_drm=0]` (yt-dlp's numeric comparison matches Boolean false, excludes true/`"maybe"`/missing). Size and quality estimates use the same explicitly unprotected subset. Other sites retain their previous selectors.
-- **Isolation:** branch `feature/youtube-format-metadata` in `~/Video Buddy development/youtube-format-metadata`, outside the work Drive folders. The original checkout stays on `main`; production and Raycast are not changed. The raw captured response and all test outputs stay outside the project.
-- **Testing:** a retained, offline test build and format-selector checks (§11), then one explicitly approved 720p download of `SRtAjiCeit4` using that test build's bundled downloader: **PASSED**. The complete file decoded without errors, and its fresh metadata passed the fixed reader. The existing GUI regression was inspected but not run: it makes web requests, deletes its temporary data and unregisters its app. Installation, merging and pushing still need separate approval.
+- **Isolation:** branch `feature/youtube-format-metadata` in `~/Video Buddy development/youtube-format-metadata`, outside the work Drive folders. The original checkout stays on `main`; Raycast's scripts are unchanged. Production was changed only during the separately approved installation above. The raw captured response and all test outputs stay outside the project.
+- **Testing:** a retained, offline test build and format-selector checks (§11), then one explicitly approved 720p download of `SRtAjiCeit4` using that test build's bundled downloader: **PASSED**. The complete file decoded without errors, and its fresh metadata passed the fixed reader. The existing GUI regression was inspected but not run: it makes web requests, deletes its temporary data and unregisters its app. Installation was subsequently approved and completed; merging and pushing still need separate approval.
 
 ### 2026-10-13: the question, and choosing cobalt
 - **The request:** install [imputnet/cobalt](https://github.com/imputnet/cobalt) and wire it to Raycast, so a YouTube link becomes mp3 → transcript → summary in one go.
@@ -1141,7 +1142,10 @@ Evidence is retained in `~/Video Buddy backups/youtube-fix-evidence-20261026.mf9
 | Install refusal checks | **PASSED** — missing/invalid backup, existing partial folder, unavailable process list; all copied files retained |
 | v6 rehearsal | **PASSED** — 35 checks: every table/row preserved, repeated migration harmless, restore and undo correct, previous 4.0 binary compatible, backup still verifies |
 | Installer failure/success/rollback | **PASSED** — simulated failure restores the original app byte-for-byte; signed build 7 replaces the copied app while preserving it; rename rollback restores it. Packaging tests reused the freshly compiled binary after checking source equality; the real installation compiles normally |
-| Production build 7 installation and final state comparison | **PENDING** |
+| Production build 7 installation and final state comparison | **PASSED** — fresh normal compilation; 396 isolated self-tests; signed 4.0 (7), source `39f23b6`; old 4.0 app identical at the approved rollback path; data/settings/downloads/browser files/3.1 rollback unchanged; backup verifies |
+| Normal first launch and retry in Home/the side browser | **PENDING** — left for the user; production was not launched with test hooks or used for a further network test |
+
+Final install evidence: `production-install.log`, `final-install.log`, `baseline-before.json`, `baseline-after-install.json` and `verify-after-install.log` in the evidence folder above. `ROLLBACK.md` records the current-version app swap; no database restore or old Preview import is needed for this schema-v6 patch.
 
 ### YouTube mixed-format metadata fix (2026-10-26; isolated feature branch)
 Run `bash app/tests/format-metadata-test.sh [<already-captured metadata.json>]`. It compiles all app sources into a separate test bundle, runs `--selftest-formats` without starting the UI, and checks the download script's real arguments with the installed yt-dlp format selector. Network commands are replaced with local stand-ins; script cleanup is disabled inside that test shell. Every test file is retained at the printed temporary path. No production launch, database access, registration, settings writes, downloads or AI calls.
@@ -1154,7 +1158,8 @@ Run `bash app/tests/format-metadata-test.sh [<already-captured metadata.json>]`.
 | Approved real 720p download of `SRtAjiCeit4` | **PASSED** — first attempt, formats `298+140`, 1280×720 H.264 + AAC, 307.92 s, 41,831,857 bytes; both selected formats explicitly unprotected |
 | Fresh metadata and complete local decode | **PASSED** — 118 focused app checks using the new `.info.json`; FFmpeg decoded all video and audio with `-xerror`, exit 0 |
 | Full GUI regression, Home/browser clicks and in-app playback | **PENDING** — the live test exercised the isolated bundle's downloader and the compiled metadata reader, without launching the UI |
-| Merge, push and production installation | **PENDING**, separate approval |
+| Production installation | **PASSED**, after separate approval; build 7 results above |
+| Merge and push | **PENDING**, not approved; original `main` remains unchanged |
 
 The first runner attempt **FAILED** after its Swift checks because its Python path incorrectly repeated `libexec`. The runner was corrected and rerun end to end: **PASSED**, exit 0. Final files are retained at `/var/folders/p3/nyrk935n1rj9tt9gky7xr_9m0000gp/T/vb-format-test.XAJfsk`; the combined log is `/private/tmp/video-buddy-diagnosis-avzhwoim/final-format-tests.log`. The offline captured-response selections were audio `251`, default/1080p/Best compatible `299+140`, 480p `135+140`, 720p `298+140`, and Highest available `399+140`. These confirm selection, not successful retrieval or playback of media.
 
