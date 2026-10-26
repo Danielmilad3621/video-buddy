@@ -827,6 +827,14 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
 
+### 2026-10-26: Video Buddy 4.0, final acceptance before G3 (RC and test build only)
+- **One paid AI request,** after you approved it: the cheapest entitled model, `claude-haiku-5-5`, for $0.0053, through Regenerate, with a hard $1 cap and no retry.
+- **The Wi-Fi drop,** switched by you on spoken cues: the drop was recorded, the job failed cleanly, and the Retry completed.
+- **Your manual checks** all passed.
+- **The strip's moving bar** was using 17% CPU for as long as a job ran; it's now the native control (2%).
+- **One open item:** YouTube's playing state was misread once.
+- **The G3 checklist** is in §11.
+
 ### 2026-10-26: Video Buddy 4.0, G2: Highest available, transcripts, rehearsals, UI review (RC and copies only)
 The parts of G2 that cost nothing, with paid AI, the network test and the release itself still waiting for approval.
 - **Per-job locks:** the RC's single queue lock became one per kind of job. Downloads need a live-download window, AI needs its own approval, and an on-device transcript of a file already here needs neither (your requirement: transcription without unlocking downloads or AI).
@@ -1496,14 +1504,103 @@ Commands: `link <url>`, `start summary|audio|video`, `cancel`, `select <title te
 | Carry-over | exactly the two Watch Later videos and the tabs; the declaration only by choice | **PASSED** (copies) | rehearsal |
 | Rollback | database and app, with an undo | **PASSED** (copies) | rehearsal, `build.sh` rehearsal |
 | Raycast | YouTube links handed to the app, which asks first | **PASSED** | G1b-2 |
-| Raycast, another site | a non-YouTube download through the RC | **PENDING** | needs a URL you approve |
-| Network drop | a download through Wi-Fi off and back | **PENDING** (not verified twice) | needs your go-ahead to switch Wi-Fi |
-| Paid AI | a real summary in the RC | **PENDING** | needs your approval (cost) |
+| Raycast, another site | a non-YouTube download through the RC | **PENDING**, not verified | needs a URL you approve |
+| Network drop | a download through Wi-Fi off and back | **PASSED** (final acceptance) | the drop recorded; failed with the reason, nothing partial; Retry completed |
+| Paid AI | one real summary in the RC | **PASSED** for Regenerate (final acceptance); the full Summarize path not billed-tested | `claude-haiku-5-5`, $0.0053 |
+| YouTube's playing state | an audible YouTube video counts as playing (the one-player rule's YouTube → app direction) | **OPEN**: misread once, not verified | final acceptance below |
 | G3 | the real backup, merge into `main`, install over 3.1, LaunchServices clean-up of the two stray copies, the Raycast cutover | **PENDING** | needs your approval |
 
 No requirement has **FAILED**.
 
+### G3 release checklist (nothing here runs without your explicit G3 approval)
+**Rules that hold throughout:**
+- **Production keeps its Fresh Start state.**
+  - Before the install its library is v3 with 0 videos and 4 playback rows (checked again on 10-26); after it, the same rows at v6, plus only what you approve below.
+  - No pre-Fresh-Start backup is ever restored: not `history-before-fresh-start-*`, the rotating `history-backup*`, `thumbnails-before-fresh-start-*` or anything older. A rollback uses only the new pre-4.0 backup set.
+- **Only approved real Preview data is imported:** Watch Later `GV1MWu7crNk` and `DYPJcnnhvQE` with their thumbnails, and the tabs' addresses and titles. The `gx7F8fg49QQ` declaration comes only if you say so. Never fixtures, the Preview's downloads, jobs or the sample declaration.
+- **RC test downloads and jobs never enter production:**
+  - the final app uses production's own folders (`Application Support/Video Summarizer`, `~/Downloads/cobalt`; a self-test checks this);
+  - nothing reads the RC's folder;
+  - `carry-over.sh` refuses RC data;
+  - the RC's 15 files, its jobs, declaration and summary stay where they are.
+- **No old app, backup or registration is deleted without your approval:**
+  - 3.1 is moved aside as `Video Buddy 3.1.app.disabled`;
+  - every backup stays;
+  - the RC and the Preview stay installed until G4.
+- **The non-YouTube Raycast download is not verified,** and is never described as verified unless you give a URL and it passes.
+
+| # | Step | Passes if | Who decides |
+|---|---|---|---|
+| 1 | Quit 3.1, the Preview and the RC yourself | none running; nothing has the databases open | you |
+| 2 | **Backup immediately before the install:** `app/tools/backup-before-4.0.sh ~/Documents/"Video Buddy backup before 4.0"` | `--verify` ok; production's files unchanged by hash; 3.1 still v3, 0 videos, 4 playback rows | G3 |
+| 3 | **Rehearse on that set, immediately before the install:** `app/tests/migration-rehearsal.sh <set> <temp> <RC binary>`, and `build.sh` with `VB_INSTALL_DIR=<temp>` (refusals, failure path, install, rename rollback) | the rehearsal 31/31, the install rehearsal as in §11; **any failure stops G3** | automatic |
+| 4 | Merge `release/4.0-candidate` into `main` (the original checkout) | a fast-forward or clean merge; the checkout clean | G3 |
+| 5 | Install: `VB_BACKUP_SET=<set> app/build.sh` | 3.1 moved aside as `.disabled`, identical; 4.0 signed, its self-test passes | G3 |
+| 6 | First launch of 4.0 | v6 with a verified pre-v4 backup; still 0 videos and 4 playback rows; nothing queued or downloading | check |
+| 7 | Carry-over (4.0 quit): `app/tools/carry-over.sh <set>/preview "$HOME/Library/Application Support/Video Summarizer"`, plus `--declaration` only if you choose | exactly 2 Watch Later videos, their thumbnails, the tabs; integrity ok | your choice on the declaration |
+| 8 | Raycast: a YouTube link from Raycast | 4.0 asks *Another app sent a link*; Cancel queues nothing | check |
+| 9 | LaunchServices: `~/.Trash/Video Summarizer.app` and `~/Library/Caches/video-buddy-try-browser/…` still register 3.1's bundle ID | `videobuddy://` and the bundle ID open the new app | your decision (unregister or leave; nothing is deleted without you) |
+| 10 | If anything is wrong: the rollback (§2 *Upgrading*, step 7) | 3.1 back, its v3 library identical; the undo available | you |
+| 11 | G4, later: removing the RC, the Preview, the `.disabled` 3.1, old backups and the stray copies | – | separate approval |
+
+**Open items you may want to weigh before approving G3** (none has failed a requirement):
+1. YouTube's playing state was misread once (final acceptance, above). The YouTube → app's player direction of the one-player rule is unverified.
+2. The non-YouTube Raycast download isn't verified.
+3. The full Summarize path is billed at Sonnet 5.5 per token to your organization, with no cap and no cost line; only Regenerate records its cost. Your report-after-release plan covers both.
+4. The two stray LaunchServices registrations (step 9).
+
+### 4.0 final acceptance (10-26; the RC and the test build only)
+- **Code since G2:**
+  - Regenerate runs `claude -p --output-format json`. The job's log gets `AI: <model> · $<cost> · <tokens>`, and an error or an empty answer saves nothing. In the RC it also gets `--max-turns 1 --max-budget-usd 1.00` and an optional exact model (`rcAIModel`).
+  - `carry-over.sh` refuses RC data.
+  - A self-test checks that the release build uses production's folders.
+  - The strip's running bar is the native control (below).
+  - Commits `7e0d820`, `38acf78` and `89ca63d`.
+- **Paid AI, exactly one request** (your approval; Regenerate from the saved transcript of `lkm-WEHQtNc`, not the full Summarize workflow):
+  - **checked without spending:**
+    - **provider:** Anthropic first party (no Bedrock, Vertex, `CLAUDE_CODE_USE_*`, API key or `apiKeyHelper`), through Claude Code 2.1.309;
+    - **billing:** Datadog Inc.'s Claude Enterprise org (AWS Marketplace billing, usage-based seat, extra usage on), so requests are billed per token to the org;
+    - **model:** the cheapest the account is entitled to, `claude-haiku-5-5`, at $0.10 / $0.50 per million tokens in / out (the CLI's own price table; Haiku 4.5 $1 / $5, Sonnet 5.5 $2 / $10);
+    - **the limit:** `--max-budget-usd` is documented for `-p`.
+  - **the run:** `claude-haiku-5-5`, **$0.0053**, 31,046 tokens in (mostly Claude Code's own context), 2,690 out, about 20 s.
+  - **the result:** a 2,523-character Standard / English summary (TL;DR, key points, takeaways), accurate against the transcript; in the database and in the app, and still there after a relaunch with AI locked.
+  - **afterwards:** the AI lock came back on at once (a trap would have restored it on failure too); nothing else was queued and nothing was retried.
+- **Wi-Fi interruption, switched by you** (spoken cues; I never changed Wi-Fi):
+  - **the drop:** a slowed 480p copy (Wi-Fi-only on, a fresh window) was at 14.1 MB when you turned Wi-Fi off. The recorder had the route gone and `en0` inactive from 10:52:28 to 10:55:06, and the RC offline throughout.
+  - **the failure:** yt-dlp's 3 attempts failed ("Failed to resolve www.youtube.com"), so the job failed with that reason at 10:53:10, and its partial file and temporary folder were removed (0 bytes left).
+  - **the Retry**, after reconnecting:
+    - it asked *Already on this Mac at 480p*, as any extra copy does;
+    - the copy downloaded in a fresh window: 21,590,101 bytes, 854×480 H.264;
+    - the Failed list was then empty.
+    - My first try didn't answer that prompt and closed the window early; that was the test script's fault, not the app's.
+  - **afterwards:** the RC locked, its settings as before, the 15 earlier files byte-identical.
+- **Performance during a download:** the app used **16% CPU**, all of it the processing strip's moving bar. The strip alone took it from 2.4% to 19.5%, because the bar redrew the window 30 times a second; a SwiftUI animation was worse (30%). **Fixed:** the native indeterminate bar, tinted red, gives 2.0%, the same as idle. During the download the app answered in 19 / 20 ms (p50 / p95).
+- **Manual checks, by you** (the test build with sample data): all passed.
+  - the Settings window, including Highest available with its note;
+  - the Clear All History and Remove from Library alerts, the another-copy prompt, Import;
+  - hover (rows, buttons, tabs' ✕, tooltips);
+  - dragging tabs and playlist episodes;
+  - ⌘T ⌘W ⌘⇧T ⌃Tab, and ⌘K ⌘[ ⌘] on the player;
+  - the strip's moving bar.
+- **YouTube playback in the RC, by you:**
+  - **while it played:** the app 149 MB and 2.0% CPU, the pages 1.26 GB and 3.9%, response 20 / 27 ms.
+  - **One open item:** you heard it playing, but the RC recorded that tab as "paused" the whole minute. The app counts only audible web playback, so YouTube's muted previews never trigger the one-player rule, and here it misread audible playback. App's player → YouTube is unaffected (it pauses every web view whatever the reading). YouTube → app's player relies on that reading, so YouTube starting may not pause the app's player. Not verified further; you chose to report problems after the release.
+- **Final regressions (10-26):**
+  - **self-tests:** 369 in the RC, 367 in the test build, 363 in the release build;
+  - **`regression.sh`: 66 of 66.** One run alongside the backup set's zipping had 3 timing failures in the request checks; it passed again with nothing else running, and a reproduction of those steps worked;
+  - **a fresh backup set:** 76 files, verified; production only read, unchanged by hash, still v3 with 0 videos and 4 playback rows;
+  - **`migration-rehearsal.sh` on it: 31 of 31.** That includes the new refusal of RC data. My new check first left a `-wal` and a `-shm` beside the set's Preview database (it opened it without `immutable=1`); it was fixed and rerun, and the set verified again;
+  - **`build.sh` into a temporary Applications folder:**
+    - refused without a set and with a bad one;
+    - a failure put 3.1 back, identical;
+    - the install left 3.1 aside identical, with a signed 4.0;
+    - the rename rollback restored 3.1;
+    - nothing was left registered;
+  - **the baseline:** identical to before G2 (3.1's app, data and settings, the Preview, the WebKit stores, `~/Downloads/cobalt`, the original checkout on `main`);
+  - **the RC:** v6, integrity ok, nothing queued or running, its 14 downloads each matching their files, locked (`rcLiveDownloads 0`, `rcAISummaries 0`, `queuePaused 1`).
+
 ### Not verified
+- **4.0, after the final acceptance:** the non-YouTube Raycast download (no URL yet); billing on the full Summarize path (`summarize.sh`: `--model sonnet`, no cap, no cost line; Sonnet 5.5 costs about 20× Haiku 5.5); YouTube's playing state (above).
 - **4.0 Phase 5, after G2:**
   - **Not verified:** the network drop (the Wi-Fi switch wasn't captured in G1b-2), and the non-YouTube Raycast download (no URL approved yet).
   - **Not measured:** performance during a download (the 4K copy downloaded while the Mac slept), and with a YouTube video actually playing (a scripted play doesn't start YouTube's player; press play by hand while `measure.sh` runs).
