@@ -195,22 +195,13 @@ struct StageTrack: View {
 /// "Working on it" without a made-up percentage. Still when Reduce Motion is on.
 struct IndeterminateBar: View {
     @Environment(\.palette) private var p
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    // 4.0: the native indeterminate bar (AppKit animates it with Core Animation). The custom one redrew its body every
+    // frame, which laid the window out each time: about 17% CPU for as long as a job ran, 30% with a SwiftUI animation.
     var body: some View {
-        GeometryReader { g in
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
-                let w = g.size.width * 0.35
-                ZStack(alignment: .leading) {
-                    Capsule().fill(p.border)
-                    Capsule().fill(p.accent).frame(width: w)
-                        .offset(x: reduceMotion ? (g.size.width - w) / 2 : (g.size.width + w) * t - w)
-                }
-                .clipShape(Capsule())
-            }
-        }
-        .frame(height: 3)
+        ProgressView().progressViewStyle(.linear).tint(p.accent).controlSize(.small)
+            .frame(height: 3)
+            .accessibilityLabel("In progress")
     }
 }
 
