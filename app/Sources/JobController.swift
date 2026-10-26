@@ -501,8 +501,11 @@ final class JobController {
             // 4.0: JSON out, so the job's log names the model, the cost and the tokens; an error (or the RC's cap) saves
             // nothing. In the RC one turn at most and a hard $1 limit per summary (the CLI's own budget check).
             let limits = AppSettings.isRC ? "--max-turns 1 --max-budget-usd 1.00 " : ""
-            let command = #"claude -p --model sonnet --output-format json "# + limits + #""$1" < "$2" > "$3.json"; code=$?; jq -r '"AI: \(.modelUsage // {} | keys | join(", ")) · $\(.total_cost_usd) · \((.usage.input_tokens // 0) + (.usage.cache_creation_input_tokens // 0) + (.usage.cache_read_input_tokens // 0)) tokens in, \(.usage.output_tokens // 0) out\(if .is_error then " · error: \(.subtype // .result)" else "" end)"' "$3.json" 2> /dev/null; [[ $code == 0 ]] && jq -e '(.is_error | not) and ((.result // "") | length > 0)' "$3.json" > /dev/null && jq -r .result "$3.json" > "$3""#
-            let run = try RunningScript(["/bin/bash", "-c", command, "regen", Prompts.build(format, language), input.path, resultFile.path])
+            // the RC's paid test can pin an exact model ID (`rcAIModel`, e.g. the cheapest); everything else: the sonnet alias
+            let pinned = AppSettings.isRC ? AppSettings.defaults.string(forKey: "rcAIModel") : nil
+            let model = pinned.flatMap { $0.range(of: #"^claude-[a-z0-9-]+$"#, options: .regularExpression) != nil ? $0 : nil } ?? "sonnet"
+            let command = #"claude -p --model "$4" --output-format json "# + limits + #""$1" < "$2" > "$3.json"; code=$?; jq -r '"AI: \(.modelUsage // {} | keys | join(", ")) · $\(.total_cost_usd) · \((.usage.input_tokens // 0) + (.usage.cache_creation_input_tokens // 0) + (.usage.cache_read_input_tokens // 0)) tokens in, \(.usage.output_tokens // 0) out\(if .is_error then " · error: \(.subtype // .result)" else "" end)"' "$3.json" 2> /dev/null; [[ $code == 0 ]] && jq -e '(.is_error | not) and ((.result // "") | length > 0)' "$3.json" > /dev/null && jq -r .result "$3.json" > "$3""#
+            let run = try RunningScript(["/bin/bash", "-c", command, "regen", Prompts.build(format, language), input.path, resultFile.path, model])
             script = run
             status = await run.stream { output.append($0) }
             lastOutput = Array(output.suffix(40))
