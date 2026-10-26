@@ -653,7 +653,8 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 | 4.0 Preview (Phase 1–4 branches): app, library, downloads, WebKit data | `~/Applications/Video Buddy 4.0 Preview.app`, `~/Library/Application Support/Video Buddy 4.0 Preview/`, `~/Library/WebKit/local.video-summarizer.preview/` |
 | 4.0 Release Candidate (Phase 5): app, library and live-test list, downloads, WebKit data | `~/Applications/Video Buddy 4.0 RC.app`, `~/Library/Application Support/Video Buddy 4.0 RC/` (downloads in its `Downloads/`), `~/Library/WebKit/local.video-summarizer.rc/` |
 | The release worktree (branch `release/4.0-candidate`) | `~/Desktop/Dev/video-summarizer-rc` (this folder stays on `main` until the release) |
-| 4.0 upgrade backup set (G3; made by `app/tools/backup-before-4.0.sh`) | a new folder you choose, e.g. `~/Documents/Video Buddy backup before 4.0/` (`MANIFEST.txt`, `production/`, `preview/`, `apps/`, `settings/`, `media.txt`). G2's rehearsal set was in the job's temporary folder only |
+| 4.0 upgrade backup set (G3; made by `app/tools/backup-before-4.0.sh`) | `~/Video Buddy backups/before-4.0-20261026-152140` (`MANIFEST.txt`, `production/`, `preview/`, `apps/`, `settings/`, `media.txt`, `evidence/`), outside the folders that sync to your work Drive |
+| 4.0's AI usage log | `~/Library/Logs/Video Buddy/ai-usage.log` (one line per request: time, model, cost, tokens, ok / failed / refused); it appears with the first request |
 | 3.1 after the upgrade | `~/Applications/Video Buddy 3.1.app.disabled` (renamed back to roll back) |
 | A 4.0 transcript's language votes | `languageVotes` in `<media>.transcript.json` |
 | Raycast script directory + Quicklink | Raycast's own settings |
@@ -828,6 +829,12 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
   - **Why:** the try-out only lived in `~/Library/Caches`, started from a script, and had 3.1's bundle ID, so it couldn't be found.
   - **What:** `app/tools/preview.sh` installs **Video Buddy 4.0 Preview.app** in `~/Applications`, with its own bundle ID, data folder, downloads folder, settings, WebKit data and PREVIEW icon.
   - **Behaviour:** a queue that can't be resumed; it opens in the YouTube section. 3.1 builds are unchanged (`AppSettings.isPreview` is false without `VBPreview`).
+
+### 2026-10-26: Video Buddy 4.0 released (G3)
+- **4.0 is installed** as `~/Applications/Video Buddy.app` (`local.video-summarizer`, 4.0 (6), commit `f4dc3b9`, fast-forwarded onto `main`). 3.1 is kept, non-launchable, as `~/Applications/Video Buddy 3.1.app.disabled`.
+- **The library:** upgraded v3 → v6 at first launch, after a verified pre-v4 backup. It's still in its Fresh Start state (0 videos, 4 playback rows), plus exactly the two Watch Later videos and the three tabs from the Preview. No declaration, no RC data.
+- **AI cost control, just before the release:** every paid summary goes through `scripts/ai-summary.sh` (Claude Haiku 5.5, at most $1, no retry or fallback, every request logged), and it's **off by default**. Verified with stand-in CLIs only; no paid request in G3.
+- **`videobuddy://`** now opens 4.0. With your approval its default handler moved from the RC; nothing was unregistered.
 
 ### 2026-10-26: Video Buddy 4.0, final acceptance before G3 (RC and test build only)
 - **One paid AI request,** after you approved it: the cheapest entitled model, `claude-haiku-5-5`, for $0.0053, through Regenerate, with a hard $1 cap and no retry.
@@ -1604,7 +1611,37 @@ No requirement has **FAILED**.
   - **the baseline:** identical to before G2 (3.1's app, data and settings, the Preview, the WebKit stores, `~/Downloads/cobalt`, the original checkout on `main`);
   - **the RC:** v6, integrity ok, nothing queued or running, its 14 downloads each matching their files, locked (`rcLiveDownloads 0`, `rcAISummaries 0`, `queuePaused 1`).
 
+### 4.0 release (G3, 10-26): results
+| Step | Status | Evidence |
+|---|---|---|
+| AI cost control | **PASSED** (mocks only, no paid request) | `ai-summary-test.sh` 19/19: the exact request (`claude-haiku-5-5`, `--output-format json --max-turns 1 --max-budget-usd 1.00`, no `--fallback-model`), one call, success / budget / error / empty / `is_error`, off without approval, the stand-in ignored outside test runs, the full Summarize workflow with real on-device transcription. `regression.sh` 76/76, incl. Summarize and Regenerate in the test build (off by default, allowed, a failed request, never retried, off again). Self-tests 372 / 374 / 368 (test / RC / release) |
+| The CLI, found without a request | **PASSED** | the installed app's `ai-summary.sh --check` (the app's tool PATH) and Raycast's (an empty environment): `~/.local/bin/claude` 2.1.310, `--max-budget-usd`, `--output-format`, `--model` present. `--max-turns` is accepted (the 10-26 paid test passed it) but not listed in `--help` |
+| Backup | **PASSED** | `~/Video Buddy backups/before-4.0-20261026-152140`: 76 files, `--verify` ok, production unchanged by hash (an earlier set from 15:20, `before-4.0-20261026-152003`, is kept too) |
+| Fresh Start | **PASSED** | before: v3, 0 videos, 0 jobs, 4 playback rows; none of the 33 pre-Fresh-Start videos (read from `history-before-fresh-start-*`) present, before or after |
+| Rehearsals on that backup | **PASSED** | `migration-rehearsal.sh` 31/31; `build.sh` refusal, failure path, install and rename rollback |
+| Merge | **PASSED** | `main` fast-forwarded to `f4dc3b9`, clean |
+| Install | **PASSED** | `Video Buddy.app` 4.0 (6), `local.video-summarizer`, signed, self-test 368; 3.1 aside as `Video Buddy 3.1.app.disabled`, identical to the backup's zip |
+| First launch (normal, no test hooks) | **PASSED** | v6; pre-v4 backup `history-pre-v4-1793028505521.sqlite` (v3, 0 videos, 4 playback, ok); 0 videos, 0 jobs, 4 playback; integrity ok |
+| Carry-over (no declaration) | **PASSED** | Watch Later `GV1MWu7crNk`, `DYPJcnnhvQE` with their thumbnails (byte-identical); tabs: the two videos and YouTube's home (address and title only, a new website data store); 0 declarations |
+| Nothing from the RC or tests | **PASSED** | no `rc*`, test or AI-approval settings; no RC files, jobs, summaries or declarations; `~/Downloads/cobalt` unchanged; the RC and the Preview unchanged |
+| LaunchServices | **PASSED** (after your approval) | the bundle ID and Raycast's handoff resolve to `~/Applications/Video Buddy.app`; `videobuddy://` opened the RC, so its default handler was set to 4.0 (`NSWorkspace.setDefaultApplication`); the RC stays registered as a second handler |
+| Your checks by eye | **PASSED** | plain *Video Buddy*, empty Library; Watch Later's 2 videos; 3 tabs back; sections and Settings (Highest available enabled, *Allow AI summaries* unticked); a YouTube link from Raycast's `download-video.sh` showed 4.0's confirmation, Cancel queued nothing |
+| Afterwards | – | production v6, 0 videos, 0 jobs, 4 playback, 2 Watch Later, 0 declarations, integrity ok; no AI usage log (no request) |
+
+**Two small problems, both in my G3 scripts (not the app):**
+1. The preflight's `build.sh` refusal check was a `| grep -q` under `pipefail`, so it stopped although `build.sh` had refused correctly. It was fixed and the whole preflight rerun on a new set.
+2. The first-launch check compared two lines as one. The state was confirmed by hand before continuing.
+
+**Rollback** (rehearsed; nothing is deleted):
+1. Quit Video Buddy.
+2. `mv ~/Applications/"Video Buddy.app" ~/Applications/"Video Buddy 4.0.app.disabled"`, then `mv ~/Applications/"Video Buddy 3.1.app.disabled" ~/Applications/"Video Buddy.app"`.
+3. `app/tools/restore-db.sh "$HOME/Library/Application Support/Video Summarizer" ~/Video Buddy backups/before-4.0-20261026-152140/production/history.sqlite`. It keeps the v6 state as a recovery copy, and the same script puts that back.
+
 ### Not verified
+- **4.0, after the release:**
+  - **the non-YouTube Raycast download:** never tested; no URL approved. Not to be treated as verified.
+  - **YouTube's playing state:** audible playback was once recorded as "paused", so YouTube → the app's player (the one-player rule) is unverified. For a later update.
+  - **A billed request through the full Summarize path:** only Regenerate was billed-tested. Both go through `ai-summary.sh`, which is mock-verified, and AI is off until you allow it.
 - **4.0, after the final acceptance:** the non-YouTube Raycast download (no URL yet); billing on the full Summarize path (`summarize.sh`: `--model sonnet`, no cap, no cost line; Sonnet 5.5 costs about 20× Haiku 5.5); YouTube's playing state (above).
 - **4.0 Phase 5, after G2:**
   - **Not verified:** the network drop (the Wi-Fi switch wasn't captured in G1b-2), and the non-YouTube Raycast download (no URL approved yet).
