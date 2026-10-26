@@ -41,7 +41,7 @@ There's a problem with learning from long videos: watching takes time, and the k
 |---|---|
 | Download | Audio (mp3) or video (mp4), from YouTube and the other ~20 sites cobalt supports (TikTok, X, Instagram, SoundCloud, Vimeo, Reddit…). Video quality setting: 480p / 720p / 1080p / Best compatible (H.264) / **Highest available (up to 4K, AV1, 4.0)** |
 | Transcribe | **On your Mac**, with OpenAI's Whisper *large-v3-turbo* through whisper.cpp on the GPU. Free, offline, keeps timestamps. The language is detected at three points of the audio (4.0), so a music intro no longer decides it |
-| Summarize | **Claude Sonnet 5.5** through the Claude Code CLI, using your Claude account login (no API key). Formats: Standard, Brief, Detailed, Bullets, ADHD-Friendly. Languages: English, same as video, **Egyptian Arabic (Masri)**, Arabic (MSA), French, Spanish, German |
+| Summarize | **Off until you allow it** (Settings → Summaries → *Allow AI summaries*; each summary is billed per request to your Claude account). Then **Claude Haiku 5.5** (`claude-haiku-5-5`, the cheapest model the account is entitled to) through the Claude Code CLI with your Claude login (no API key): at most **$1 per request**, one turn, never retried, never moved to another model, and every request recorded in `~/Library/Logs/Video Buddy/ai-usage.log` (4.0). Formats: Standard, Brief, Detailed, Bullets, ADHD-Friendly. Languages: English, same as video, **Egyptian Arabic (Masri)**, Arabic (MSA), French, Spanish, German |
 | History | SQLite database: every video, every summary version, transcript and file. Search, filters, sorting, favorites, stats |
 | Never destructive | Re-downloading never overwrites (`… (2).mp3`), removing history never deletes files, failed regenerations never touch saved summaries |
 | Safe cancel | Cancel, Quit, or even a crash stops the job's whole process tree and cleans up its temp files |
@@ -267,7 +267,7 @@ This is cobalt's own interface, running on your Mac. It's good for one-off downl
             │        ▼                                                    │
             │  scripts/transcribe.sh → whisper-cli (model in ~/.config/…) │
             │        ▼                                                    │
-            │  claude -p --model sonnet  (→ Claude Sonnet 5.5, cloud)     │
+            │  scripts/ai-summary.sh → claude -p (Haiku 5.5, ≤ $1, cloud) │
             └───────┬─────────────────────────────────────────────────────┘
                     ▼
    ~/Downloads/cobalt/<name>.mp3 · .transcript.txt · .transcript.json · .summary.md
@@ -289,7 +289,7 @@ This is cobalt's own interface, running on your Mac. It's good for one-off downl
 | ffmpeg / ffprobe | 8.1.2. yt-dlp's mp3/mp4 conversion; the app's duration probe | `/opt/homebrew/bin` |
 | whisper.cpp | 1.9.2 (`whisper-cli`, ggml 0.20.2, Metal GPU) | `/opt/homebrew/bin/whisper-cli` |
 | Whisper model | `ggml-large-v3-turbo-q5_0.bin` (574 MB, 5-bit large-v3-turbo). Shared with the Claude Code *watch* skill | `~/.config/watch/models/` |
-| Claude Code CLI | 2.1.299. `claude -p --model sonnet` → **claude-sonnet-5-5**, signed in with your Claude account | `~/.local/bin/claude` |
+| Claude Code CLI | 2.1.310. `scripts/ai-summary.sh` runs `claude -p --model claude-haiku-5-5 --output-format json --max-turns 1 --max-budget-usd 1.00`, signed in with your Claude account (Datadog's Claude Enterprise organization: billed per token to it). `ai-summary.sh --check` finds it and checks the flags without sending anything | `~/.local/bin/claude` |
 | The app | **Video Buddy 3.0**, SwiftUI, Swift 6.3 compiler in Swift 5 mode, macOS 15+, built with Command Line Tools only (no Xcode), ad-hoc signed, bundle ID `local.video-summarizer` | `~/Applications/Video Buddy.app` |
 | History | SQLite 3.51 (WAL), schema version 3, daily verified backups | `~/Library/Application Support/Video Summarizer/` |
 | Player | AVKit `AVPlayerView` (floating controls) + AVFoundation (resume, speed, volume, full screen, Picture in Picture), one player shared with the mini-player | inside the app |
@@ -333,11 +333,13 @@ The **marker lines** are a contract: the app parses them, so keep them exactly a
 ```
 ⬇️  Downloading audio…            → runs scripts/cobalt-dl.sh <url> audio <out>
 🎙️  Transcribing on-device…       → scripts/transcribe.sh <mp3>  (prints this marker; see 4.6)
-🧠 Summarizing…                   → claude -p --model sonnet "$prompt" < <base>.transcript.txt | tee <base>.summary.md.part
-                                    mv .part → <base>.summary.md   (a cancelled run never leaves a half summary)
+🧠 Summarizing…                   → scripts/ai-summary.sh "$prompt" <base>.transcript.txt <base>.summary.md
+                                    (Haiku 5.5, ≤ $1, no retry; prints "AI: model · $cost · tokens"; the summary is
+                                    written via .part only on success, then shown, so a failed run leaves no summary)
 📁 <path of the mp3>              → last line
 ```
 
+- **4.0, AI summaries off by default:** before anything is downloaded, it stops with *AI summaries are off* unless they're allowed (the app passes its setting; from Raycast the script reads `aiSummariesApproved` in Video Buddy's settings).
 - Output folder: `${VS_OUT_DIR:-~/Downloads/cobalt}`.
 - The prompt is `${VS_SUMMARY_PROMPT:-<Standard>}`. Standard is exactly: *"Summarize this video transcript. Start with a 3-sentence TL;DR, then the key points as bullets, then any actionable takeaways."*
 - When **not** run by the app (`VS_FROM_APP` unset), it calls `scripts/record-history.sh summary <url> <mp3>` at the end.
@@ -366,7 +368,7 @@ Temp folder plus `EXIT`/`TERM` traps, the same safety as `cobalt-dl.sh`. A 19-se
 
 ### 4.5 What leaves your Mac
 - **The link:** cobalt or yt-dlp contact the video site.
-- **The transcript text:** sent to Anthropic for the summary. The audio and video are never uploaded.
+- **The transcript text:** sent to Anthropic for the summary, only when AI summaries are allowed (4.0, off by default). The audio and video are never uploaded.
 - **Your Drive:** `~/Desktop`, `~/Documents` and `~/Downloads` sync to your work Google Drive. That includes `~/Downloads/cobalt` (mp3/mp4) and this project folder.
 
 Everything else stays local. Both containers listen only on 127.0.0.1, and the cobalt API's CORS only allows `http://localhost:9001`, so web pages you visit can't use your local cobalt.
@@ -526,7 +528,7 @@ job_options(job_id PK → jobs ON DELETE CASCADE, video_quality /*480|720|1080|m
 - It's two jobs, not one: the download is saved first, so a cancelled or failed transcription loses nothing.
 - The entry ends up with an audio or video job plus a transcript job.
 
-**Regenerate / Summarize Transcript** (action `resummarize`) writes the saved transcript to a private temp file, then runs `claude -p --model sonnet "<prompt>" < transcript > summary`, and saves the result as a new version. It never downloads or transcribes again.
+**Regenerate / Summarize Transcript** (action `resummarize`) writes the saved transcript to a private temp file, then runs `scripts/ai-summary.sh` on it (4.0: Haiku 5.5, at most $1, off unless allowed; the model, cost and tokens in the job's log). Saved summaries are never touched by a failure.
 
 ### 5.5 The process guard: no orphans, ever
 Every subprocess runs under a small bash guard (`ScriptRunner.swift`):
@@ -1043,6 +1045,7 @@ All commands run from this folder.
 | **4.0: install over 3.1** | `VB_BACKUP_SET=<verified set> app/build.sh` (§2, *Upgrading*). `VB_INSTALL_DIR=<folder>` installs elsewhere (the rehearsal) |
 | **4.0: roll back** | Quit the app; rename `Video Buddy.app` → `Video Buddy 4.0.app.disabled`, `Video Buddy 3.1.app.disabled` → `Video Buddy.app`; `app/tools/restore-db.sh <data folder> <backup>/production/history.sqlite`. Undo: the same script with the recovery copy it names |
 | **4.0: check a migration on a copy** | `"…/VideoBuddyRC" --migrate-copy <folder with a copy of history.sqlite>` (refuses anything in Application Support); the whole rehearsal: `app/tests/migration-rehearsal.sh <backup set> <new folder> <4.0 binary>` |
+| **4.0: AI summaries** | Off by default: Settings → Summaries → *Allow AI summaries* (also governs Raycast's Summarize). Each request: `~/Library/Logs/Video Buddy/ai-usage.log` (time, model, cost, tokens, ok / failed / refused). `scripts/ai-summary.sh --check` finds the CLI and checks its flags without sending anything |
 | **4.0: carry over from the Preview** | `app/tools/carry-over.sh <backup>/preview <4.0 data folder> [--declaration]` |
 | Save your work | `git add -A && git commit -m "…"` |
 
@@ -1076,6 +1079,8 @@ All commands run from this folder.
 | A playlist shows fewer videos than it has on YouTube, or one episode sits under *Individual Videos* | It was downloaded before (or apart from) the playlist import. Open the playlist → ⋯ → **Check Against YouTube…** → **Link N Library Videos** (metadata only, nothing downloads). Without a YouTube link: **Add Videos** → tick it, or **From Folder…** |
 | "Already in the queue" | That video already has a download of the same kind waiting or running; nothing was queued twice. See the **Queue** section |
 | An episode shows ✓ but you didn't finish it | You stopped within its last 5% (at most 10 s), which counts as finished. Play it again to start over |
+| **"AI summaries are off"** (4.0) | On purpose: each summary is billed per request to your Claude account. Settings → Summaries → *Allow AI summaries* turns them on (for Raycast's Summarize too). Transcripts on this Mac never need it |
+| **A summary failed with an error about the budget** (4.0) | The request would have cost more than $1 and was stopped; nothing was saved and it isn't retried. Very long transcripts can need a shorter format |
 | **Highest available is greyed out** (4.0) | This Mac doesn't decode AV1 in hardware (macOS is asked at launch; Macs before M3 don't). Best compatible (H.264) works everywhere |
 | **A transcript is in the wrong language** (4.0) | The three votes are in the job's log and in `languageVotes` in the transcript's JSON. Music for most of the audio, or two languages, can still mislead it (§12). Remove the `.transcript.*` files next to the media and transcribe again |
 | **A YouTube download says "(yt-dlp)"** | Normal from 4.0: YouTube goes straight to yt-dlp, because cobalt's YouTube streams come back empty (HTTP 200, 0 bytes) |

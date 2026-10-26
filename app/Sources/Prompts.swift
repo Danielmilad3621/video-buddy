@@ -150,10 +150,18 @@ enum AppSettings {
     /// Its AI lock is separate (queueRefusal), and on-device transcripts of files already here need neither.
     static var downloadsLockReason: String? { isRC && !LiveGrant.active() ? "live downloads aren't approved in \(appName) right now" : nil }
 
-    /// Why this job may not be queued in this build, or nil. Only the RC refuses anything: AI summaries until you've
-    /// approved them, and YouTube downloads of videos that aren't on its live-test list. The database asks this
-    /// before every queued job, and the runner again before one runs.
+    /// 4.0: AI summaries are paid per request (billed to your Claude account), so they're off until you allow them:
+    /// Settings → Summaries → Allow AI summaries (`aiSummariesApproved`), and in the RC its own `rcAISummaries`.
+    static var aiApproved: Bool { defaults.bool(forKey: isRC ? "rcAISummaries" : "aiSummariesApproved") }
+    /// Where ai-summary.sh records each request: an isolated build's own data folder; nil = its default
+    /// (~/Library/Logs/Video Buddy/ai-usage.log, shared with Raycast).
+    static var aiLog: String? { isolated ? dataDir.appendingPathComponent("ai-usage.log").path : nil }
+
+    /// Why this job may not be queued in this build, or nil. In every build an AI summary until you've allowed them;
+    /// in the RC also YouTube downloads of videos that aren't on its live-test list. The database asks this before
+    /// every queued job, and the runner again before one runs.
     static func queueRefusal(_ action: JobAction, key: String) -> String? {
+        if action.usesAI, !aiApproved, !isRC { return "AI summaries are off (Settings → Summaries → Allow AI summaries)" }
         guard isRC else { return nil }
         return LiveTestList.refusal(action, key: key, aiApproved: defaults.bool(forKey: "rcAISummaries"),
                                     listed: LiveTestList.ids(in: dataDir), app: appName)

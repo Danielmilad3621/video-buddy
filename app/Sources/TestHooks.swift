@@ -715,7 +715,7 @@ enum TestHooks {
             // 4.0 Phase 5: which build this is, and what's locked
             "build": ["bundleID": Bundle.main.bundleIdentifier ?? "", "appName": AppSettings.appName, "isRC": AppSettings.isRC,
                       "isPreview": AppSettings.isPreview, "dataDir": AppSettings.dataDir.path, "downloadDir": AppSettings.downloadDir,
-                      "canRun": JobController.canRun, "paused": jobs.paused, "jobsLock": AppSettings.jobsLockReason ?? "", "downloadsLock": JobController.downloadsLock ?? "",
+                      "canRun": JobController.canRun, "paused": jobs.paused, "jobsLock": AppSettings.jobsLockReason ?? "", "downloadsLock": JobController.downloadsLock ?? "", "aiApproved": AppSettings.aiApproved,
                       "rcLiveDownloads": UserDefaults.standard.bool(forKey: "rcLiveDownloads"),
                       "rcAISummaries": UserDefaults.standard.bool(forKey: "rcAISummaries"),
                       "liveTestList": LiveTestList.ids(in: AppSettings.dataDir).sorted(), "badge": AppSettings.buildBadge ?? ""] as [String: Any],

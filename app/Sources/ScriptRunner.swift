@@ -14,6 +14,8 @@ enum Paths {
     static var summarize: String { scriptsRoot + "/raycast/summarize.sh" }
     static var cobaltDL: String { scriptsRoot + "/scripts/cobalt-dl.sh" }
     static var transcribe: String { scriptsRoot + "/scripts/transcribe.sh" }
+    /// 4.0: the one place a paid AI summary is requested (Haiku 5.5, at most $1, no retry, off unless allowed)
+    static var aiSummary: String { scriptsRoot + "/scripts/ai-summary.sh" }
 }
 
 /// Every subprocess runs under this bash guard. Its fd 3 (the "lifeline") is a pipe whose write end only the
@@ -55,12 +57,14 @@ exit "$status"
 /// Preview, test build) started with test hooks; then VS_TEST_RUN=1 goes with it, and the script needs both. Every other
 /// run has both removed, so a normal download can never be slowed down by them.
 enum ScriptEnv {
-    static let testKeys = ["VS_TEST_RUN", "VS_TEST_LIMIT_RATE"]
+    static let testKeys = ["VS_TEST_RUN", "VS_TEST_LIMIT_RATE", "VS_TEST_CLAUDE", "VS_TEST_DOWNLOADER"]
     static let testRunsAllowed = AppSettings.isolated && ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1"
 
     static func testRules(_ env: [String: String], allowed: Bool) -> [String: String] {
         var e = env
-        if allowed, e["VS_TEST_LIMIT_RATE"]?.nilIfBlank != nil { e["VS_TEST_RUN"] = "1" } else { testKeys.forEach { e[$0] = nil } }
+        // 4.0 final acceptance: also a stand-in Claude CLI and a stand-in downloader, for mocked AI tests (never the real CLI)
+        let given = ["VS_TEST_LIMIT_RATE", "VS_TEST_CLAUDE", "VS_TEST_DOWNLOADER"].contains { e[$0]?.nilIfBlank != nil }
+        if allowed, given { e["VS_TEST_RUN"] = "1" } else { testKeys.forEach { e[$0] = nil } }
         return e
     }
 }

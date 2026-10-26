@@ -31,6 +31,7 @@ struct SettingsContent: View {
     @Environment(\.palette) private var p
     @AppStorage("summaryLanguage") private var language = SummaryLanguage.english.rawValue
     @AppStorage("summaryFormat") private var format = SummaryFormat.standard.rawValue
+    @AppStorage("aiSummariesApproved") private var aiApproved = false
     @AppStorage("downloadDir") private var downloadDir = ""
     @AppStorage("videoQuality") private var videoQuality = VideoQuality.standard.rawValue
     @AppStorage("offlineReserveGB") private var reserveGB = 10
@@ -55,6 +56,11 @@ struct SettingsContent: View {
                 }
                 note((SummaryFormat(rawValue: format) ?? .standard).detail)
                 note("Used for new summaries in the app. Raycast always uses Standard in English.")
+                // 4.0: paid per request, so off until you allow it (isolated builds keep their own, hidden lock)
+                if !AppSettings.isolated {
+                    Toggle("Allow AI summaries", isOn: $aiApproved).toggleStyle(.checkbox)
+                    note("Each summary is one request billed to your Claude account: Claude Haiku 5.5, at most $1 per request, never retried. Every request is recorded in ~/Library/Logs/Video Buddy/ai-usage.log. Off: Summarize and Regenerate don't run, here or from Raycast; transcripts on this Mac still work.")
+                }
             }
             card("Downloads", "arrow.down.to.line") {
                 HStack(spacing: 12) {

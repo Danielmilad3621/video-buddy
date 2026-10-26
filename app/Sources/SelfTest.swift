@@ -212,6 +212,11 @@ enum SelfTest {
         check(VideoQuality.highest.scriptValue == "highest" && VideoQuality.highest.label.contains("4K") && VideoQuality.best.label == "Best compatible (H.264)",
               "two separate choices: Highest available and Best compatible (H.264)")
         check(AppSettings.isRC || AppSettings.downloadsLockReason == nil, "only the RC has a separate download lock")
+        check(AppSettings.isRC || (AppSettings.queueRefusal(.summarize, key: "url:example.com/x") != nil) == !AppSettings.aiApproved
+              && (AppSettings.queueRefusal(.resummarize, key: "url:example.com/x") != nil) == !AppSettings.aiApproved
+              && AppSettings.queueRefusal(.transcribe, key: "url:example.com/x") == nil,
+              "AI summaries (Summarize, Regenerate) are refused until allowed, in every build; transcripts never are")
+        check(JobController.aiEnv["VS_AI_APPROVED"] == (AppSettings.aiApproved ? "1" : nil), "ai-summary.sh is told it may run only when allowed")
         // the release build (not isolated) uses production's own folders, never the RC's or the Preview's: RC test
         // downloads and jobs can't enter production through the app
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -275,6 +280,11 @@ enum SelfTest {
         check(ScriptEnv.testRules(["VS_TEST_LIMIT_RATE": "250K"], allowed: true)["VS_TEST_RUN"] == "1"
               && ScriptEnv.testRules(["VS_TEST_RUN": "1"], allowed: true)["VS_TEST_RUN"] == nil,
               "scripts: in a test run, the switch goes only with a speed limit")
+        // 4.0 final acceptance: the stand-in Claude CLI and downloader follow the same rule (mocked AI tests only)
+        let mock = ["VS_TEST_CLAUDE": "/tmp/stub", "VS_TEST_DOWNLOADER": "/tmp/fake"]
+        check(ScriptEnv.testRules(mock, allowed: false)["VS_TEST_CLAUDE"] == nil && ScriptEnv.testRules(mock, allowed: false)["VS_TEST_DOWNLOADER"] == nil
+              && ScriptEnv.testRules(mock, allowed: false)["VS_TEST_RUN"] == nil && ScriptEnv.testRules(mock, allowed: true)["VS_TEST_RUN"] == "1",
+              "scripts: a stand-in Claude CLI or downloader reaches only a test run of an isolated build; elsewhere both are removed")
         check(!AppSettings.isolated || ProcessInfo.processInfo.environment["VS_TEST_HOOKS"] == "1" || !ScriptEnv.testRunsAllowed,
               "scripts: this run allows the speed limit only if it's an isolated build with test hooks")
         let unknown = CopyPrompt.wording(role: .video, names: ["a.mp4"], existing: [nil], coming: nil, quality: "1080p (default)")
@@ -332,7 +342,13 @@ enum SelfTest {
 
         let script = (try? String(contentsOfFile: Paths.summarize, encoding: .utf8)) ?? ""
         check(script.contains(Prompts.standard), "Standard prompt matches the bundled summarize.sh exactly (\(Paths.summarize))")
-        check(FileManager.default.isExecutableFile(atPath: Paths.summarize) && FileManager.default.isExecutableFile(atPath: Paths.cobaltDL), "bundled scripts present and executable")
+        check(FileManager.default.isExecutableFile(atPath: Paths.summarize) && FileManager.default.isExecutableFile(atPath: Paths.cobaltDL)
+              && FileManager.default.isExecutableFile(atPath: Paths.aiSummary), "bundled scripts present and executable")
+        // 4.0: every paid request goes through ai-summary.sh: Haiku 5.5, at most $1, one turn, no fallback, off unless allowed
+        let ai = (try? String(contentsOfFile: Paths.aiSummary, encoding: .utf8)) ?? ""
+        check(script.contains("scripts/ai-summary.sh") && !script.contains("claude -p"), "summarize.sh asks ai-summary.sh, never the Claude CLI directly")
+        check(ai.contains("model=claude-haiku-5-5") && ai.contains("--max-turns 1 --max-budget-usd 1.00") && !ai.contains("--fallback-model")
+              && ai.contains("VS_AI_APPROVED"), "ai-summary.sh: Haiku 5.5, a $1 cap, one turn, no fallback model, refused unless allowed")
         check(Prompts.build(.standard, .english) == Prompts.standard, "Standard + English adds nothing")
         check(Prompts.build(.adhd, .masri).contains("ADHD") && Prompts.build(.adhd, .masri).contains("Egyptian"), "ADHD + Masri prompt")
 

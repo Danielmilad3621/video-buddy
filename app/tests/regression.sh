@@ -30,13 +30,17 @@ out="$T/out"
 launch() {
   local data=$1 extra=()
   [[ ${2:-} == fake ]] && extra=(--env VS_TEST_FAKE_DOWNLOADS="$T/fake-dl.sh" --env VS_FAKE_SAMPLES="$T/samples"
-                                 --env VS_FAKE_CONTROL="$T/control" --env VS_TEST_FREE_FINAL_FILE="$T/free-final" --env VS_TEST_FREE_TEMP_FILE="$T/free-temp")
+                                 --env VS_FAKE_CONTROL="$T/control" --env VS_TEST_FREE_FINAL_FILE="$T/free-final" --env VS_TEST_FREE_TEMP_FILE="$T/free-temp"
+                                 --env VS_TEST_CLAUDE="$T/claude-stub")
   mkdir -p "$data" "$out" "$T/shots"
   open -n -g -a "$app" --env VS_DATA_DIR="$data" --env VS_SNAPSHOT_DIR="$T/shots" --env VS_TEST_HOOKS=1 --env VS_TEST_CHANNEL=regression \
        --env VS_WINDOW_SIZE=1400x900 ${extra[@]+"${extra[@]}"} --args -downloadDir "$out"
   for _ in $(seq 80); do [[ $(q 'True') == True ]] && break; sleep 0.25; done
   vs "mute on"; vs "section Library"
 }
+# sheetclick <probe>: a button on the request sheet, once the sheet has settled (its title arrives a moment later and the
+# sheet resizes, which moved the button under an early click); clicked once more if the sheet is still open
+sheetclick() { sleep 2; vs "nativeClick $1"; [[ $(waitfor "s['external'] == {}" 4) == True ]] || vs "nativeClick $1"; }
 request() { python3 -c 'import sys, urllib.parse; print("videobuddy://request?" + urllib.parse.urlencode({"action": sys.argv[1], "url": sys.argv[2]}))' "$1" "$2"; }
 cleanup() {
   if [[ -d $app ]]; then
@@ -57,7 +61,18 @@ swiftc "$repo/app/tests/vsctl.swift" -o "$T/vsctl" 2> /dev/null
 mkdir -p "$T/samples"
 say -o "$T/samples/speech.aiff" "This is a short test of transcription on this Mac."
 ffmpeg -v error -f lavfi -i testsrc=duration=4:size=640x360:rate=25 -i "$T/samples/speech.aiff" -af apad -t 4 -c:v libx264 -c:a aac "$T/samples/sample.mp4"
-ffmpeg -v error -f lavfi -i sine=duration=4 "$T/samples/sample.mp3"
+ffmpeg -v error -i "$T/samples/speech.aiff" -af apad -t 4 "$T/samples/sample.mp3"
+# 4.0: a stand-in Claude CLI (never the real one): records each call, answers as $T/claude-mode says
+cat > "$T/claude-stub" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/claude-calls"; [[ \${1:-} == -p ]] && cat > /dev/null
+case \$(cat "$T/claude-mode" 2> /dev/null) in
+  budget) echo '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":1.01,"usage":{},"modelUsage":{"claude-haiku-5-5":{}}}'; exit 1 ;;
+  *) echo '{"type":"result","subtype":"success","is_error":false,"result":"**TL;DR**\\nA stub summary.","total_cost_usd":0.005,"usage":{"input_tokens":9,"output_tokens":900},"modelUsage":{"claude-haiku-5-5":{}}}' ;;
+esac
+EOF
+chmod +x "$T/claude-stub"; echo ok > "$T/claude-mode"
+stubcalls() { [[ -f $T/claude-calls ]] && wc -l < "$T/claude-calls" | tr -d ' ' || echo 0; }
 echo 100000000000 > "$T/free-final"; echo 100000000000 > "$T/free-temp"; : > "$T/control"
 # the fake downloader runs from here: the project folder is on the Desktop, which macOS guards with a permission prompt
 cp "$repo/app/tests/fake-dl.sh" "$T/fake-dl.sh"
@@ -141,7 +156,7 @@ open -g -a "$app" "$(request video "https://youtu.be/$E")"
 check "request: shown for you to confirm, nothing queued" "s['external'].get('youtubeID') == '$E' and s['queueKeys'] == []"
 open -g -a "$app" "$(request audio "https://youtu.be/$A")"
 check "request: a second one while one waits is ignored" "'finish what' in s['notice'] and s['external'].get('youtubeID') == '$E'"
-vs "nativeClick externalCancel"
+sheetclick externalCancel
 check "request: Cancel queues nothing" "s['external'] == {} and s['queueKeys'] == [] and s['running'] == ''"
 open -g -a "$app" "$(request video "https://vimeo.com/76979871")"
 check "request: anything but YouTube is refused with a notice" "'Ignored a request' in s['notice'] and s['external'] == {}"
@@ -151,13 +166,32 @@ vs "wlRemove $A"
 said=$(VB_APP=$app "$repo/raycast/download-video.sh" "https://www.youtube.com/watch?v=$E" 2>&1)
 ok "Raycast: a YouTube link is handed over, not downloaded" "$([[ $said == "Sent to Video Buddy 4.0 Test"* ]] && echo True || echo False)" "$said"
 check "Raycast: the app shows it for you to confirm" "s['external'].get('youtubeID') == '$E' and s['external'].get('kind') == 'video'"
-sleep 1; vs "nativeClick externalDownload"
+sheetclick externalDownload
 check "request: Download goes on, and it's downloaded once declared" "any('fake $E' in m for m in s['media'])" 30
 said=$(VB_BUNDLE_ID=local.video-summarizer "$repo/raycast/download-audio.sh" "https://youtu.be/$A" 2>&1); code=$?
 ok "Raycast: with 3.1 as the target (no videobuddy://) it stops and downloads nothing" "$([[ $code != 0 && $said == *"isn't installed"* ]] && echo True || echo False)" "$code $said"
 said=$(VB_APP=$app "$repo/raycast/summarize.sh" "https://youtu.be/$A" 2>&1)
 check "Raycast Summarize: handed over too (as a summary)" "s['external'].get('kind') == 'summary'"
-vs "nativeClick externalCancel"
+sheetclick externalCancel
+# 4.0: paid AI summaries, with the stand-in CLI only (off until allowed; Haiku 5.5, $1 cap, no retry)
+F=YbJOTdZBX1g; vs "declareOnly $F|regression"; vs "section Library"
+vs "link https://youtu.be/$F"; vs "start summary"
+check "AI off by default: Summarize refused, nothing queued, the CLI never called" "'AI summaries are off' in s['notice'] and s['queueKeys'] == [] and not s['build']['aiApproved']" 10 "s['notice'], s['queueKeys']"
+ok "…no call" "$([[ $(stubcalls) == 0 ]] && echo True || echo False)" "$(stubcalls)"
+vs "setDefault aiSummariesApproved|1"; vs "start summary"
+check "allowed: the full Summarize (fake download, on-device transcript, the stand-in) saves a summary" "any('$F' in m for m in s['media']) and s['running'] == '' and any(j['kind'] == 'summary' and j['status'] == 'succeeded' and j['summaryChars'] > 0 for j in s['selectedJobs'])" 120 "s['selectedJobs'], s['failed'], s['banner']"
+check "…the job's log has the model, cost and tokens" "any('AI: claude-haiku-5-5' in l for l in s['lastOutput'])" 5 "s['lastOutput'][-5:]"
+ok "…exactly one request, Haiku 5.5, \$1 cap" "$([[ $(stubcalls) == 1 && $(cat "$T/claude-calls") == "-p --model claude-haiku-5-5 --output-format json --max-turns 1 --max-budget-usd 1.00 "* ]] && echo True || echo False)" "$(cat "$T/claude-calls" 2> /dev/null)"
+vs summarizeTranscript
+check "Regenerate: a second summary, one more request" "sum(1 for j in s['selectedJobs'] if j['kind'] == 'summary' and j['status'] == 'succeeded') == 2 and s['running'] == ''" 60 "s['selectedJobs']"
+echo budget > "$T/claude-mode"; vs summarizeTranscript
+check "a failed request (over the cap): failed, the saved summaries unchanged" "s['running'] == '' and s['queueKeys'] == [] and sum(1 for j in s['selectedJobs'] if j['kind'] == 'summary' and j['status'] == 'succeeded') == 2 and any(f.startswith('resummarize') for f in s['failed'])" 60 "s['selectedJobs'], s['failed']"
+sleep 5
+ok "…never retried by itself: still 3 requests, nothing queued" "$([[ $(stubcalls) == 3 && $(q "s['queueKeys'] == [] and s['running'] == ''") == True ]] && echo True || echo False)" "$(stubcalls)"
+echo ok > "$T/claude-mode"; vs "setDefault aiSummariesApproved|0"
+vs summarizeTranscript
+check "AI turned off again: Regenerate refused, no request" "'AI summaries are off' in s['notice'] and s['queueKeys'] == []" 10 "s['notice']"
+ok "…no call" "$([[ $(stubcalls) == 3 ]] && echo True || echo False)" "$(stubcalls)"
 # 3.1 features
 vs "select fake $A"; vs "play"
 check "player: a downloaded video plays" "s['playback']['playing'] and '$A' in s['playback']['path']" 10 "s['playback']"
@@ -201,7 +235,7 @@ check "taken off the list after queueing: the runner's last check refuses it" "a
 vs "prepareFor $C"
 check "Prepare shows an unlisted video as not allowed" "any(r.startswith('$C') and 'live-test' in r for r in s['prepare'])" 15 "s['prepare']"
 vs "nativeClick prepareCancel"; waitfor "s['prepare'] == []" 10 > /dev/null
-open -g -a "$app" "$(request video "https://youtu.be/$C")"; waitfor "s['external'] != {}" > /dev/null; sleep 1; vs "nativeClick externalDownload"
+open -g -a "$app" "$(request video "https://youtu.be/$C")"; waitfor "s['external'] != {}" > /dev/null; sheetclick externalDownload
 check "a request for an unlisted video: refused after Download" "\"isn't on\" in s['notice'] and s['queueKeys'] == []" 20 "s['notice'], s['external'], s['queueKeys']"
 quit_app
 
