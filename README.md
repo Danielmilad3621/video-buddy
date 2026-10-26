@@ -214,7 +214,7 @@ All in **Video Buddy 4.0 RC** only, on `lkm-WEHQtNc` (your declaration) unless a
 ### Upgrading from 3.1 to 4.0 (the G3 procedure, rehearsed on copies in G2)
 For a **4.0 patch update**, keep the backup, verification, rehearsal and rollback requirements below, but preserve the existing v6 database: do not repeat the old Preview import or restore v3 data. `migration-rehearsal.sh` detects a v6 backup and checks every table/row, restore/undo and the previous 4.0 binary on retained copies. Use `VB_KEEP_TEST_FILES=1` for backup/build retention. `build.sh` self-tests an identical binary with an isolated identity, verifies the signed candidate, and retains the previous app under its actual version. Build 7 includes the YouTube metadata fix and records its source commit in `VBCommit`. For this patch, rollback means moving build 7 aside and renaming `Video Buddy 4.0.app.disabled` back to `Video Buddy.app`; the separate 3.1 rollback is not used.
 
-Nothing here has been run on your real apps or data; each step was rehearsed on copies (§11).
+The following steps describe the original 3.1-to-4.0 upgrade; its completed results are recorded in §11.
 1. **Quit Video Buddy 3.1 and the Preview** yourself (the tools refuse while they run and never quit them).
 2. **Back up:** `app/tools/backup-before-4.0.sh ~/Documents/"Video Buddy backup before 4.0"`, then `app/tools/backup-before-4.0.sh --verify` on it. It copies 3.1's database with its `-wal` and `-shm` together (checked byte for byte), makes one consolidated copy with SQLite's `.backup` (from a scratch copy; your files are never opened by SQLite), zips both apps, exports the settings, lists the media, and writes `MANIFEST.txt` (SHA-256 of every file). Media files aren't copied.
 3. **Install:** `VB_BACKUP_SET=<that folder> app/build.sh` (from the 4.0 code). It refuses without a backup set that verifies, refuses while the app runs, moves 3.1 aside as `~/Applications/Video Buddy 3.1.app.disabled`, installs 4.0 and puts 3.1 back if anything fails. Nothing is deleted.
@@ -672,7 +672,7 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 ### 2026-10-26: approved installation preparation for the YouTube fix
 - **Approved:** a fresh verified backup, rehearsal and installation over the current 4.0 app; preserve it as `Video Buddy 4.0.app.disabled`. No merge or push was approved.
 - **Current-version rehearsal:** the historical v3 upgrade/import is no longer the right test for a v6 production library. The v6 path compares every table and row, restores and undoes a synthetic change on a copy, and checks the previous backed-up 4.0 binary with an isolated identity. It retains all evidence and never starts an app UI.
-- **Retained checks:** `VB_KEEP_TEST_FILES=1` keeps backup/build scratch folders; `VS_KEEP_TEST_FILES=1` keeps self-test fixtures, including the rejected backup copy through an injected discard operation. Normal database backup behavior is unchanged. Build self-tests run under an isolated identity, never at the production path; the candidate is then signature-checked and compared with the tested binary. Process-list errors stop replacement, and a second check catches the app reopening during compilation.
+- **Retained checks:** `VB_KEEP_TEST_FILES=1` keeps backup/build scratch folders; `VS_KEEP_TEST_FILES=1` keeps self-test fixtures, including the rejected backup copy through an injected discard operation. Normal database backup behavior is unchanged. Build self-tests run under an isolated identity, never at the production path; the candidate is then signed, and its signature and executable hash are checked after moving. The hash is taken after signing because signing changes executable metadata. Process-list errors stop replacement, and a second check catches the app reopening during compilation.
 - **Identity:** version 4.0, build 7, with `VBCommit` identifying the source. Production installation remains pending the checks in §11.
 
 ### 2026-10-26: YouTube format-details fix (feature branch only, not installed)
@@ -1136,7 +1136,10 @@ Evidence is retained in `~/Video Buddy backups/youtube-fix-evidence-20261026.mf9
 | Fresh backup and verification | **PASSED** — 81 manifest files; v6 databases healthy; production 0 videos/jobs, 4 playback rows, 3 Watch Later entries |
 | Protected state before/after backup | **PASSED** — application, data, downloads, settings, browser files and 3.1 rollback unchanged |
 | Updated shell/Python syntax and whitespace | **PASSED** |
-| Full retained self-tests, v6 rehearsal, install refusal/failure/rollback | **PENDING** |
+| Full retained self-tests | **PASSED** — 396 checks in the isolated identity |
+| Initial staging build | **FAILED** at icon packaging under restricted access, after the self-tests; the same iconset packaged successfully with normal macOS access. Production untouched; full installer rerun pending |
+| Install refusal checks | **PASSED** — missing/invalid backup, existing partial folder, unavailable process list; all copied files retained |
+| v6 rehearsal and installer failure/rollback | **PENDING** |
 | Production build 7 installation and final state comparison | **PENDING** |
 
 ### YouTube mixed-format metadata fix (2026-10-26; isolated feature branch)

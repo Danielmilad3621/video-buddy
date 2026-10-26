@@ -49,6 +49,7 @@ done
 iconutil -c icns "$tmp/AppIcon.iconset" -o "$bundle/Contents/Resources/AppIcon.icns"
 
 codesign --force --sign - "$bundle"
+built_hash=$(shasum -a 256 "$bundle/Contents/MacOS/VideoSummarizer" | awk '{print $1}')
 mkdir -p "$dir"
 aside=
 if [[ -e $app ]]; then
@@ -70,7 +71,8 @@ trap 'restore; cleanup' EXIT
 mv "$bundle" "$app.partial"
 [[ ${VB_REHEARSE_FAILURE:-} == 1 && $dir != "$HOME/Applications" ]] && { echo "rehearsal: failing on purpose"; exit 1; }
 codesign --verify --deep --strict "$app.partial"
-cmp "$test_bundle/Contents/MacOS/VideoSummarizer" "$app.partial/Contents/MacOS/VideoSummarizer"
+installed_hash=$(shasum -a 256 "$app.partial/Contents/MacOS/VideoSummarizer" | awk '{print $1}')
+[[ $installed_hash == "$built_hash" ]] || { echo "refused: executable changed while being installed"; exit 2; }
 mv "$app.partial" "$app"
 trap cleanup EXIT
 echo "Installed $app$([[ -n $aside ]] && echo "; the previous app is $aside (to roll back: quit Video Buddy, rename this one aside, rename that one back to Video Buddy.app)")"
