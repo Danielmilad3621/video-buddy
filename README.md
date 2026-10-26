@@ -1137,9 +1137,10 @@ Evidence is retained in `~/Video Buddy backups/youtube-fix-evidence-20261026.mf9
 | Protected state before/after backup | **PASSED** — application, data, downloads, settings, browser files and 3.1 rollback unchanged |
 | Updated shell/Python syntax and whitespace | **PASSED** |
 | Full retained self-tests | **PASSED** — 396 checks in the isolated identity |
-| Initial staging build | **FAILED** at icon packaging under restricted access, after the self-tests; the same iconset packaged successfully with normal macOS access. Production untouched; full installer rerun pending |
+| Initial staging build | **FAILED** at icon packaging under restricted access, after the self-tests; the same iconset packaged successfully with normal macOS access. The full installer subsequently passed on copies; production was untouched by the failed attempt |
 | Install refusal checks | **PASSED** — missing/invalid backup, existing partial folder, unavailable process list; all copied files retained |
-| v6 rehearsal and installer failure/rollback | **PENDING** |
+| v6 rehearsal | **PASSED** — 35 checks: every table/row preserved, repeated migration harmless, restore and undo correct, previous 4.0 binary compatible, backup still verifies |
+| Installer failure/success/rollback | **PASSED** — simulated failure restores the original app byte-for-byte; signed build 7 replaces the copied app while preserving it; rename rollback restores it. Packaging tests reused the freshly compiled binary after checking source equality; the real installation compiles normally |
 | Production build 7 installation and final state comparison | **PENDING** |
 
 ### YouTube mixed-format metadata fix (2026-10-26; isolated feature branch)
