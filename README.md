@@ -667,6 +667,14 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 
 ## 7. How it was built
 
+### 2026-10-26: YouTube format-details fix (feature branch only, not installed)
+- **Reported:** `SRtAjiCeit4` failed from Home and the YouTube browser with *The video's details couldn't be read*, before a job was queued.
+- **Confirmed:** one explicitly approved metadata-only check succeeded. Its response contained both `has_drm: false` and `has_drm: "maybe"`. The old Swift reader expected only a Boolean; replaying that response offline reproduced the exact error at `formats[3].has_drm`. No media was downloaded.
+- **Changed:** the shared reader understands protected, unprotected and unknown formats. It requires an explicitly unprotected audio/video format; protected-only, unknown-only and malformed responses do not pass. Existing sign-in, age, live-video and declaration checks remain.
+- **Selection and estimates:** YouTube downloads filter every format-selection branch, including merged streams and fallbacks, with `[has_drm=0]` (yt-dlp's numeric comparison matches Boolean false, excludes true/`"maybe"`/missing). Size and quality estimates use the same explicitly unprotected subset. Other sites retain their previous selectors.
+- **Isolation:** branch `feature/youtube-format-metadata` in `~/Video Buddy development/youtube-format-metadata`, outside the work Drive folders. The original checkout stays on `main`; production and Raycast are not changed. The raw captured response and all test outputs stay outside the project.
+- **Testing:** a retained, offline test build and format-selector checks (§11). The existing GUI regression was inspected but not run: it makes web requests, deletes its temporary data and unregisters its app. Installation, a real download, merging and pushing still need separate approval.
+
 ### 2026-10-13: the question, and choosing cobalt
 - **The request:** install [imputnet/cobalt](https://github.com/imputnet/cobalt) and wire it to Raycast, so a YouTube link becomes mp3 → transcript → summary in one go.
 - **First recommendation: skip cobalt.**
@@ -1111,6 +1119,19 @@ All commands run from this folder.
 ---
 
 ## 11. Testing
+
+### YouTube mixed-format metadata fix (2026-10-26; isolated feature branch)
+Run `bash app/tests/format-metadata-test.sh [<already-captured metadata.json>]`. It compiles all app sources into a separate test bundle, runs `--selftest-formats` without starting the UI, and checks the download script's real arguments with the installed yt-dlp format selector. Network commands are replaced with local stand-ins; script cleanup is disabled inside that test shell. Every test file is retained at the printed temporary path. No production launch, database access, registration, settings writes, downloads or AI calls.
+
+| Check | Result |
+|---|---|
+| Original error reproduced from the captured response | **PASSED** before the fix: Boolean/string mismatch at `formats[3].has_drm` |
+| Isolated compilation and focused Swift checks | **PASSED** — all app sources compiled; 118 checks, including replay of the captured response, mixed/unknown/protected/malformed formats, and the shared Home/browser gate |
+| Script syntax and offline format selection, including the captured response | **PASSED** — `bash -n`; 76 checks across audio, default video, 480p, 720p, 1080p, Best compatible and Highest available; unknown/protected streams excluded, clear fallbacks preserved, other sites unchanged |
+| Full GUI regression and a real download | **PENDING**, not run under this approval |
+| Merge, push and production installation | **PENDING**, separate approval |
+
+The first runner attempt **FAILED** after its Swift checks because its Python path incorrectly repeated `libexec`. The runner was corrected and rerun end to end: **PASSED**, exit 0. Final files are retained at `/var/folders/p3/nyrk935n1rj9tt9gky7xr_9m0000gp/T/vb-format-test.XAJfsk`; the combined log is `/private/tmp/video-buddy-diagnosis-avzhwoim/final-format-tests.log`. The offline captured-response selections were audio `251`, default/1080p/Best compatible `299+140`, 480p `135+140`, 720p `298+140`, and Highest available `399+140`. These confirm selection, not successful retrieval or playback of media.
 
 ### The self-test: `app/build.sh` runs it on every build (161 checks)
 - **3.1 collections (35 new):** a new playlist links every library video of the YouTube playlist and queues only the ticked ones; re-importing queues nothing already waiting and makes no second playlist; **Check links the already-downloaded episode and adds no jobs**; the hand-made order stays (episode 1 lands right before episode 2); merge and position rules; **a second video download of the same video is refused while one waits or runs**, audio is a separate download; a video in two playlists is grouped twice and stored once; favorites stay under their playlist in its order; searching a playlist name finds its videos; queue headers keep FIFO numbers; **position 0 and unknown lengths are never finished**, the end and the nearly-finished margin are; Continue after a finished episode is the next one, skipping missing and finished ones, never-played → Play All; the player's end-of-file save reads as finished; deleting a playlist keeps videos and jobs.

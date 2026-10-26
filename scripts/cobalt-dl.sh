@@ -69,16 +69,21 @@ else
 fi
 if [[ $mode == audio ]]; then
   fmt=(-x --audio-format mp3 --audio-quality 128K)   # a fixed 128 kbit/s, like cobalt's, so sizes are predictable
+  selection='ba/b'
 else
   fmt=(-t mp4)
+  selection='bv*+ba/b'
   # keep -t mp4's H.264/AAC preference (plays everywhere, including the app's player) and cap the height
   if [[ $quality =~ ^[0-9]+$ ]]; then fmt+=(-S "vcodec:h264,res:$quality,acodec:aac"); fi
   # 4.0 G2, Highest available: the highest AV1 stream (YouTube's 1440p and 4K), else H.264, with AAC, in MP4; never VP9,
   # which AVFoundation doesn't reliably play. The app offers it only where AV1 decodes in hardware.
   if [[ $quality == highest ]]; then
-    fmt=(-f 'bv*[vcodec^=av01]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b' -S res --merge-output-format mp4 --remux-video mp4)
+    selection='bv*[vcodec^=av01]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b'
+    fmt=(-f "$selection" -S res --merge-output-format mp4 --remux-video mp4)
   fi
 fi
+# Filter the whole selector, including merged streams and fallbacks. "maybe" and missing flags never count as false.
+if [[ $reason == youtube ]]; then fmt+=(-f "($selection)[has_drm=0]"); fi
 # 4.0 G1b-2, test runs only: a speed limit so a download can be interrupted on purpose. The app passes these two
 # variables only to an isolated build (RC or Preview) started with test hooks, and removes them otherwise.
 if [[ ${VS_TEST_RUN:-} == 1 && -n ${VS_TEST_LIMIT_RATE:-} ]]; then fmt+=(--limit-rate "$VS_TEST_LIMIT_RATE"); fi

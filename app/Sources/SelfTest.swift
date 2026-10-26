@@ -17,6 +17,30 @@ enum SelfTest {
             done = true
         }
         while !done { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
+        return report()
+    }
+
+    /// Focused offline checks: no app startup, database, settings writes, network requests or cleanup.
+    static func runFormatChecks(metadataFile: String?) -> Int32 {
+        browserBar()
+        offlineRules()
+        g1aRules()
+        g1bRules()
+        g2Rules()
+        if let metadataFile {
+            do {
+                let json = try Data(contentsOf: URL(fileURLWithPath: metadataFile))
+                check({ if case .passed = PlatformCheck.from(status: 0, json: json, error: nil) { true } else { false } }(),
+                      "captured metadata passes the technical check")
+                let formats = MediaFacts.from(json: json)?.formats ?? []
+                check(!formats.isEmpty && formats.allSatisfy { $0.protection == .unprotected },
+                      "captured metadata estimates use only explicitly unprotected formats")
+            } catch { failures.append("captured metadata: \(error)") }
+        }
+        return report()
+    }
+
+    private static func report() -> Int32 {
         if failures.isEmpty {
             print("selftest: \(passed) checks passed")
             return 0
@@ -822,8 +846,9 @@ enum SelfTest {
 
     /// 4.0 Phase 1b: what the action bar knows and allows. Pure: no files, no network.
     private static func browserBar() {
+        formatMetadata()
         // technical checks from yt-dlp's metadata (a restriction check, never proof of download rights)
-        let json = { (extra: String) in Data(#"{"availability":"public","live_status":"not_live","is_live":false,"age_limit":0,"channel_id":"UCabc","uploader_id":"@me","channel":"Me","formats":[{"has_drm":false}]\#(extra)}"#.utf8) }
+        let json = { (extra: String) in Data(#"{"availability":"public","live_status":"not_live","is_live":false,"age_limit":0,"channel_id":"UCabc","uploader_id":"@me","channel":"Me","formats":[{"has_drm":false,"acodec":"mp4a.40.2"}]\#(extra)}"#.utf8) }
         let pc = { (j: Data?, status: Int32, err: String?) in PlatformCheck.from(status: status, json: j, error: err) }
         check(pc(json(""), 0, nil) == .passed(channelID: "UCabc", handle: "@me", channel: "Me"), "a public video passes the technical check")
         check(pc(Data(#"{"availability":"public","live_status":"is_live","formats":[]}"#.utf8), 0, nil) != .passed(channelID: nil, handle: nil, channel: nil)
@@ -835,7 +860,7 @@ enum SelfTest {
         }
         check({ if case .blocked = pc(Data(#"{"availability":"public","live_status":"not_live","age_limit":18,"formats":[]}"#.utf8), 0, nil) { true } else { false } }(),
               "age-restricted videos are unavailable")
-        check({ if case .blocked = pc(Data(#"{"availability":"public","live_status":"not_live","formats":[{"has_drm":true}]}"#.utf8), 0, nil) { true } else { false } }(),
+        check({ if case .blocked = pc(Data(#"{"availability":"public","live_status":"not_live","formats":[{"has_drm":true,"acodec":"mp4a.40.2"}]}"#.utf8), 0, nil) { true } else { false } }(),
               "DRM-protected videos are unavailable")
         check({ if case .unknown = pc(Data(#"{"live_status":"not_live","formats":[]}"#.utf8), 0, nil) { true } else { false } }(),
               "missing availability is inconclusive, not a pass")
@@ -904,6 +929,47 @@ enum SelfTest {
               && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .authorizationRequired) == .declare(videoID: "A")
               && BrowserActionOutcome.decide(clicked: "A", current: "A", slot: .unknown("?")) == .explain("?"),
               "queued, declaration and unknown never queue")
+    }
+
+    private static func formatMetadata() {
+        let json = { (formats: String) in Data(#"{"availability":"public","live_status":"not_live","duration":100,"formats":[\#(formats)]}"#.utf8) }
+        let clear = #"{"has_drm":false,"height":720,"vcodec":"avc1","acodec":"none","filesize":1000}"#
+        let audio = #"{"has_drm":false,"vcodec":"none","acodec":"mp4a","filesize":100}"#
+        let maybe = #"{"has_drm":"maybe","height":2160,"vcodec":"av01","acodec":"none","filesize":9000}"#
+        let protected = #"{"has_drm":true,"height":2160,"vcodec":"av01","acodec":"none","filesize":8000}"#
+        let mixed = json([clear, audio, maybe, protected].joined(separator: ","))
+        let passed = PlatformCheck.from(status: 0, json: mixed, error: nil)
+        check(passed == .passed(channelID: nil, handle: nil, channel: nil), "mixed clear/protected/maybe formats are readable")
+        let facts = MediaFacts.from(json: mixed)
+        check(facts?.formats.count == 2 && facts?.maxHeight == 720, "estimates exclude protected and unknown formats")
+        check(facts.map { SizeEstimate.video($0, quality: "highest").bytes } == 1100,
+              "Highest available estimates only the clear video and audio")
+        for formats in [maybe, #"{"has_drm":null,"acodec":"mp4a"}"#, #"{"acodec":"mp4a"}"#, "",
+                        #"{"has_drm":false,"vcodec":"none","acodec":"none","height":100}"#, maybe + "," + protected] {
+            let result = PlatformCheck.from(status: 0, json: json(formats), error: nil)
+            check({ if case .unknown = result { true } else { false } }(), "no confirmed clear media: \(formats)")
+            check(DownloadGate.decide(check: result, authorization: nil) != .needsDeclaration,
+                  "unknown formats do not reach the declaration step")
+        }
+        check({ if case .blocked = PlatformCheck.from(status: 0, json: json(protected), error: nil) { true } else { false } }(),
+              "protected-only media remains blocked")
+        for invalid in ["1", #""false""#, #""unexpected""#, "{}", "[]"] {
+            let data = json(clear + #",{"has_drm":\#(invalid),"acodec":"mp4a"}"#)
+            check({ if case .unknown = PlatformCheck.from(status: 0, json: data, error: nil) { true } else { false } }(),
+                  "malformed protection status is inconclusive: \(invalid)")
+        }
+        let missing = #"{"vcodec":"none","acodec":"mp4a"}"#
+        check(PlatformCheck.from(status: 0, json: json(clear + "," + missing), error: nil) == passed,
+              "a missing flag on another format does not invalidate confirmed clear media")
+        let gate = DownloadGate.decide(check: passed, authorization: nil)
+        check(gate == .needsDeclaration && SlotState.video(VideoAvailability(), gate) == .authorizationRequired,
+              "Home's gate and the browser bar still require a declaration")
+        let declaration = DownloadAuthorization(basis: .writtenPermission, reference: "test only", recorded: Date())
+        let allowed = DownloadGate.decide(check: passed, authorization: declaration)
+        let slot = SlotState.video(VideoAvailability(), allowed)
+        check(allowed == .allowed(declaration) && slot == .ready
+              && BrowserActionOutcome.decide(clicked: "fixture", current: "fixture", slot: slot) == .queue(videoID: "fixture"),
+              "the shared gate and browser click accept clear formats only after a declaration")
     }
 
     /// Phase 2: where tabs go, which one is active after a close, what a tab keeps, and clicks from another tab.

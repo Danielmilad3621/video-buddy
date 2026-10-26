@@ -18,6 +18,22 @@ struct DownloadAuthorization: Equatable {
     }
 }
 
+/// yt-dlp marks some YouTube HLS formats as "maybe"; this is not a claim that they are unprotected.
+enum FormatProtection: Decodable, Equatable {
+    case unprotected, protected, unknown
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if let protected = try? value.decode(Bool.self) {
+            self = protected ? .protected : .unprotected
+        } else if try value.decode(String.self) == "maybe" {
+            self = .unknown
+        } else {
+            throw DecodingError.dataCorruptedError(in: value, debugDescription: "Unrecognized format protection status")
+        }
+    }
+}
+
 /// The technical restrictions yt-dlp's metadata reveals. It can say a video is live, members-only or protected; it can
 /// never say you may download it.
 enum PlatformCheck: Equatable {
@@ -28,7 +44,6 @@ enum PlatformCheck: Equatable {
     /// From `yt-dlp -j` (exit status, its JSON, and its last ERROR line).
     static func from(status: Int32, json: Data?, error: String?) -> PlatformCheck {
         struct Raw: Decodable {
-            struct Format: Decodable { let has_drm: Bool? }
             let availability: String?
             let live_status: String?
             let is_live: Bool?
@@ -36,7 +51,7 @@ enum PlatformCheck: Equatable {
             let channel_id: String?
             let uploader_id: String?
             let channel: String?
-            let formats: [Format]?
+            let formats: [MediaFacts.Format]?
         }
         guard status == 0, let json else { return fromError(error) }
         guard let r = try? JSONDecoder().decode(Raw.self, from: json) else { return .unknown("The video's details couldn't be read.") }
@@ -54,8 +69,14 @@ enum PlatformCheck: Equatable {
         default: return .unknown("YouTube didn't say whether this video is public.")
         }
         if (r.age_limit ?? 0) >= 18 { return .blocked("Age-restricted: it needs a signed-in account.") }
-        if r.formats?.contains(where: { $0.has_drm == true }) == true { return .blocked("This video is DRM-protected.") }
-        if r.live_status == nil || r.formats == nil { return .unknown("The video's details were incomplete.") }
+        guard r.live_status != nil, let formats = r.formats else { return .unknown("The video's details were incomplete.") }
+        let media = formats.filter { $0.hasVideo || $0.hasAudio }
+        guard media.contains(where: { $0.protection == .unprotected }) else {
+            if !media.isEmpty && media.allSatisfy({ $0.protection == .protected }) {
+                return .blocked("This video is DRM-protected.")
+            }
+            return .unknown("No audio or video format was confirmed as unprotected.")
+        }
         return .passed(channelID: r.channel_id, handle: r.uploader_id, channel: r.channel)
     }
 
@@ -131,13 +152,18 @@ enum DownloadGate {
 
 /// 4.0 Phase 4: what yt-dlp's metadata says about a video's formats and length (nothing downloaded), for size estimates.
 struct MediaFacts: Equatable {
-    struct Format: Equatable {
+    struct Format: Decodable, Equatable {
         var height: Int?
         var vcodec: String?
         var acodec: String?
         var filesize: Int64?
         var filesizeApprox: Int64?
         var tbr: Double?           // kbit/s
+        var protection: FormatProtection?
+        enum CodingKeys: String, CodingKey {
+            case height, vcodec, acodec, filesize, tbr
+            case filesizeApprox = "filesize_approx", protection = "has_drm"
+        }
         var hasVideo: Bool { (vcodec ?? "none") != "none" && height != nil }
         var hasAudio: Bool { (acodec ?? "none") != "none" }
     }
@@ -148,16 +174,12 @@ struct MediaFacts: Equatable {
 
     static func from(json: Data?) -> MediaFacts? {
         struct Raw: Decodable {
-            struct F: Decodable {
-                let height: Int?, vcodec: String?, acodec: String?, filesize: Int64?, filesize_approx: Int64?, tbr: Double?
-            }
             let duration: Double?
-            let formats: [F]?
+            let formats: [Format]?
         }
         guard let json, let r = try? JSONDecoder().decode(Raw.self, from: json) else { return nil }
-        return MediaFacts(duration: r.duration, formats: (r.formats ?? []).map {
-            Format(height: $0.height, vcodec: $0.vcodec, acodec: $0.acodec, filesize: $0.filesize, filesizeApprox: $0.filesize_approx, tbr: $0.tbr)
-        })
+        // Match the download selector: unknown/protected formats must not influence quality or size estimates.
+        return MediaFacts(duration: r.duration, formats: (r.formats ?? []).filter { $0.protection == .unprotected })
     }
 }
 
