@@ -13,6 +13,9 @@ src=${1:-} dst=${2:-} declaration=${3:-}
 wl=(GV1MWu7crNk DYPJcnnhvQE) decl=gx7F8fg49QQ
 [[ -f $src/history.sqlite && -f $dst/history.sqlite ]] || { sed -n 2,11p "$0"; exit 2; }
 [[ -z $declaration || $declaration == --declaration ]] || { echo "unknown option: $declaration"; exit 2; }
+# the RC's test downloads, jobs and declarations never go anywhere: only a Preview backup is a source
+case "$(cd "$src" && pwd -P)" in *"/Video Buddy 4.0 RC"*) echo "refused: that's the RC's data; only the Preview's backup is carried over"; exit 3 ;; esac
+[[ ! -e $src/live-test-videos.txt ]] || { echo "refused: $src has an RC live-test list; only the Preview's backup is carried over"; exit 3; }
 db="$dst/history.sqlite" from="file:$src/history.sqlite?immutable=1"
 open_by=$(lsof -- "$db" "$db-wal" "$db-shm" 2> /dev/null | awk 'NR > 1 { print $1 " (pid " $2 ")" }' | sort -u || true)
 [[ -z $open_by ]] || { echo "refused: the database is open in: $open_by. Quit it first; nothing was changed."; exit 3; }

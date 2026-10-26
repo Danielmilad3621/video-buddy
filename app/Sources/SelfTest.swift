@@ -212,6 +212,13 @@ enum SelfTest {
         check(VideoQuality.highest.scriptValue == "highest" && VideoQuality.highest.label.contains("4K") && VideoQuality.best.label == "Best compatible (H.264)",
               "two separate choices: Highest available and Best compatible (H.264)")
         check(AppSettings.isRC || AppSettings.downloadsLockReason == nil, "only the RC has a separate download lock")
+        // the release build (not isolated) uses production's own folders, never the RC's or the Preview's: RC test
+        // downloads and jobs can't enter production through the app
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        check(AppSettings.isolated || ProcessInfo.processInfo.environment["VS_DATA_DIR"] != nil
+              || (AppSettings.dataDir == support.appendingPathComponent("Video Summarizer")
+                  && AppSettings.defaultDownloadDir == NSHomeDirectory() + "/Downloads/cobalt"),
+              "the release build: production's data folder and ~/Downloads/cobalt, never the RC's or the Preview's")
         let home = "/Users/someone"
         check(MigrateCopy.refusal("/Users/someone/Library/Application Support/Video Summarizer/history.sqlite", home: home) != nil
               && MigrateCopy.refusal("/Users/someone/library/application support/Video Buddy 4.0 RC/history.sqlite", home: home) != nil

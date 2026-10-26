@@ -200,9 +200,9 @@ printf '%s\n' "$A" > "$R/live-test-videos.txt"; vs "resumeQueue"
 check "taken off the list after queueing: the runner's last check refuses it" "any(f.startswith('video') for f in s['failed']) and not any('fake $B' in m for m in s['media'])" 30 "s['failed'], s['banner']"
 vs "prepareFor $C"
 check "Prepare shows an unlisted video as not allowed" "any(r.startswith('$C') and 'live-test' in r for r in s['prepare'])" 15 "s['prepare']"
-vs "nativeClick prepareCancel"
-open -g -a "$app" "$(request video "https://youtu.be/$C")"; waitfor "s['external'] != {}" > /dev/null; vs "nativeClick externalDownload"
-check "a request for an unlisted video: refused after Download" "\"isn't on\" in s['notice'] and s['queueKeys'] == []"
+vs "nativeClick prepareCancel"; waitfor "s['prepare'] == []" 10 > /dev/null
+open -g -a "$app" "$(request video "https://youtu.be/$C")"; waitfor "s['external'] != {}" > /dev/null; sleep 1; vs "nativeClick externalDownload"
+check "a request for an unlisted video: refused after Download" "\"isn't on\" in s['notice'] and s['queueKeys'] == []" 20 "s['notice'], s['external'], s['queueKeys']"
 quit_app
 
 echo "== RC rules: the locks are separate (no fake downloader, no window, AI locked)"
