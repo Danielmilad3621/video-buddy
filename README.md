@@ -669,6 +669,13 @@ backups/             v1 backup tarball + checksums of ~/Downloads/cobalt from 20
 
 ## 7. How it was built
 
+### 2026-10-27: duplicate app-search entries cleaned up
+- **Cause:** the retained rollback and installer-rehearsal copies were still `.app` bundles. macOS registered them, and they appeared beside the production app in search. Leaving those test copies visible was a cleanup mistake.
+- **Approved and completed:** unregister and rename these four bundles to the same path plus `.disabled`, all under `~/Video Buddy backups/youtube-fix-evidence-20261026.mf9kDc/`: `migration/previous-app/Video Buddy.app`, `installer-rehearsal/Video Buddy.app`, `scratch/tmp.kk93nEGFvt/Video Buddy Build Test.app`, and `scratch/tmp.kk93nEGFvt/VideoSummarizer.app`.
+- **Preserved:** every file, file mode and symlink in those bundles matches the pre-cleanup snapshot. The main `~/Applications/Video Buddy.app` remains build 7 and is byte-identical; the fresh 81-file backup still verifies. No deletion, main-app launch, media download, paid AI call, merge or push.
+- **Launcher:** all four test registrations are gone. Raycast initially retained an old `Video Buddy.app.partial` label for the remaining app; quitting and reopening Raycast cleared that cache. Its search now shows one application entry, named **Video Buddy**. Retained backup folders may still appear as ordinary file-search results.
+- **Evidence:** `launcher-cleanup-20261027/` under the evidence folder above contains the exact paths, pre/post checks, registration result and backup verification. Future test work must account for retained `.app` copies in search, and obtain the required exact-path cleanup approval before unregistering them.
+
 ### 2026-10-26: YouTube fix installed as Video Buddy 4.0 build 7
 - **Approved:** a fresh verified backup, rehearsal and installation over the current 4.0 app; preserve it as `Video Buddy 4.0.app.disabled`. No merge or push was approved.
 - **Current-version rehearsal:** the historical v3 upgrade/import is no longer the right test for a v6 production library. The v6 path compares every table and row, restores and undoes a synthetic change on a copy, and checks the previous backed-up 4.0 binary with an isolated identity. It retains all evidence and never starts an app UI.
@@ -1128,6 +1135,15 @@ All commands run from this folder.
 ---
 
 ## 11. Testing
+
+### Duplicate app entries cleanup (2026-10-27)
+| Check | Result |
+|---|---|
+| Exact approved targets and stopped test apps | **PASSED** — four matching bundles, no destination conflicts and no running test copy |
+| Disable/unregister the four test copies | **PASSED** — original `.app` paths absent, `.app.disabled` copies present; no remaining registration for any of the four |
+| Files and main app preserved | **PASSED** — every retained bundle file/mode/symlink identical; production build 7 unchanged and still registered |
+| Fresh backup verification | **PASSED** — all 81 files match the manifest; databases healthy |
+| Raycast search | **PASSED** — after refreshing Raycast, exactly one application result named Video Buddy; the duplicate apps and stale `.partial` application label are gone |
 
 ### Approved 4.0 build 7 update (2026-10-26)
 Evidence is retained in `~/Video Buddy backups/youtube-fix-evidence-20261026.mf9kDc`; the fresh set is `~/Video Buddy backups/before-youtube-fix-20261026-mf9kDc`.
