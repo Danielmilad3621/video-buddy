@@ -645,15 +645,20 @@ private struct OfflineBrowserScreen: View {
 }
 
 /// Shows the tab's web view (owned by the tab, so it survives section switches). While a page is full screen,
-/// WebKit takes the web view out of this container and puts it back afterwards.
+/// WebKit takes the web view out of this container and puts it back afterwards. Switching Spaces or apps can delay
+/// that hand-back, so the container checks again for a few seconds, and whenever the app or its Space comes back.
 struct WebViewHost: NSViewRepresentable {
     let tab: BrowserTab
     var hidden = false
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
         container.wantsLayer = true
-        attach(to: container)
+        context.coordinator.container = container
+        context.coordinator.tab = tab
+        context.coordinator.attach("shown")
         return container
     }
 
@@ -661,22 +666,71 @@ struct WebViewHost: NSViewRepresentable {
         // read both every time, so SwiftUI calls this again when full screen starts or ends
         let (fullscreen, _) = (tab.isFullscreen, tab.reattachToken)
         tab.webView?.isHidden = hidden
+        context.coordinator.tab = tab
         guard !fullscreen else { return }
-        attach(to: container)
-        // WebKit hands the view back after its exit animation; check again once that's over
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { attach(to: container) }
+        context.coordinator.attachSoon("updated")
     }
 
-    private func attach(to container: NSView) {
-        guard let web = tab.webView, web.superview !== container, !tab.isFullscreen else { return }
-        container.subviews.forEach { $0.removeFromSuperview() }
-        web.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(web)
-        NSLayoutConstraint.activate([
-            web.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            web.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            web.topAnchor.constraint(equalTo: container.topAnchor),
-            web.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+    static func dismantleNSView(_ container: NSView, coordinator: Coordinator) { coordinator.stop() }
+
+    @MainActor final class Coordinator {
+        weak var container: NSView?
+        weak var tab: BrowserTab?
+        private var retry: Timer?
+        private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+
+        init() {
+            let app = NotificationCenter.default, workspace = NSWorkspace.shared.notificationCenter
+            observers = [
+                (app, app.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.attachSoon("app active again") }
+                }),
+                (workspace, workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.attachSoon("Space changed") }
+                }),
+            ]
+        }
+
+        /// Now, then every quarter second for about 3 s: WebKit hands the view back after its exit animation,
+        /// which a Space or app switch can hold up.
+        func attachSoon(_ why: String) {
+            attach(why)
+            retry?.invalidate()
+            let until = Date().addingTimeInterval(3)
+            let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] t in
+                MainActor.assumeIsolated {
+                    if Date() >= until { t.invalidate() }
+                    self?.attach(why)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            retry = timer
+        }
+
+        func attach(_ why: String) {
+            guard let container, let web = tab?.webView, web.superview !== container else { return }
+            // WebKit's own state, not the tab's copy: until it's fully out of full screen the view (and the
+            // placeholder it left here) are WebKit's, and taking them breaks its hand-back
+            guard web.fullscreenState == .notInFullscreen else { return }
+            container.subviews.filter { $0 !== web }.forEach { $0.removeFromSuperview() }
+            web.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(web)
+            NSLayoutConstraint.activate([
+                web.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                web.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                web.topAnchor.constraint(equalTo: container.topAnchor),
+                web.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            ])
+            // after a Space or app switch its layers can be stale (white) until something draws
+            web.needsDisplay = true
+            tab?.note("page attached to the window (\(why))")
+        }
+
+        func stop() {
+            retry?.invalidate()
+            retry = nil
+            observers.forEach { $0.0.removeObserver($0.1) }
+            observers = []
+        }
     }
 }
