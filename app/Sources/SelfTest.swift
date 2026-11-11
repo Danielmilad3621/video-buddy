@@ -1,5 +1,6 @@
 // `VideoSummarizer --selftest`: checks the logic that must not break, on throwaway data. build.sh runs it.
 import Foundation
+import WebKit
 
 enum SelfTest {
     nonisolated(unsafe) private static var failures: [String] = []
@@ -931,6 +932,10 @@ enum SelfTest {
         check(BrowserPolicy.newTab(command: true, shift: true, button: 1) == .foreground, "⌘⇧-click opens it in front")
         check(BrowserPolicy.newTab(command: false, shift: false, button: 1) == nil && BrowserPolicy.newTab(command: false, shift: true, button: 1) == nil
               && BrowserPolicy.newTab(command: false, shift: false, button: 2) == nil, "plain, ⇧, ⌥ and right clicks stay in the tab")
+        // full screen: WebKit owns the page until it's fully out (taking it back mid-exit left a white page)
+        check(BrowserTab.isFullscreen(.enteringFullscreen) && BrowserTab.isFullscreen(.inFullscreen) && BrowserTab.isFullscreen(.exitingFullscreen),
+              "full screen: entering, in and exiting all count as full screen")
+        check(!BrowserTab.isFullscreen(.notInFullscreen), "…only fully out of it gives the page back to the window")
         // memory: the least recently used tabs sleep first, never a protected one (active, background audio, signing in)
         let (t1, t2, t3, t4, t5) = (UUID(), UUID(), UUID(), UUID(), UUID())
         let at = { (s: Double) in Date(timeIntervalSince1970: s) }

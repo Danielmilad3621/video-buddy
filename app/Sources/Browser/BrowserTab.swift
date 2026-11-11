@@ -126,13 +126,17 @@ final class BrowserTab: NSObject, Identifiable {
             v.observe(\.canGoForward, options: [.new]) { [weak self] v, _ in MainActor.assumeIsolated { self?.canGoForward = v.canGoForward } },
             v.observe(\.fullscreenState, options: [.new]) { [weak self] v, _ in
                 MainActor.assumeIsolated {
-                    self?.isFullscreen = v.fullscreenState == .inFullscreen || v.fullscreenState == .enteringFullscreen
+                    self?.isFullscreen = Self.isFullscreen(v.fullscreenState)
                     if v.fullscreenState == .notInFullscreen { self?.reattachToken += 1 }
                     self?.note("fullscreen: \(v.fullscreenState.rawValue)")
                 }
             },
         ]
     }
+
+    /// WebKit owns the web view from the moment full screen starts until it has fully ended: while it's still exiting,
+    /// nothing may take the web view back (that pulls it out of WebKit's window mid-exit and leaves a white page).
+    nonisolated static func isFullscreen(_ state: WKWebView.FullscreenState) -> Bool { state != .notInFullscreen }
 
     private func urlChanged(_ new: URL?) {
         guard new != url else { return }
@@ -248,6 +252,10 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         let now = Date()
         crashes = crashes.filter { now.timeIntervalSince($0) < 60 } + [now]
+        // a process that ended in full screen may never report its end: the window takes the page back, and the tab
+        // can be switched and closed again
+        isFullscreen = false
+        reattachToken += 1
         guard browser?.activeID == id else {
             note("web process ended; asleep until selected")
             sleep()
