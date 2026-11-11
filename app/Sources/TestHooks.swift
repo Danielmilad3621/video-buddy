@@ -414,6 +414,14 @@ enum TestHooks {
             }
         case "loadFixtures": Task { await loadFixtures(arg) }
         case "fixtureComplete": Task { await fixtureComplete(arg) }
+        // back to this app the way ⌘-Tab does it: macOS picks the window (and its Space), nothing is made key here
+        case "activate": NSApp.activate(ignoringOtherApps: true)
+        // the main window picked while the page is in full screen (the window overview, ⌘`)
+        case "focusMain":
+            NSApp.activate(ignoringOtherApps: true)
+            mainWindow?.makeKeyAndOrderFront(nil)
+        // the main window in or out of macOS full screen (its green button)
+        case "mainFullScreen": mainWindow?.toggleFullScreen(nil)
         case "focusWindow":
             // brings this test window to the front (only used while nobody is at the keyboard)
             NSApp.activate(ignoringOtherApps: true)
@@ -423,6 +431,7 @@ enum TestHooks {
         // 4.0 G1a: the answer to "Download another copy?" (system alerts can't carry click targets)
         case "copyDecision": if arg == "copy" { model.confirmCopy() } else { model.pendingCopy = nil }
         case "snapshot": Snapshot.save(to: dir)
+        case "capture": captureWindows(to: dir, tag: arg)
         case "state": writeState(to: dir)
         default: break
         }
@@ -430,6 +439,11 @@ enum TestHooks {
 
     private static var webRead = ""
     private static var captured: (UUID, String)?
+
+    /// The app's own window (not WebKit's full-screen window, nor AppKit's full-screen helpers).
+    private static var mainWindow: NSWindow? {
+        NSApp.windows.first { $0.isVisible && $0.canBecomeMain && !"\(type(of: $0))".contains("FullScreen") }
+    }
 
     /// The US keyboard's key code for a character (what a real key press carries).
     private static func keyCode(_ c: String) -> UInt16 {
@@ -572,6 +586,45 @@ enum TestHooks {
         }
     }
 
+    /// What the window server actually shows for each of this app's windows (web content included, which the view
+    /// snapshot can't draw), as PNGs plus how much of each is near-black. Only this app's own windows.
+    private static func captureWindows(to dir: String, tag: String) {
+        typealias Create = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { webRead = "capture: unavailable"; return }
+        let create = unsafeBitCast(sym, to: Create.self)
+        var report: [String] = []
+        for w in NSApp.windows where w.isVisible && w.frame.width > 200 {
+            // including this window only (1 << 3); ignore framing (1 << 0), nominal resolution (1 << 4)
+            guard let image = create(.null, 1 << 3, UInt32(w.windowNumber), 1 | 1 << 4)?.takeRetainedValue() else {
+                report.append("\(type(of: w)): no image"); continue
+            }
+            let name = "capture-\(tag)-\(type(of: w)).png"
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+            let (cols, rows) = (64, 40)
+            var px = [UInt8](repeating: 0, count: cols * rows * 4)
+            let dark = px.withUnsafeMutableBytes { buf -> Int in
+                guard let ctx = CGContext(data: buf.baseAddress, width: cols, height: rows, bitsPerComponent: 8, bytesPerRow: cols * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return -1 }
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: cols, height: rows))
+                let p = buf.bindMemory(to: UInt8.self)
+                var count = 0
+                for i in 0..<(cols * rows) where p[i * 4 + 3] > 200 {      // transparent isn't black
+                    let sum: Int = Int(p[i * 4]) + Int(p[i * 4 + 1]) + Int(p[i * 4 + 2])
+                    if sum < 36 { count += 1 }
+                }
+                return count
+            }
+            report.append("\(type(of: w)) \(image.width)x\(image.height) dark=\(dark * 100 / (cols * rows))% activeSpace=\(w.isOnActiveSpace) -> \(name)")
+        }
+        webRead = report.joined(separator: " | ")
+    }
+
+    private static func describe(_ w: NSWindow) -> String {
+        "\(type(of: w)) \(Int(w.frame.width))x\(Int(w.frame.height)) visible=\(w.isVisible) activeSpace=\(w.isOnActiveSpace) " +
+        "fullScreen=\(w.styleMask.contains(.fullScreen)) key=\(w.isKeyWindow) occluded=\(!w.occlusionState.contains(.visible))"
+    }
+
     private static func writeState(to dir: String) {
         let model = AppModel.shared, store = model.store, jobs = model.jobs
         let selected = store.selectedVideo
@@ -671,6 +724,12 @@ enum TestHooks {
                         "storeID": b.existingStoreID ?? "", "clearReport": b.clearReport ?? "",
                         "webSuperview": t.webView?.superview.map { "\(type(of: $0)) \(Int($0.frame.width))x\(Int($0.frame.height))" } ?? "none",
                         "webInWindow": t.webView?.window != nil,
+                        // full screen: WebKit's own state, the window holding the page and every window's Space
+                        "webkitFullscreen": t.webView?.fullscreenState.rawValue ?? -1,
+                        "webWindow": t.webView?.window.map(describe) ?? "none",
+                        "webHidden": t.webView?.isHiddenOrHasHiddenAncestor ?? true,
+                        "webSiblings": t.webView?.superview?.subviews.map { "\(type(of: $0))" } ?? [],
+                        "windows": NSApp.windows.filter { $0.isVisible || $0.styleMask.contains(.fullScreen) }.map(describe),
                         "appActive": NSApp.isActive, "windowKey": t.webView?.window?.isKeyWindow ?? false,
                         "webIsFirstResponder": t.webView.map { w in w.window?.firstResponder === w || (w.window?.firstResponder as? NSView)?.isDescendant(of: w) == true } ?? false
                        ] as [String: Any]
