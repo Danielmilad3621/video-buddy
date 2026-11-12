@@ -20,6 +20,8 @@ final class BrowserTab: NSObject, Identifiable {
     private(set) var isFullscreen = false
     /// Bumped when full screen ends, so the window's container takes the web view back (WebKit moved it out).
     private(set) var reattachToken = 0
+    /// WebKit's full-screen window, watched while the page is in it.
+    @ObservationIgnored private var fullscreenWatch: NSObjectProtocol?
     /// What the current address is (updates on YouTube's in-page navigation too, through `url`).
     private(set) var page = YouTubePage.blank
     /// The last failed load, shown over the page with Retry.
@@ -129,6 +131,7 @@ final class BrowserTab: NSObject, Identifiable {
                     self?.isFullscreen = Self.isFullscreen(v.fullscreenState)
                     if v.fullscreenState == .notInFullscreen { self?.reattachToken += 1 }
                     self?.note("fullscreen: \(v.fullscreenState.rawValue)")
+                    self?.watchFullscreenWindow(v.fullscreenState == .inFullscreen ? v.window : nil)
                 }
             },
         ]
@@ -137,6 +140,33 @@ final class BrowserTab: NSObject, Identifiable {
     /// WebKit owns the web view from the moment full screen starts until it has fully ended: while it's still exiting,
     /// nothing may take the web view back (that pulls it out of WebKit's window mid-exit and leaves a white page).
     nonisolated static func isFullscreen(_ state: WKWebView.FullscreenState) -> Bool { state != .notInFullscreen }
+
+    /// Full screen ends once WebKit's window for it is out of sight (another app, another Space, the main window
+    /// picked): back on that Space WebKit can leave it black while the video plays on, and coming back to the app
+    /// lands on the main window, which shows only "Click to Exit Full Screen". Full screen on a second display that
+    /// stays in sight stays.
+    private func watchFullscreenWindow(_ window: NSWindow?) {
+        if let fullscreenWatch { NotificationCenter.default.removeObserver(fullscreenWatch) }
+        fullscreenWatch = nil
+        guard let window else { return }
+        fullscreenWatch = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window,
+                                                                 queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leaveFullscreenIfHidden() }
+        }
+        leaveFullscreenIfHidden()
+    }
+
+    private func leaveFullscreenIfHidden() {
+        Task { [weak self] in
+            // out of sight for a second, not only during a Space animation
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, let web = self.webView, web.fullscreenState == .inFullscreen, let window = web.window,
+                  !window.occlusionState.contains(.visible) else { return }
+            self.note("full screen out of sight: leaving it")
+            // what Esc does, from our own script world (the page's scripts can't see or block it)
+            web.evaluateJavaScript("document.exitFullscreen()", in: nil, in: .world(name: "VideoBuddy")) { _ in }
+        }
+    }
 
     private func urlChanged(_ new: URL?) {
         guard new != url else { return }
@@ -186,6 +216,7 @@ final class BrowserTab: NSObject, Identifiable {
         isLoading = false
         progress = 0
         isFullscreen = false
+        watchFullscreenWindow(nil)
         media = "none"
         mediaCheckPending = false
         return Task {
@@ -255,6 +286,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         // a process that ended in full screen may never report its end: the window takes the page back, and the tab
         // can be switched and closed again
         isFullscreen = false
+        watchFullscreenWindow(nil)
         reattachToken += 1
         guard browser?.activeID == id else {
             note("web process ended; asleep until selected")
